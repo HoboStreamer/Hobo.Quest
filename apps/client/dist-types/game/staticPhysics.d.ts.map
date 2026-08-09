@@ -1,0 +1,1 @@
+{"version":3,"file":"staticPhysics.d.ts","sourceRoot":"","sources":["../../src/game/staticPhysics.ts"],"names":[],"mappings":"AAAA,OAAO,KAAK,EAAE,eAAe,EAAE,MAAM,eAAe,CAAA;AACpD,OAAO,EAAkB,KAAK,YAAY,EAAE,MAAM,eAAe,CAAA;AAGjE;;;;;GAKG;AACH,wBAAgB,kBAAkB,CAAC,OAAO,EAAE,YAAY,EAAE,OAAO,EAAE,eAAe,GAAG,IAAI,CAwBxF"}

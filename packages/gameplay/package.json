@@ -1,0 +1,16 @@
+{
+  "name": "@hobo/gameplay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@hobo/content": "workspace:*",
+    "@hobo/shared": "workspace:*"
+  }
+}

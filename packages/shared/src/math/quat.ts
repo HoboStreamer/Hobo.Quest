@@ -1,0 +1,107 @@
+import type { Vec3 } from './vec3.js'
+
+/** Unit quaternion for orientations. Same mutable/out-param conventions as Vec3. */
+export interface Quat {
+  x: number
+  y: number
+  z: number
+  w: number
+}
+
+export function quat(x = 0, y = 0, z = 0, w = 1): Quat {
+  return { x, y, z, w }
+}
+
+export function qcopy(out: Quat, a: Quat): Quat {
+  out.x = a.x
+  out.y = a.y
+  out.z = a.z
+  out.w = a.w
+  return out
+}
+
+export function qidentity(out: Quat): Quat {
+  out.x = 0
+  out.y = 0
+  out.z = 0
+  out.w = 1
+  return out
+}
+
+export function qfromAxisAngle(out: Quat, axis: Vec3, angle: number): Quat {
+  const half = angle * 0.5
+  const s = Math.sin(half)
+  out.x = axis.x * s
+  out.y = axis.y * s
+  out.z = axis.z * s
+  out.w = Math.cos(half)
+  return out
+}
+
+export function qfromYaw(out: Quat, yaw: number): Quat {
+  const half = yaw * 0.5
+  out.x = 0
+  out.y = Math.sin(half)
+  out.z = 0
+  out.w = Math.cos(half)
+  return out
+}
+
+export function qmul(out: Quat, a: Quat, b: Quat): Quat {
+  const ax = a.x,
+    ay = a.y,
+    az = a.z,
+    aw = a.w
+  const bx = b.x,
+    by = b.y,
+    bz = b.z,
+    bw = b.w
+  out.x = aw * bx + ax * bw + ay * bz - az * by
+  out.y = aw * by - ax * bz + ay * bw + az * bx
+  out.z = aw * bz + ax * by - ay * bx + az * bw
+  out.w = aw * bw - ax * bx - ay * by - az * bz
+  return out
+}
+
+export function qnormalize(out: Quat, a: Quat): Quat {
+  const len = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w)
+  if (len > 1e-8) {
+    const inv = 1 / len
+    out.x = a.x * inv
+    out.y = a.y * inv
+    out.z = a.z * inv
+    out.w = a.w * inv
+  }
+  return out
+}
+
+export function qslerp(out: Quat, a: Quat, b: Quat, t: number): Quat {
+  let cosom = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
+  let bx = b.x,
+    by = b.y,
+    bz = b.z,
+    bw = b.w
+  if (cosom < 0) {
+    cosom = -cosom
+    bx = -bx
+    by = -by
+    bz = -bz
+    bw = -bw
+  }
+  let scale0: number
+  let scale1: number
+  if (1 - cosom > 1e-6) {
+    const omega = Math.acos(cosom)
+    const sinom = Math.sin(omega)
+    scale0 = Math.sin((1 - t) * omega) / sinom
+    scale1 = Math.sin(t * omega) / sinom
+  } else {
+    scale0 = 1 - t
+    scale1 = t
+  }
+  out.x = scale0 * a.x + scale1 * bx
+  out.y = scale0 * a.y + scale1 * by
+  out.z = scale0 * a.z + scale1 * bz
+  out.w = scale0 * a.w + scale1 * bw
+  return out
+}

@@ -1,0 +1,343 @@
+import { NullEngine } from '@babylonjs/core/Engines/nullEngine.js'
+import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
+import { PhysicsRaycastResult } from '@babylonjs/core/Physics/physicsRaycastResult.js'
+import { ShapeCastResult } from '@babylonjs/core/Physics/shapeCastResult.js'
+import { HavokPlugin } from '@babylonjs/core/Physics/v2/Plugins/havokPlugin.js'
+import {
+  PhysicsActivationControl,
+  PhysicsMotionType,
+} from '@babylonjs/core/Physics/v2/IPhysicsEnginePlugin.js'
+import { PhysicsBody } from '@babylonjs/core/Physics/v2/physicsBody.js'
+import type { PhysicsShape } from '@babylonjs/core/Physics/v2/physicsShape.js'
+import {
+  PhysicsShapeBox,
+  PhysicsShapeCapsule,
+  PhysicsShapeCylinder,
+  PhysicsShapeSphere,
+} from '@babylonjs/core/Physics/v2/physicsShape.js'
+import { Scene } from '@babylonjs/core/scene.js'
+import '@babylonjs/core/Physics/joinedPhysicsEngineComponent.js'
+import type { Quat, Vec3 } from '@hobo/shared'
+import type {
+  BodyDesc,
+  BodyId,
+  MotionType,
+  PhysicsWorld,
+  RayHit,
+  ShapeDesc,
+  SweepHit,
+} from '../types.js'
+import { CollisionLayer } from '../types.js'
+
+/**
+ * Havok (via Babylon Physics V2) implementation of PhysicsWorld.
+ *
+ * The same adapter runs headless on the server (NullEngine scene, never
+ * rendered) and inside the client's rendered scene. Stepping is always
+ * manual through `plugin.executeStep` from the fixed-timestep loop — the
+ * scene's own render-driven physics stepping is disabled so simulation can
+ * never couple to frame rate.
+ */
+
+interface BodyRecord {
+  body: PhysicsBody
+  node: TransformNode
+  shape: PhysicsShape
+  motion: MotionType
+}
+
+const MOTION_MAP: Record<MotionType, PhysicsMotionType> = {
+  dynamic: PhysicsMotionType.DYNAMIC,
+  static: PhysicsMotionType.STATIC,
+  kinematic: PhysicsMotionType.ANIMATED,
+}
+
+const SETTLE_LIN_SQ = 0.05 * 0.05
+const SETTLE_ANG_SQ = 0.15 * 0.15
+
+export class HavokWorld implements PhysicsWorld {
+  private nextId: BodyId = 1
+  private readonly bodies = new Map<BodyId, BodyRecord>()
+  private readonly bodyIds = new WeakMap<PhysicsBody, BodyId>()
+  private bodyList: PhysicsBody[] = []
+  private bodyListDirty = false
+
+  // Scratch objects — adapter methods are not re-entrant.
+  private readonly _v1 = new Vector3()
+  private readonly _v2 = new Vector3()
+  private readonly _q1 = new Quaternion()
+  private readonly _rayResult = new PhysicsRaycastResult()
+  private readonly _castInput = new ShapeCastResult()
+  private readonly _castHit = new ShapeCastResult()
+  private readonly sweepShapes = new Map<string, PhysicsShapeCapsule>()
+
+  constructor(
+    private readonly scene: Scene,
+    private readonly plugin: HavokPlugin,
+    private readonly ownsScene: boolean,
+  ) {}
+
+  step(dt: number): void {
+    if (this.bodyListDirty) {
+      this.bodyList = [...this.bodies.values()].map((r) => r.body)
+      this.bodyListDirty = false
+    }
+    this.plugin.executeStep(dt, this.bodyList)
+  }
+
+  addBody(desc: BodyDesc): BodyId {
+    const id = this.nextId++
+    const node = new TransformNode(`body:${id}`, this.scene)
+    node.position.set(desc.pos.x, desc.pos.y, desc.pos.z)
+    node.rotationQuaternion = desc.rot
+      ? new Quaternion(desc.rot.x, desc.rot.y, desc.rot.z, desc.rot.w)
+      : Quaternion.Identity()
+
+    const shape = this.makeShape(desc.shape)
+    shape.filterMembershipMask = desc.layer
+    shape.filterCollideMask = desc.collidesWith
+
+    const body = new PhysicsBody(node, MOTION_MAP[desc.motion], false, this.scene)
+    body.shape = shape
+    if (desc.motion === 'dynamic') {
+      body.setMassProperties({ mass: desc.massKg ?? 10 })
+    }
+
+    this.bodies.set(id, { body, node, shape, motion: desc.motion })
+    this.bodyIds.set(body, id)
+    this.bodyListDirty = true
+    return id
+  }
+
+  removeBody(id: BodyId): void {
+    const rec = this.bodies.get(id)
+    if (!rec) return
+    rec.body.dispose()
+    rec.shape.dispose()
+    rec.node.dispose()
+    this.bodies.delete(id)
+    this.bodyListDirty = true
+  }
+
+  getTransform(id: BodyId, outPos: Vec3, outRot: Quat): void {
+    const rec = this.mustGet(id)
+    const p = rec.node.position
+    outPos.x = p.x
+    outPos.y = p.y
+    outPos.z = p.z
+    const q = rec.node.rotationQuaternion
+    if (q) {
+      outRot.x = q.x
+      outRot.y = q.y
+      outRot.z = q.z
+      outRot.w = q.w
+    }
+  }
+
+  setTransform(id: BodyId, pos: Vec3, rot?: Quat): void {
+    const rec = this.mustGet(id)
+    rec.node.position.set(pos.x, pos.y, pos.z)
+    if (rot && rec.node.rotationQuaternion) {
+      rec.node.rotationQuaternion.set(rot.x, rot.y, rot.z, rot.w)
+    }
+    if (rec.motion === 'kinematic') {
+      // ANIMATED bodies chase the node target with computed velocity so they
+      // push dynamic bodies convincingly.
+      this._v1.set(pos.x, pos.y, pos.z)
+      const q = rec.node.rotationQuaternion ?? Quaternion.Identity()
+      rec.body.setTargetTransform(this._v1, q)
+    } else {
+      this.plugin.setPhysicsBodyTransformation(rec.body, rec.node)
+      this.wake(id)
+    }
+  }
+
+  setMotionType(id: BodyId, motion: MotionType): void {
+    const rec = this.mustGet(id)
+    if (rec.motion === motion) return
+    rec.body.setMotionType(MOTION_MAP[motion])
+    rec.motion = motion
+    if (motion === 'dynamic') {
+      this.wake(id)
+    }
+  }
+
+  getLinearVelocity(id: BodyId, out: Vec3): void {
+    this.mustGet(id).body.getLinearVelocityToRef(this._v1)
+    out.x = this._v1.x
+    out.y = this._v1.y
+    out.z = this._v1.z
+  }
+
+  setLinearVelocity(id: BodyId, v: Vec3): void {
+    this._v1.set(v.x, v.y, v.z)
+    this.mustGet(id).body.setLinearVelocity(this._v1)
+  }
+
+  getAngularVelocity(id: BodyId, out: Vec3): void {
+    this.mustGet(id).body.getAngularVelocityToRef(this._v1)
+    out.x = this._v1.x
+    out.y = this._v1.y
+    out.z = this._v1.z
+  }
+
+  setAngularVelocity(id: BodyId, v: Vec3): void {
+    this._v1.set(v.x, v.y, v.z)
+    this.mustGet(id).body.setAngularVelocity(this._v1)
+  }
+
+  isSettled(id: BodyId): boolean {
+    const rec = this.mustGet(id)
+    if (rec.motion !== 'dynamic') return true
+    rec.body.getLinearVelocityToRef(this._v1)
+    if (this._v1.lengthSquared() > SETTLE_LIN_SQ) return false
+    rec.body.getAngularVelocityToRef(this._v1)
+    return this._v1.lengthSquared() <= SETTLE_ANG_SQ
+  }
+
+  wake(id: BodyId): void {
+    const rec = this.mustGet(id)
+    if (rec.motion !== 'dynamic') return
+    // Toggling activation control is the portable way to wake a Havok body
+    // without disturbing its velocities.
+    this.plugin.setActivationControl(rec.body, PhysicsActivationControl.ALWAYS_ACTIVE)
+    this.plugin.setActivationControl(rec.body, PhysicsActivationControl.SIMULATION_CONTROLLED)
+  }
+
+  raycast(from: Vec3, to: Vec3, collidesWith: number): RayHit | null {
+    this._v1.set(from.x, from.y, from.z)
+    this._v2.set(to.x, to.y, to.z)
+    this.plugin.raycast(this._v1, this._v2, this._rayResult, {
+      membership: 0xffffffff,
+      collideWith: collidesWith,
+    })
+    const r = this._rayResult
+    if (!r.hasHit || !r.body) return null
+    const bodyId = this.bodyIds.get(r.body)
+    if (bodyId === undefined) return null
+    return {
+      bodyId,
+      point: { x: r.hitPointWorld.x, y: r.hitPointWorld.y, z: r.hitPointWorld.z },
+      normal: { x: r.hitNormalWorld.x, y: r.hitNormalWorld.y, z: r.hitNormalWorld.z },
+      fraction: r.hitDistance / Math.max(this._v2.subtract(this._v1).length(), 1e-9),
+    }
+  }
+
+  sweepCapsule(
+    from: Vec3,
+    to: Vec3,
+    radius: number,
+    height: number,
+    collidesWith: number,
+  ): SweepHit | null {
+    const shape = this.getSweepShape(radius, height, collidesWith)
+    this._v1.set(from.x, from.y, from.z)
+    this._v2.set(to.x, to.y, to.z)
+    this._q1.set(0, 0, 0, 1)
+    this.plugin.shapeCast(
+      {
+        shape,
+        rotation: this._q1,
+        startPosition: this._v1,
+        endPosition: this._v2,
+        shouldHitTriggers: false,
+      },
+      this._castInput,
+      this._castHit,
+    )
+    if (!this._castHit.hasHit) return null
+    const n = this._castHit.hitNormal
+    const p = this._castHit.hitPoint
+    return {
+      fraction: this._castHit.hitFraction,
+      normal: { x: n.x, y: n.y, z: n.z },
+      point: { x: p.x, y: p.y, z: p.z },
+    }
+  }
+
+  dispose(): void {
+    for (const id of [...this.bodies.keys()]) this.removeBody(id)
+    for (const shape of this.sweepShapes.values()) shape.dispose()
+    this.sweepShapes.clear()
+    if (this.ownsScene) {
+      const engine = this.scene.getEngine()
+      this.scene.dispose()
+      engine.dispose()
+    }
+  }
+
+  private mustGet(id: BodyId): BodyRecord {
+    const rec = this.bodies.get(id)
+    if (!rec) throw new Error(`unknown physics body ${id}`)
+    return rec
+  }
+
+  private makeShape(desc: ShapeDesc): PhysicsShape {
+    switch (desc.type) {
+      case 'box':
+        return new PhysicsShapeBox(
+          Vector3.Zero(),
+          Quaternion.Identity(),
+          new Vector3(desc.size[0], desc.size[1], desc.size[2]),
+          this.scene,
+        )
+      case 'cylinder':
+        return new PhysicsShapeCylinder(
+          new Vector3(0, -desc.height / 2, 0),
+          new Vector3(0, desc.height / 2, 0),
+          desc.radius,
+          this.scene,
+        )
+      case 'sphere':
+        return new PhysicsShapeSphere(Vector3.Zero(), desc.radius, this.scene)
+      case 'capsule': {
+        const half = Math.max(desc.height / 2 - desc.radius, 0.01)
+        return new PhysicsShapeCapsule(
+          new Vector3(0, -half, 0),
+          new Vector3(0, half, 0),
+          desc.radius,
+          this.scene,
+        )
+      }
+    }
+  }
+
+  private getSweepShape(radius: number, height: number, collidesWith: number): PhysicsShapeCapsule {
+    const key = `${radius}:${height}:${collidesWith}`
+    let shape = this.sweepShapes.get(key)
+    if (!shape) {
+      const half = Math.max(height / 2 - radius, 0.01)
+      shape = new PhysicsShapeCapsule(
+        new Vector3(0, -half, 0),
+        new Vector3(0, half, 0),
+        radius,
+        this.scene,
+      )
+      shape.filterMembershipMask = CollisionLayer.Player
+      shape.filterCollideMask = collidesWith
+      this.sweepShapes.set(key, shape)
+    }
+    return shape
+  }
+}
+
+function setupWorld(scene: Scene, havok: unknown, ownsScene: boolean): HavokWorld {
+  const plugin = new HavokPlugin(false, havok)
+  scene.enablePhysics(new Vector3(0, -9.81, 0), plugin)
+  // All stepping goes through HavokWorld.step(); never the render loop.
+  scene.physicsEnabled = false
+  return new HavokWorld(scene, plugin, ownsScene)
+}
+
+/** Server-side world: owns a NullEngine scene that is never rendered. */
+export function createHeadlessHavokWorld(havok: unknown): HavokWorld {
+  const engine = new NullEngine()
+  const scene = new Scene(engine)
+  return setupWorld(scene, havok, true)
+}
+
+/** Client-side world sharing the rendered scene (bodies stay invisible; rendering reads game state, not physics nodes). */
+export function createHavokWorldForScene(scene: Scene, havok: unknown): HavokWorld {
+  return setupWorld(scene, havok, false)
+}

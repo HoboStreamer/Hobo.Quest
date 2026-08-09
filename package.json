@@ -1,0 +1,33 @@
+{
+  "name": "hobo-quest",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Hobo.Quest — persistent multiplayer physics sandbox (browser)",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.6.5",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @hobo/server --filter @hobo/client dev",
+    "dev:server": "pnpm --filter @hobo/server dev",
+    "dev:client": "pnpm --filter @hobo/client dev",
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --build tsconfig.solution.json",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.23.0",
+    "@types/node": "^22.13.0",
+    "eslint": "^9.23.0",
+    "prettier": "^3.5.3",
+    "tsx": "^4.23.11",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.29.0",
+    "vitest": "^3.1.1"
+  }
+}

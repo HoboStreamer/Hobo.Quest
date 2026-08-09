@@ -1,0 +1,23 @@
+{
+  "name": "@hobo/client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --build && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@babylonjs/core": "^8.0.1",
+    "@babylonjs/havok": "^1.3.10",
+    "@hobo/content": "workspace:*",
+    "@hobo/gameplay": "workspace:*",
+    "@hobo/physics": "workspace:*",
+    "@hobo/protocol": "workspace:*",
+    "@hobo/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^6.2.5"
+  }
+}

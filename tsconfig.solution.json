@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared" },
+    { "path": "packages/protocol" },
+    { "path": "packages/content" },
+    { "path": "packages/gameplay" },
+    { "path": "packages/physics" },
+    { "path": "packages/persistence" },
+    { "path": "apps/server" },
+    { "path": "apps/client" }
+  ]
+}

@@ -1,0 +1,1 @@
+{"version":3,"file":"httpServer.d.ts","sourceRoot":"","sources":["../../src/net/httpServer.ts"],"names":[],"mappings":"AACA,OAAO,EAAsC,KAAK,MAAM,EAAuB,MAAM,WAAW,CAAA;AAEhG,OAAO,KAAK,EAAE,MAAM,EAAE,MAAM,cAAc,CAAA;AAC1C,OAAO,KAAK,EAAE,aAAa,EAAE,MAAM,6BAA6B,CAAA;AAqBhE,wBAAgB,gBAAgB,CAC9B,SAAS,EAAE,MAAM,GAAG,IAAI,EACxB,OAAO,EAAE,aAAa,EACtB,GAAG,EAAE,MAAM,GACV,MAAM,CA+CR"}
