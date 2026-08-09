@@ -99,7 +99,12 @@ export class Avatar {
       if (kind) {
         this.toolProp = createToolProp(this.scene, kind, this.name)
         this.toolProp.root.parent = j.handR
-        this.toolProp.root.position.set(0, -0.06, 0.02)
+        // Grip: +Z of the tool points along the forearm (hand's -Y), so a
+        // raised arm aims the tool forward instead of leaving it glued flat
+        // to the wrist.
+        this.toolProp.root.position.set(0, -0.1, 0.04)
+        this.toolProp.root.rotation.set(Math.PI / 2, 0, 0)
+        this.toolProp.root.scaling.setAll(0.9)
       }
     }
 

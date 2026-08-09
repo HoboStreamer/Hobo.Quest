@@ -5,13 +5,18 @@ import type { Appearance } from '@hobo/protocol'
  * Parametric low-poly humanoid rig.
  *
  * A joint hierarchy of TransformNodes with flat-shaded tapered-box segments
- * parented to them — no skinning, in the spirit of the reference models but
- * fully data-driven: every proportion derives from Appearance (body type,
- * height, build) so customization needs no new assets. The animator poses
- * joints; rendering never touches physics or networking.
+ * parented to them — no skinning, fully data-driven from Appearance.
  *
- * Conventions: root origin at the FEET (ground). +Z faces forward (matches
- * player yaw). Limb joints rotate at the top of their segment.
+ * Assembly rules that keep the body seamless:
+ *  - every segment's top extends PAST its joint (OVERLAP) into the segment
+ *    above, so bending never exposes gaps or interior top faces;
+ *  - adjoining segment widths match at the junction (thigh bottom == shin
+ *    top, etc.) so silhouettes stay continuous;
+ *  - thigh + shin + foot exactly total the leg length, so feet stand ON the
+ *    ground instead of clipping through it.
+ *
+ * Conventions: root origin at the FEET (ground). +Z faces forward (player
+ * yaw). Limb joints rotate at the top of their segment.
  */
 export interface RigJoints {
   root: TransformNode

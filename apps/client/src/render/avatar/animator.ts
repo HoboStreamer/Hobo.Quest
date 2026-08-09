@@ -136,13 +136,15 @@ export class AvatarAnimator {
 
     // ── Tool poses (upper-body override) ─────────────────────────────
     if (input.tool === 'physgun') {
-      const aim = input.beamActive ? 1 : 0.75
-      target.shoulderRX = (-1.05 - input.pitch * 0.7) * aim
-      target.elbowRX = -0.35
-      target.shoulderRZ = -0.06
+      // Forearm ends up ~horizontal (tool aligns with the forearm).
+      target.shoulderRX = -0.9 - input.pitch * 0.55
+      target.elbowRX = -0.62
+      target.shoulderRZ = -0.08
       if (input.beamActive) {
-        target.shoulderLX = -0.75 - input.pitch * 0.5
-        target.elbowLX = -0.7
+        target.shoulderRX = -1.0 - input.pitch * 0.7
+        target.elbowRX = -0.5
+        target.shoulderLX = -0.8 - input.pitch * 0.5
+        target.elbowLX = -0.65
       }
     } else if (input.tool === 'axe' || input.tool === 'pickaxe' || input.tool === 'hammer') {
       // Relaxed carry; chop when swinging.

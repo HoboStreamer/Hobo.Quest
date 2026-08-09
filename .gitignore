@@ -6,3 +6,4 @@ dist/
 data/*.db
 data/*.db-*
 .DS_Store
+scratch/

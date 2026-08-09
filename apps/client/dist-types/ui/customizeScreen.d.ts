@@ -14,5 +14,6 @@ export declare function customizeScreen(
 ): Promise<{
   name: string
   appearance: Appearance
+  releaseCamera: () => void
 }>
 //# sourceMappingURL=customizeScreen.d.ts.map

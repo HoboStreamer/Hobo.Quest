@@ -14,7 +14,7 @@ import { Avatar } from './avatar/avatar.js'
  * behind the true eye so the chest never clips the near plane.
  */
 
-const BODY_BACK_OFFSET = 0.14
+const BODY_BACK_OFFSET = 0.08
 
 export class FirstPersonBody {
   private readonly avatar: Avatar
@@ -52,18 +52,25 @@ export class FirstPersonBody {
     const move = this.player.move
     const speed = Math.hypot(move.vel.x, move.vel.z)
     const yaw = this.player.viewYaw
+    const pitch = this.player.viewPitch
     const feetY = renderPos.y - DEFAULT_MOVEMENT.capsuleHeight / 2
+    // The camera pivots at the eyes; slide the body backward as the view
+    // pitches down so looking down shows your chest and legs from above
+    // instead of the inside of your own collar.
+    const back = BODY_BACK_OFFSET + Math.max(0, -pitch) * 0.12
     this.avatar.update({
       dt,
       time,
-      x: renderPos.x - Math.sin(yaw) * BODY_BACK_OFFSET,
+      x: renderPos.x - Math.sin(yaw) * back,
       y: feetY,
-      z: renderPos.z - Math.cos(yaw) * BODY_BACK_OFFSET,
+      z: renderPos.z - Math.cos(yaw) * back,
       yaw,
-      pitch: this.player.viewPitch,
+      pitch: pitch * 0.3,
       speed,
       grounded: move.grounded,
-      itemDef: this.state.activeItemDef() ?? undefined,
+      // The screen-space viewmodel represents the tool in first person; a
+      // second copy in the body's hand would wave in front of the camera.
+      itemDef: undefined,
       beamActive,
     })
   }

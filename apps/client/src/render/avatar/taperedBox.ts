@@ -50,7 +50,9 @@ export function createTaperedBox(name: string, opts: TaperedBoxOpts, scene: Scen
   const face = (a: number[], b: number[], c: number[], d: number[]): void => {
     const base = positions.length / 3
     positions.push(...a, ...b, ...c, ...d)
-    indices.push(base, base + 1, base + 2, base, base + 2, base + 3)
+    // Clockwise winding — Babylon (left-handed) culls counter-clockwise
+    // faces, and getting this backwards renders the whole body inside-out.
+    indices.push(base, base + 2, base + 1, base, base + 3, base + 2)
   }
 
   face(t3, t2, t1, t0) // top (+y)

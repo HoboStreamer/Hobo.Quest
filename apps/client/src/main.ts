@@ -40,11 +40,16 @@ async function start(): Promise<void> {
   let last = performance.now()
   engine.runRenderLoop(() => {
     gameLoop?.()
-    scene.render()
+    if (scene.activeCamera) scene.render()
   })
   window.addEventListener('resize', () => engine.resize())
 
-  const { name, appearance } = await customizeScreen(scene, content, uiRoot, identity.name)
+  const { name, appearance, releaseCamera } = await customizeScreen(
+    scene,
+    content,
+    uiRoot,
+    identity.name,
+  )
   saveName(name)
 
   const havok = await havokPromise
@@ -55,6 +60,7 @@ async function start(): Promise<void> {
   const state = new ClientState()
   const connection = new Connection()
   const input = new InputTracker(canvas)
+  ;(window as unknown as { __hoboInput?: InputTracker }).__hoboInput = input
   const view = new EntityView(scene, physics, content, state)
   const hud = new Hud(uiRoot, state, content, connection)
 
@@ -65,6 +71,7 @@ async function start(): Promise<void> {
     z: world.spawnPoint[2],
   })
   scene.activeCamera = player.camera
+  releaseCamera()
   const interact = new InteractionController(physics, player, view, state, content, connection)
   const fpBody = new FirstPersonBody(scene, content, appearance, player, state)
   const viewmodel = new Viewmodel(scene, content, player.camera)

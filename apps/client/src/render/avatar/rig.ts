@@ -10,13 +10,18 @@ import { createTaperedBox } from './taperedBox.js'
  * Parametric low-poly humanoid rig.
  *
  * A joint hierarchy of TransformNodes with flat-shaded tapered-box segments
- * parented to them — no skinning, in the spirit of the reference models but
- * fully data-driven: every proportion derives from Appearance (body type,
- * height, build) so customization needs no new assets. The animator poses
- * joints; rendering never touches physics or networking.
+ * parented to them — no skinning, fully data-driven from Appearance.
  *
- * Conventions: root origin at the FEET (ground). +Z faces forward (matches
- * player yaw). Limb joints rotate at the top of their segment.
+ * Assembly rules that keep the body seamless:
+ *  - every segment's top extends PAST its joint (OVERLAP) into the segment
+ *    above, so bending never exposes gaps or interior top faces;
+ *  - adjoining segment widths match at the junction (thigh bottom == shin
+ *    top, etc.) so silhouettes stay continuous;
+ *  - thigh + shin + foot exactly total the leg length, so feet stand ON the
+ *    ground instead of clipping through it.
+ *
+ * Conventions: root origin at the FEET (ground). +Z faces forward (player
+ * yaw). Limb joints rotate at the top of their segment.
  */
 
 export interface RigJoints {
@@ -47,10 +52,14 @@ export interface AvatarRig {
   dispose(): void
 }
 
+/** How far each segment reaches past its joint into the parent segment. */
+const OVERLAP = 0.035
+
 interface Dims {
   legLen: number
   thighLen: number
   shinLen: number
+  footH: number
   pelvisH: number
   torsoH: number
   chestH: number
@@ -74,10 +83,17 @@ function dimensionsFor(a: Appearance): Dims {
   const h = a.height
   const b = a.build
   const female = a.body === 'female'
+  const legLen = 0.84 * h
+  const footH = 0.06
+  // Legs are budgeted to land exactly on the ground.
+  const thighLen = (legLen - footH) * 0.52
+  const shinLen = (legLen - footH) * 0.48
+  const thighW = (female ? 0.13 : 0.14) * b
   return {
-    legLen: 0.84 * h,
-    thighLen: 0.43 * h,
-    shinLen: 0.41 * h,
+    legLen,
+    thighLen,
+    shinLen,
+    footH,
     pelvisH: 0.14 * h,
     torsoH: 0.24 * h,
     chestH: 0.28 * h,
@@ -89,8 +105,9 @@ function dimensionsFor(a: Appearance): Dims {
     armUpperLen: 0.3 * h,
     armForeLen: 0.27 * h,
     handLen: 0.1 * h,
-    thighW: (female ? 0.13 : 0.14) * b,
-    shinW: 0.1 * b,
+    thighW,
+    // Shin top matches thigh bottom (0.78 * thighW) for a continuous line.
+    shinW: thighW * 0.78,
     armW: (female ? 0.075 : 0.09) * b,
     chestWTop: (female ? 0.3 : 0.38) * b,
     chestWBot: (female ? 0.24 : 0.3) * b,
@@ -136,66 +153,73 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
   const bob = node('bob', root, 0, 0, 0)
 
   const hipY = d.legLen
-  // ── Pelvis / shorts ────────────────────────────────────────────────
-  const spine = node('spine', bob, 0, hipY + d.pelvisH * 0.6, 0)
+  const beltDepth = 0.17 * appearance.build
+
+  // ── Pelvis / shorts (spine pivot sits just above the hips) ─────────
+  const spine = node('spine', bob, 0, hipY + d.pelvisH * 0.5, 0)
   mesh(
     'pelvis',
     {
-      topWidth: d.pelvisW,
-      topDepth: 0.16 * appearance.build,
-      bottomWidth: d.pelvisW + 0.02,
-      bottomDepth: 0.17 * appearance.build,
-      height: d.pelvisH,
+      topWidth: d.pelvisW * 0.8,
+      topDepth: (beltDepth - 0.01) * 0.72,
+      bottomWidth: d.pelvisW + 0.025,
+      bottomDepth: beltDepth,
+      height: d.pelvisH + OVERLAP,
       anchor: 'top',
     },
     bottom,
     spine,
-    [0, d.pelvisH * 0.4, 0],
+    [0, d.pelvisH * 0.5, 0],
   )
 
-  // ── Torso ──────────────────────────────────────────────────────────
+  // ── Torso (belly overlaps down into the pelvis) ────────────────────
   mesh(
     'belly',
     {
       topWidth: d.chestWBot,
-      topDepth: 0.15 * appearance.build,
-      bottomWidth: d.pelvisW - 0.01,
-      bottomDepth: 0.16 * appearance.build,
-      height: d.torsoH,
+      topDepth: beltDepth - 0.02,
+      bottomWidth: d.pelvisW * 0.9,
+      bottomDepth: (beltDepth - 0.01) * 0.88,
+      height: d.torsoH + OVERLAP,
       anchor: 'bottom',
     },
     skin,
     spine,
-    [0, d.pelvisH * 0.4 - 0.005, 0],
+    [0, d.pelvisH * 0.5 - d.torsoH - OVERLAP + (d.torsoH + OVERLAP), 0],
   )
-  const chest = node('chest', spine, 0, d.pelvisH * 0.4 + d.torsoH, 0)
+  // (belly anchored bottom at spine top: position its base at pelvis top)
+  const belly = meshes[meshes.length - 1] as Mesh
+  belly.position.set(0, d.pelvisH * 0.5 - OVERLAP, 0)
+
+  const chest = node('chest', spine, 0, d.pelvisH * 0.5 + d.torsoH, 0)
   mesh(
     'chest',
     {
       topWidth: d.chestWTop,
-      topDepth: 0.17 * appearance.build,
-      bottomWidth: d.chestWBot,
-      bottomDepth: 0.15 * appearance.build,
-      height: d.chestH,
+      topDepth: beltDepth,
+      bottomWidth: d.chestWBot * 1.07,
+      bottomDepth: (beltDepth - 0.02) * 1.1,
+      height: d.chestH + OVERLAP,
       anchor: 'bottom',
     },
     top,
     chest,
+    [0, -OVERLAP, 0],
   )
   if (appearance.body === 'female') {
     mesh(
       'bust',
       {
-        topWidth: d.chestWTop * 0.8,
-        topDepth: 0.05,
+        topWidth: d.chestWTop * 0.78,
+        topDepth: 0.045,
         bottomWidth: d.chestWBot * 0.85,
-        bottomDepth: 0.085,
-        height: d.chestH * 0.42,
+        bottomDepth: 0.08,
+        height: d.chestH * 0.4,
         anchor: 'top',
       },
       top,
       chest,
-      [0, d.chestH * 0.78, 0.075],
+      [0, d.chestH * 0.76, beltDepth / 2 - 0.02],
     )
   }
 
@@ -204,16 +228,16 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
   mesh(
     'neckM',
     {
-      topWidth: 0.07,
-      topDepth: 0.07,
-      bottomWidth: 0.08,
-      bottomDepth: 0.08,
-      height: d.neckH + 0.02,
+      topWidth: 0.075,
+      topDepth: 0.08,
+      bottomWidth: 0.085,
+      bottomDepth: 0.09,
+      height: d.neckH + OVERLAP * 2,
       anchor: 'bottom',
     },
     skin,
     neck,
-    [0, -0.01, 0],
+    [0, -OVERLAP * 2, 0],
   )
   const head = node('head', neck, 0, d.neckH, 0)
   mesh(
@@ -229,44 +253,44 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
     },
     skin,
     head,
-    [0, 0, 0],
+    [0, -0.01, 0],
     true,
   )
   const face = d.headW / 2 + 0.002
-  const eyeY = d.headH * 0.55
+  const eyeY = d.headH * 0.52
   const eyeBox = {
-    topWidth: 0.022,
+    topWidth: 0.024,
     topDepth: 0.012,
-    bottomWidth: 0.022,
+    bottomWidth: 0.024,
     bottomDepth: 0.012,
-    height: 0.026,
+    height: 0.024,
     anchor: 'top' as const,
   }
-  mesh('eyeL', eyeBox, '#1e1a18', head, [-0.036, eyeY + 0.013, face], true)
-  mesh('eyeR', eyeBox, '#1e1a18', head, [0.036, eyeY + 0.013, face], true)
+  mesh('eyeL', eyeBox, '#1e1a18', head, [-0.036, eyeY + 0.012, face], true)
+  mesh('eyeR', eyeBox, '#1e1a18', head, [0.036, eyeY + 0.012, face], true)
   const browBox = {
-    topWidth: 0.04,
+    topWidth: 0.042,
     topDepth: 0.012,
-    bottomWidth: 0.04,
+    bottomWidth: 0.042,
     bottomDepth: 0.012,
-    height: 0.012,
+    height: 0.011,
     anchor: 'top' as const,
   }
-  mesh('browL', browBox, hair, head, [-0.036, eyeY + 0.045, face], true)
-  mesh('browR', browBox, hair, head, [0.036, eyeY + 0.045, face], true)
+  mesh('browL', browBox, hair, head, [-0.036, eyeY + 0.04, face], true)
+  mesh('browR', browBox, hair, head, [0.036, eyeY + 0.04, face], true)
   mesh(
     'nose',
     {
       topWidth: 0.024,
-      topDepth: 0.03,
+      topDepth: 0.028,
       bottomWidth: 0.03,
-      bottomDepth: 0.024,
-      height: 0.05,
+      bottomDepth: 0.022,
+      height: 0.045,
       anchor: 'top',
     },
     skin,
     head,
-    [0, eyeY + 0.005, face + 0.006],
+    [0, eyeY, face + 0.004],
     true,
   )
   mesh(
@@ -281,15 +305,15 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
     },
     '#a06050',
     head,
-    [0, d.headH * 0.28, face],
+    [0, d.headH * 0.26, face],
     true,
   )
 
   buildHair(appearance, d, head, hair, mesh)
   buildFacialHair(appearance, d, head, hair, face, mesh)
 
-  // ── Arms ───────────────────────────────────────────────────────────
-  const shoulderY = d.chestH * 0.88
+  // ── Arms (upper arm overlaps up into the shoulder line) ────────────
+  const shoulderY = d.chestH * 0.86
   const armDefs: ['L' | 'R', number][] = [
     ['L', -1],
     ['R', 1],
@@ -301,7 +325,7 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
     const shoulder = node(
       `shoulder${side}`,
       chest,
-      sign * (d.shoulderHalf + d.armW * 0.4),
+      sign * (d.chestWTop / 2 + d.armW * 0.38),
       shoulderY,
       0,
     )
@@ -309,111 +333,117 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
     mesh(
       `upperArm${side}`,
       {
-        topWidth: d.armW,
-        topDepth: d.armW,
+        topWidth: d.armW * 0.8,
+        topDepth: d.armW * 0.8,
         bottomWidth: d.armW * 0.85,
         bottomDepth: d.armW * 0.85,
-        height: d.armUpperLen,
+        height: d.armUpperLen + OVERLAP,
         anchor: 'top',
       },
       skin,
       shoulder,
+      [0, OVERLAP, 0],
     )
     const elbow = node(`elbow${side}`, shoulder, 0, -d.armUpperLen, 0)
     elbows[side] = elbow
     mesh(
       `foreArm${side}`,
       {
-        topWidth: d.armW * 0.82,
-        topDepth: d.armW * 0.82,
+        topWidth: d.armW * 0.68,
+        topDepth: d.armW * 0.68,
         bottomWidth: d.armW * 0.6,
         bottomDepth: d.armW * 0.6,
-        height: d.armForeLen,
+        height: d.armForeLen + OVERLAP,
         anchor: 'top',
       },
       skin,
       elbow,
+      [0, OVERLAP, 0],
     )
     const hand = node(`hand${side}`, elbow, 0, -d.armForeLen, 0)
     mesh(
       `handM${side}`,
       {
-        topWidth: d.armW * 0.62,
-        topDepth: d.armW * 0.72,
-        bottomWidth: d.armW * 0.5,
-        bottomDepth: d.armW * 0.6,
-        height: d.handLen,
+        topWidth: d.armW * 0.48,
+        topDepth: d.armW * 0.55,
+        bottomWidth: d.armW * 0.52,
+        bottomDepth: d.armW * 0.62,
+        height: d.handLen + OVERLAP,
         anchor: 'top',
       },
       skin,
       hand,
+      [0, OVERLAP, 0],
     )
     if (side === 'R') handR = hand
   }
 
-  // ── Legs ───────────────────────────────────────────────────────────
+  // ── Legs (thigh + shin + foot == legLen; overlapped junctions) ─────
   const hips: Record<string, TransformNode> = {}
   const knees: Record<string, TransformNode> = {}
   for (const [side, sign] of armDefs) {
     const hip = node(`hip${side}`, bob, sign * d.hipHalf, hipY, 0)
     hips[side] = hip
-    // Upper thigh wears the shorts color, lower part skin.
+    // Shorts-colored upper thigh, overlapping up into the pelvis.
     mesh(
       `thighTop${side}`,
       {
-        topWidth: d.thighW,
-        topDepth: d.thighW + 0.015,
-        bottomWidth: d.thighW * 0.92,
-        bottomDepth: d.thighW,
-        height: d.thighLen * 0.45,
+        topWidth: d.thighW * 0.68,
+        topDepth: d.thighW * 0.7,
+        bottomWidth: d.thighW * 0.94,
+        bottomDepth: d.thighW + 0.005,
+        height: d.thighLen * 0.5 + OVERLAP,
         anchor: 'top',
       },
       bottom,
       hip,
+      [0, OVERLAP, 0],
     )
     mesh(
       `thigh${side}`,
       {
-        topWidth: d.thighW * 0.9,
-        topDepth: d.thighW * 0.98,
-        bottomWidth: d.thighW * 0.72,
-        bottomDepth: d.thighW * 0.8,
-        height: d.thighLen * 0.58,
+        topWidth: d.thighW * 0.76,
+        topDepth: d.thighW * 0.82,
+        bottomWidth: d.thighW * 0.78,
+        bottomDepth: d.thighW * 0.85,
+        height: d.thighLen * 0.5 + OVERLAP,
         anchor: 'top',
       },
       skin,
       hip,
-      [0, -d.thighLen * 0.42, 0],
+      [0, -d.thighLen * 0.5 + OVERLAP, 0],
     )
     const knee = node(`knee${side}`, hip, 0, -d.thighLen, 0)
     knees[side] = knee
     mesh(
       `shin${side}`,
       {
-        topWidth: d.shinW,
-        topDepth: d.shinW + 0.01,
-        bottomWidth: d.shinW * 0.6,
-        bottomDepth: d.shinW * 0.7,
-        height: d.shinLen - 0.05,
+        topWidth: d.shinW * 0.8,
+        topDepth: d.shinW * 0.85,
+        bottomWidth: d.shinW * 0.62,
+        bottomDepth: d.shinW * 0.72,
+        height: d.shinLen + OVERLAP,
         anchor: 'top',
       },
       skin,
       knee,
+      [0, OVERLAP, 0],
     )
+    // Foot: ankle sits at shin bottom; sole lands exactly on the ground.
     mesh(
       `foot${side}`,
       {
-        topWidth: d.shinW * 0.75,
-        topDepth: 0.14,
-        bottomWidth: d.shinW * 0.85,
-        bottomDepth: 0.17,
-        height: 0.06,
+        topWidth: d.shinW * 0.55,
+        topDepth: 0.1,
+        bottomWidth: d.shinW * 0.95,
+        bottomDepth: 0.16,
+        height: d.footH + 0.02,
         anchor: 'top',
-        bottomShiftZ: 0.035,
+        bottomShiftZ: 0.045,
       },
       shoes,
       knee,
-      [0, -(d.shinLen - 0.055), 0.03],
+      [0, -d.shinLen + 0.02, 0.02],
     )
   }
 
@@ -438,7 +468,7 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
   return {
     joints,
     eyeHeight:
-      hipY + d.pelvisH * 0.6 + d.pelvisH * 0.4 + d.torsoH + d.chestH + d.neckH + d.headH * 0.55,
+      hipY + d.pelvisH * 0.5 + d.pelvisH * 0.5 + d.torsoH + d.chestH + d.neckH + d.headH * 0.55,
     setHeadVisible(visible: boolean): void {
       for (const m of headMeshes) m.isVisible = visible
     },
@@ -460,39 +490,38 @@ type MeshFn = (
 
 function buildHair(a: Appearance, d: Dims, head: TransformNode, hair: string, mesh: MeshFn): void {
   if (a.hairStyle === 'bald') return
-  const capW = d.headW * 0.98
-  const capY = d.headH * 0.82
-  // Base cap for every style
+  const capW = d.headW * 1.02
+  const capBase = d.headH * 0.78
+  // Cap hugs the skull top (slightly wider so no skin pokes through).
   mesh(
     'hairCap',
     {
-      topWidth: capW * 0.9,
-      topDepth: capW * 0.95,
+      topWidth: capW * 0.88,
+      topDepth: capW * 0.92,
       bottomWidth: capW,
-      bottomDepth: capW * 1.02,
-      height: d.headH * 0.3,
+      bottomDepth: capW * 1.04,
+      height: d.headH * 0.34,
       anchor: 'bottom',
       topShiftZ: -0.008,
     },
     hair,
     head,
-    [0, capY, -0.004],
+    [0, capBase, -0.004],
     true,
   )
-  // Back panel reaching down (varies per style)
   const backLen: Record<string, number> = {
-    buzz: 0.05,
-    short: 0.08,
-    bun: 0.08,
-    messy: 0.1,
+    buzz: 0.06,
+    short: 0.09,
+    bun: 0.09,
+    messy: 0.11,
     long: 0.34,
-    ponytail: 0.07,
+    ponytail: 0.08,
   }
   mesh(
     'hairBack',
     {
       topWidth: capW,
-      topDepth: 0.045,
+      topDepth: 0.05,
       bottomWidth: capW * (a.hairStyle === 'long' ? 0.85 : 0.95),
       bottomDepth: 0.04,
       height: backLen[a.hairStyle] ?? 0.07,
@@ -500,24 +529,24 @@ function buildHair(a: Appearance, d: Dims, head: TransformNode, hair: string, me
     },
     hair,
     head,
-    [0, capY + d.headH * 0.12, -d.headW / 2 + 0.005],
+    [0, capBase + d.headH * 0.2, -d.headW / 2 + 0.008],
     true,
   )
   if (a.hairStyle !== 'buzz') {
-    // Fringe
+    // Fringe sits flush against the top of the forehead.
     mesh(
       'hairFringe',
       {
-        topWidth: capW * 0.92,
-        topDepth: 0.04,
-        bottomWidth: capW * 0.8,
-        bottomDepth: 0.03,
-        height: d.headH * 0.16,
+        topWidth: capW * 0.9,
+        topDepth: 0.05,
+        bottomWidth: capW * 0.78,
+        bottomDepth: 0.035,
+        height: d.headH * 0.18,
         anchor: 'top',
       },
       hair,
       head,
-      [0, capY + d.headH * 0.16, d.headW / 2 - 0.012],
+      [0, capBase + d.headH * 0.26, d.headW / 2 - 0.014],
       true,
     )
   }
@@ -534,7 +563,7 @@ function buildHair(a: Appearance, d: Dims, head: TransformNode, hair: string, me
       },
       hair,
       head,
-      [0, capY + d.headH * 0.18, -d.headW / 2 - 0.02],
+      [0, capBase + d.headH * 0.22, -d.headW / 2 - 0.02],
       true,
     )
   }
@@ -552,7 +581,7 @@ function buildHair(a: Appearance, d: Dims, head: TransformNode, hair: string, me
       },
       hair,
       head,
-      [0, capY + d.headH * 0.1, -d.headW / 2 - 0.015],
+      [0, capBase + d.headH * 0.14, -d.headW / 2 - 0.015],
       true,
     )
   }
@@ -569,7 +598,7 @@ function buildHair(a: Appearance, d: Dims, head: TransformNode, hair: string, me
       },
       hair,
       head,
-      [-d.headW * 0.35, capY + d.headH * 0.22, 0.01],
+      [-d.headW * 0.35, capBase + d.headH * 0.3, 0.01],
       true,
     )
     mesh(
@@ -584,7 +613,7 @@ function buildHair(a: Appearance, d: Dims, head: TransformNode, hair: string, me
       },
       hair,
       head,
-      [d.headW * 0.3, capY + d.headH * 0.25, -0.02],
+      [d.headW * 0.3, capBase + d.headH * 0.32, -0.02],
       true,
     )
   }
@@ -612,7 +641,7 @@ function buildFacialHair(
       },
       hair,
       head,
-      [0, d.headH * 0.38, face + 0.006],
+      [0, d.headH * 0.36, face + 0.006],
       true,
     )
   }
@@ -629,40 +658,27 @@ function buildFacialHair(
       },
       hair,
       head,
-      [0, d.headH * 0.24, face - 0.002],
+      [0, d.headH * 0.22, face - 0.002],
       true,
     )
   }
   if (a.facialHair === 'full') {
-    mesh(
-      'beardL',
-      {
-        topWidth: 0.02,
-        topDepth: d.headW * 0.7,
-        bottomWidth: 0.016,
-        bottomDepth: d.headW * 0.5,
-        height: d.headH * 0.3,
-        anchor: 'top',
-      },
-      hair,
-      head,
-      [-d.headW * 0.42, d.headH * 0.42, 0.01],
-      true,
-    )
-    mesh(
-      'beardR',
-      {
-        topWidth: 0.02,
-        topDepth: d.headW * 0.7,
-        bottomWidth: 0.016,
-        bottomDepth: d.headW * 0.5,
-        height: d.headH * 0.3,
-        anchor: 'top',
-      },
-      hair,
-      head,
-      [d.headW * 0.42, d.headH * 0.42, 0.01],
-      true,
-    )
+    for (const sign of [-1, 1]) {
+      mesh(
+        `beard${sign}`,
+        {
+          topWidth: 0.02,
+          topDepth: d.headW * 0.7,
+          bottomWidth: 0.016,
+          bottomDepth: d.headW * 0.5,
+          height: d.headH * 0.3,
+          anchor: 'top',
+        },
+        hair,
+        head,
+        [sign * d.headW * 0.42, d.headH * 0.42, 0.01],
+        true,
+      )
+    }
   }
 }

@@ -23,7 +23,7 @@ export function customizeScreen(
   content: ContentRegistry,
   uiRoot: HTMLElement,
   savedName: string | null,
-): Promise<{ name: string; appearance: Appearance }> {
+): Promise<{ name: string; appearance: Appearance; releaseCamera: () => void }> {
   return new Promise((resolve) => {
     let appearance = loadAppearance()
 
@@ -31,10 +31,10 @@ export function customizeScreen(
     const previewPos = { x: 2.5, z: 6.5 }
     const camera = new FreeCamera(
       'customize-cam',
-      new Vector3(previewPos.x, 1.35, previewPos.z + 2.6),
+      new Vector3(previewPos.x, 1.2, previewPos.z + 3.1),
       scene,
     )
-    camera.setTarget(new Vector3(previewPos.x, 0.95, previewPos.z))
+    camera.setTarget(new Vector3(previewPos.x, 0.85, previewPos.z))
     scene.activeCamera = camera
     const avatar = new Avatar(scene, content, appearance, 'preview')
     let previewYaw = Math.PI
@@ -176,9 +176,10 @@ export function customizeScreen(
       localStorage.setItem('hobo.appearance', JSON.stringify(appearance))
       clearInterval(ticker)
       avatar.dispose()
-      camera.dispose()
       overlay.remove()
-      resolve({ name, appearance })
+      // The preview camera stays alive until the gameplay camera takes over —
+      // the render loop must never see a camera-less scene.
+      resolve({ name, appearance, releaseCamera: () => camera.dispose() })
     }
     $('btn-join').addEventListener('click', join)
     $('cname').addEventListener('keydown', (e) => {
