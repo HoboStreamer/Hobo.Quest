@@ -12,6 +12,13 @@ body {
   background: #0b0e11;
   font-family: 'Segoe UI', system-ui, sans-serif;
   color: #e6e6e6;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+input {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 #game {

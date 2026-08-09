@@ -108,6 +108,14 @@ async function main(): Promise<void> {
   await page.waitForTimeout(3000) // walk through the north gate toward the crates
   await page.keyboard.up('KeyW')
   await page.waitForTimeout(800)
+  // Park the cursor first: synthetic mouse.move generates movement deltas
+  // that would otherwise destroy the aim set below.
+  await page.evaluate(() => {
+    const w = window as unknown as { __hobo: { input: { debugForceLock(): void } } }
+    w.__hobo.input.debugForceLock()
+  })
+  await page.mouse.move(640, 400)
+  await page.waitForTimeout(150)
   // Aim precisely at the nearest crate using replicated state.
   const aimed = await page.evaluate(() => {
     interface Dbg {
@@ -139,13 +147,27 @@ async function main(): Promise<void> {
     return true
   })
   console.log(`  aimed at a nearby crate: ${aimed}`)
+  await page.waitForTimeout(150) // a couple of input ticks carry the aim to the server
+  await page.mouse.down()
   await page.waitForTimeout(400)
-  await page.evaluate(() => {
-    const w = (window as unknown as { __hobo: { interact: { handle(a: { kind: string }): void } } })
-      .__hobo
-    w.interact.handle({ kind: 'primary_down' })
-  })
-  await page.waitForTimeout(1200)
+  const yawBefore = await page.evaluate(
+    () => (window as unknown as { __hobo: { input: { yaw: number } } }).__hobo.input.yaw,
+  )
+  for (let i = 0; i < 6; i++) {
+    // Synthetic CDP moves carry no movementX; dispatch real MouseEvents so
+    // the look pipeline (which reads movement deltas) is actually exercised.
+    await page.evaluate(() => {
+      document.dispatchEvent(new MouseEvent('mousemove', { movementX: 30, movementY: 0 }))
+    })
+    await page.waitForTimeout(60)
+  }
+  const yawAfter = await page.evaluate(
+    () => (window as unknown as { __hobo: { input: { yaw: number } } }).__hobo.input.yaw,
+  )
+  console.log(
+    `  look responsive while LMB held: ${Math.abs(yawAfter - yawBefore) > 0.0001} (dyaw=${(yawAfter - yawBefore).toFixed(4)})`,
+  )
+  await page.waitForTimeout(600)
   const alive = await Promise.race([
     page.evaluate(() => 1 + 1).then(() => true),
     new Promise<boolean>((res) => setTimeout(() => res(false), 4000)),
@@ -157,11 +179,7 @@ async function main(): Promise<void> {
   })
   console.log(`  beams active (heldBy size): ${held}`)
   await shot(page, '06-physgun-grab')
-  await page.evaluate(() => {
-    const w = (window as unknown as { __hobo: { interact: { handle(a: { kind: string }): void } } })
-      .__hobo
-    w.interact.handle({ kind: 'primary_up' })
-  })
+  await page.mouse.up()
   void dbg
 
   await page.evaluate(() => {

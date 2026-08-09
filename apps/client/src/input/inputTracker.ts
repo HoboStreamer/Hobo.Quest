@@ -24,7 +24,10 @@ export class InputTracker {
   private lookDy = 0
 
   constructor(private readonly canvas: HTMLCanvasElement) {
-    canvas.addEventListener('click', () => {
+    // Lock on button DOWN, not on click: click only fires on RELEASE, so a
+    // click-and-hold (the physgun grab gesture) would spend the entire hold
+    // unlocked — no look, no actions, "game frozen until I let go".
+    canvas.addEventListener('pointerdown', () => {
       if (!this.uiCapture && !this.locked) {
         canvas.requestPointerLock()
       }
@@ -78,8 +81,19 @@ export class InputTracker {
     })
     document.addEventListener('pointerdown', (e) => {
       if (!this.locked || this.uiCapture) return
+      // Without this, holding a button and moving starts a native browser
+      // drag/selection, which SWALLOWS all mousemove events until release —
+      // the game appears frozen while the physgun button is held.
+      e.preventDefault()
       if (e.button === 0) this.onAction?.({ kind: 'primary_down' })
       if (e.button === 2) this.onAction?.({ kind: 'rmb_down' })
+    })
+    document.addEventListener('dragstart', (e) => {
+      // Native drags are only ever wanted for inventory slots in the menu.
+      if (!this.uiCapture) e.preventDefault()
+    })
+    document.addEventListener('selectstart', (e) => {
+      if (!this.uiCapture) e.preventDefault()
     })
     document.addEventListener('pointerup', (e) => {
       if (e.button === 0) this.onAction?.({ kind: 'primary_up' })
@@ -116,6 +130,16 @@ export class InputTracker {
 
   exitLock(): void {
     if (this.locked) document.exitPointerLock()
+  }
+
+  /** Re-engage pointer lock (used when closing menus — needs a user gesture). */
+  requestLock(): void {
+    if (!this.locked && !this.uiCapture) this.canvas.requestPointerLock()
+  }
+
+  /** Test harness only: headless browsers cannot pointer-lock. */
+  debugForceLock(): void {
+    this.locked = true
   }
 }
 

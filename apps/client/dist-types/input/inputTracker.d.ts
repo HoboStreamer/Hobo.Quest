@@ -32,6 +32,10 @@ export declare class InputTracker {
   get shiftHeld(): boolean
   get pointerLocked(): boolean
   exitLock(): void
+  /** Re-engage pointer lock (used when closing menus — needs a user gesture). */
+  requestLock(): void
+  /** Test harness only: headless browsers cannot pointer-lock. */
+  debugForceLock(): void
 }
 export type InputAction =
   | {

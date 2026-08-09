@@ -103,6 +103,7 @@ async function start(): Promise<void> {
   hud.onUiCaptureChange = (captured) => {
     input.uiCapture = captured
     if (captured) input.exitLock()
+    else input.requestLock() // straight back into the game when the menu closes
   }
   input.onAction = (action) => {
     switch (action.kind) {
