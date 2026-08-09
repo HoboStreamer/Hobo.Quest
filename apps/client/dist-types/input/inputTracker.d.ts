@@ -18,9 +18,16 @@ export declare class InputTracker {
   uiCapture: boolean
   onAction: ((action: InputAction) => void) | null
   onWheel: ((delta: number) => void) | null
+  private lookDx
+  private lookDy
   /** While R is held, mouse motion rotates the held prop instead of the view. */
   rotateModifier: boolean
   constructor(canvas: HTMLCanvasElement)
+  /** Accumulated look deltas since the last call (viewmodel sway). */
+  consumeLookDelta(): {
+    dx: number
+    dy: number
+  }
   keyDown(code: string): boolean
   get pointerLocked(): boolean
   exitLock(): void

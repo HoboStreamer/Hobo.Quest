@@ -38,6 +38,8 @@ export class LocalPlayer {
   /** Previous/current tick positions for render interpolation. */
   private prevPos = new Vector3()
   private currPos = new Vector3()
+  /** Interpolated render position (capsule center), updated each frame. */
+  readonly renderPos = new Vector3()
 
   constructor(
     scene: Scene,
@@ -127,8 +129,17 @@ export class LocalPlayer {
     const x = this.prevPos.x + (this.currPos.x - this.prevPos.x) * alpha
     const y = this.prevPos.y + (this.currPos.y - this.prevPos.y) * alpha
     const z = this.prevPos.z + (this.currPos.z - this.prevPos.z) * alpha
+    this.renderPos.set(x, y, z)
     this.camera.position.set(x, y + MOVE.eyeOffset, z)
     this.camera.rotation.set(-this.input.pitch, this.input.yaw, 0)
+  }
+
+  get viewYaw(): number {
+    return this.input.yaw
+  }
+
+  get viewPitch(): number {
+    return this.input.pitch
   }
 
   get eye(): Vector3 {

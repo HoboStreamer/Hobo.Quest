@@ -3,35 +3,52 @@ import havokWasmUrl from '@babylonjs/havok/lib/esm/HavokPhysics.wasm?url'
 import { createContent } from '@hobo/content'
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
+import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { InteractionController } from './game/interactionController.js'
 import { LocalPlayer } from './game/localPlayer.js'
 import { InputTracker } from './input/inputTracker.js'
 import { Connection, gameSocketUrl, getIdentity, saveName } from './net/connection.js'
+import { BeamRenderer } from './render/beams.js'
 import { EntityView } from './render/entityView.js'
+import { FirstPersonBody } from './render/firstPersonBody.js'
 import { buildStaticWorld, createEngine, createScene } from './render/sceneSetup.js'
+import { Viewmodel } from './render/viewmodel.js'
 import { ClientState } from './state/clientState.js'
+import { customizeScreen } from './ui/customizeScreen.js'
 import { Hud } from './ui/hud.js'
 
 /**
- * Client bootstrap: name screen -> engine/scene/physics -> connect ->
- * fixed-timestep prediction loop + render loop.
+ * Client bootstrap: engine/scene -> character customization (live preview)
+ * -> connect -> fixed-timestep prediction + interpolated render loop with
+ * first-person body, viewmodel and physgun beams.
  */
 async function start(): Promise<void> {
   const canvas = document.getElementById('game') as HTMLCanvasElement
   const uiRoot = document.getElementById('ui') as HTMLElement
 
   const identity = getIdentity()
-  const name = await nameScreen(uiRoot, identity.name)
-  saveName(name)
-
   const content = createContent()
   const engine = await createEngine(canvas)
   const scene = createScene(engine)
   buildStaticWorld(scene, content)
 
-  const havok = await HavokPhysics({ locateFile: () => havokWasmUrl })
+  // Havok loads while the player customizes their character.
+  const havokPromise = HavokPhysics({ locateFile: () => havokWasmUrl })
+
+  // Render immediately so the customization preview is live.
+  let gameLoop: (() => void) | null = null
+  let last = performance.now()
+  engine.runRenderLoop(() => {
+    gameLoop?.()
+    scene.render()
+  })
+  window.addEventListener('resize', () => engine.resize())
+
+  const { name, appearance } = await customizeScreen(scene, content, uiRoot, identity.name)
+  saveName(name)
+
+  const havok = await havokPromise
   const physics = createHavokWorldForScene(scene, havok)
-  // Mirror the server's static collision world for prediction sweeps.
   const { buildStaticPhysics } = await import('./game/staticPhysics.js')
   buildStaticPhysics(physics, content)
 
@@ -47,7 +64,16 @@ async function start(): Promise<void> {
     y: world.spawnPoint[1],
     z: world.spawnPoint[2],
   })
+  scene.activeCamera = player.camera
   const interact = new InteractionController(physics, player, view, state, content, connection)
+  const fpBody = new FirstPersonBody(scene, content, appearance, player, state)
+  const viewmodel = new Viewmodel(scene, content, player.camera)
+  const beams = new BeamRenderer(scene)
+
+  interact.onSwing = () => {
+    viewmodel.triggerSwing()
+    fpBody.triggerSwing()
+  }
 
   hud.onUiCaptureChange = (captured) => {
     input.uiCapture = captured
@@ -102,7 +128,7 @@ async function start(): Promise<void> {
 
   hud.setStatus('connecting…')
   try {
-    await connection.connect(gameSocketUrl(), identity.token, name)
+    await connection.connect(gameSocketUrl(), identity.token, name, appearance)
   } catch {
     hud.setStatus('could not reach server — is it running?')
     return
@@ -110,31 +136,44 @@ async function start(): Promise<void> {
 
   // Fixed-timestep prediction; interpolated rendering.
   const timestep = new FixedTimestep(1 / state.tickRate)
-  let last = performance.now()
-  engine.runRenderLoop(() => {
+  gameLoop = () => {
     const now = performance.now()
     const elapsed = Math.min((now - last) / 1000, 0.25)
     last = now
+    if (!connection.open || !state.myEntityId) return
 
-    if (connection.open && state.myEntityId) {
-      const steps = timestep.consume(elapsed)
-      for (let i = 0; i < steps; i++) {
-        player.fixedUpdate()
-        interact.flushTick()
-      }
-      physics.step(0) // query-only world: refresh broadphase, no dynamics
-      player.frameUpdate(timestep.alpha)
-      view.update(now / 1000)
-
-      hud.setPrompt(promptFor(interact, content, state))
-      hud.setStatus(
-        `${name} · tick ${state.serverTick} · ${engine.getFps().toFixed(0)} fps · ${state.entities.size} entities`,
-      )
+    const steps = timestep.consume(elapsed)
+    for (let i = 0; i < steps; i++) {
+      player.fixedUpdate()
+      interact.flushTick()
     }
-    scene.render()
-  })
+    physics.step(0) // query-only world: refresh broadphase, no dynamics
+    player.frameUpdate(timestep.alpha)
+    view.update(now / 1000)
 
-  window.addEventListener('resize', () => engine.resize())
+    // First-person presentation: body, viewmodel, beams.
+    const selfHolding = [...state.heldBy.values()].includes(state.myEntityId)
+    fpBody.update(elapsed, now / 1000, player.renderPos, selfHolding)
+    const speed = Math.hypot(player.move.vel.x, player.move.vel.z)
+    const look = input.consumeLookDelta()
+    viewmodel.setItem(state.activeItemDef())
+    viewmodel.update(elapsed, speed, player.move.grounded, look.dx, look.dy)
+
+    const activeBeams = new Map<string, [Vector3, Vector3]>()
+    for (const [target, holder] of state.heldBy) {
+      const to = view.positionOf(target)
+      if (!to) continue
+      const from =
+        holder === state.myEntityId ? viewmodel.beamOrigin() : view.avatarFor(holder)?.beamOrigin()
+      if (from) activeBeams.set(holder, [from, to])
+    }
+    beams.update(elapsed, activeBeams)
+
+    hud.setPrompt(promptFor(interact, content, state))
+    hud.setStatus(
+      `${name} · tick ${state.serverTick} · ${engine.getFps().toFixed(0)} fps · ${state.entities.size} entities`,
+    )
+  }
 }
 
 /** Context-sensitive crosshair prompt based on aim target + equipped tool. */
@@ -166,32 +205,6 @@ function promptFor(
     if (owned) return 'Owned by another player'
   }
   return null
-}
-
-function nameScreen(uiRoot: HTMLElement, savedName: string | null): Promise<string> {
-  return new Promise((resolve) => {
-    const overlay = document.createElement('div')
-    overlay.className = 'overlay-center'
-    overlay.innerHTML = `
-      <h1>HOBO.QUEST</h1>
-      <input id="name-input" maxlength="24" placeholder="drifter name" value="${savedName ?? ''}" />
-      <button id="join-btn">Enter the Yard</button>
-      <div class="hint">a persistent multiplayer physics sandbox</div>
-    `
-    uiRoot.appendChild(overlay)
-    const inputEl = overlay.querySelector('#name-input') as HTMLInputElement
-    const button = overlay.querySelector('#join-btn') as HTMLButtonElement
-    const join = (): void => {
-      const value = inputEl.value.trim() || 'Drifter'
-      overlay.remove()
-      resolve(value)
-    }
-    button.addEventListener('click', join)
-    inputEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') join()
-    })
-    inputEl.focus()
-  })
 }
 
 start().catch((err: unknown) => {

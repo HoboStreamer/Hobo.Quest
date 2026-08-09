@@ -15,7 +15,8 @@
     "@hobo/gameplay": "workspace:*",
     "@hobo/physics": "workspace:*",
     "@hobo/protocol": "workspace:*",
-    "@hobo/shared": "workspace:*"
+    "@hobo/shared": "workspace:*",
+    "@babylonjs/loaders": "^8.0.1"
   },
   "devDependencies": {
     "vite": "^6.2.5"

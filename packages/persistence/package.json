@@ -13,7 +13,8 @@
   "dependencies": {
     "@hobo/gameplay": "workspace:*",
     "@hobo/shared": "workspace:*",
-    "better-sqlite3": "^11.9.1"
+    "better-sqlite3": "^11.9.1",
+    "@hobo/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12"

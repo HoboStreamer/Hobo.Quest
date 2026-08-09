@@ -1,4 +1,4 @@
-import { type ClientMessage, type ServerMessage } from '@hobo/protocol'
+import { type Appearance, type ClientMessage, type ServerMessage } from '@hobo/protocol'
 /**
  * WebSocket connection to the dedicated server. Message handling is a
  * callback so the network layer stays independent of game/state code.
@@ -7,7 +7,7 @@ export declare class Connection {
   private ws
   onMessage: ((msg: ServerMessage) => void) | null
   onClose: (() => void) | null
-  connect(url: string, token: string, name: string): Promise<void>
+  connect(url: string, token: string, name: string, appearance: Appearance): Promise<void>
   send(msg: ClientMessage): void
   get open(): boolean
 }

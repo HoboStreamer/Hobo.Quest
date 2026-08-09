@@ -53,6 +53,18 @@ describe('sqlite store', () => {
       },
       skills: { woodcutting: 120, mining: 40 },
       friends: ['p2', 'p3'],
+      appearance: {
+        body: 'female',
+        skin: 3,
+        hairStyle: 'bun',
+        hairColor: 2,
+        facialHair: 'none',
+        top: 1,
+        bottom: 2,
+        shoes: 3,
+        height: 1.02,
+        build: 0.95,
+      },
       updatedAt: 2000,
     }
     store.players.upsert(player)
@@ -109,12 +121,13 @@ describe('sqlite store', () => {
     expect(player?.name).toBe('Old Hobo')
     expect(player?.skills).toEqual({})
     expect(player?.friends).toEqual([])
+    expect(player?.appearance).toBeNull()
     // constraints table exists and works post-migration
     store.constraints.upsertMany([
       { id: 'c1', type: 'weld', entityA: 'x', entityB: 'y', updatedAt: 1 },
     ])
     expect(store.constraints.loadAll()).toHaveLength(1)
-    expect(store.meta.get('schema_version')).toBe('3')
+    expect(store.meta.get('schema_version')).toBe('4')
     store.close()
   })
 

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { AppearanceSchema } from '../appearance.js'
 
 /**
  * Client -> server messages, defined as zod schemas because the server must
@@ -14,6 +15,7 @@ export const ClientHelloSchema = z.object({
   /** Persistent identity token (localStorage). Replaced by real auth later. */
   token: z.string().min(8).max(64),
   name: z.string().min(1).max(24),
+  appearance: AppearanceSchema,
 })
 
 /**

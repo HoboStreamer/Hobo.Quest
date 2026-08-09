@@ -1,4 +1,5 @@
 import type { InventoryDto, SkillsDto } from '@hobo/gameplay'
+import type { Appearance } from '@hobo/protocol'
 
 /**
  * Persistence DTOs: the explicit, versionable disk representation of game
@@ -32,6 +33,8 @@ export interface PlayerDto {
   skills: SkillsDto
   /** Player ids this player trusts with their props (one-directional). */
   friends: string[]
+  /** Avatar customization; null until the player first customizes. */
+  appearance: Appearance | null
   updatedAt: number
 }
 

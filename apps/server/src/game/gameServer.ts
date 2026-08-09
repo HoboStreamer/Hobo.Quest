@@ -291,6 +291,9 @@ export class GameServer {
       ? SkillSet.fromDto(existing.skills, this.world.content)
       : new SkillSet(this.world.content)
     const friends = new Set(existing?.friends ?? [])
+    // The client's customization is authoritative for looks (validated by
+    // the protocol schema); it persists so other tools can rely on it.
+    const appearance = msg.appearance
 
     // Starter kit: every drifter carries a physgun. Also grants it to
     // players from before the tool system existed.
@@ -313,6 +316,7 @@ export class GameServer {
       inventory,
       skills,
       friends,
+      appearance,
       content: this.world.content,
       send: (text) => conn.send(text),
       closeConnection: (code, reason) => conn.close(code, reason),
@@ -607,6 +611,7 @@ export class GameServer {
             if (owner) {
               wire.name = owner.name
               wire.player = owner.playerId as string
+              wire.appearance = owner.appearance
             }
             return wire
           }),
@@ -662,6 +667,7 @@ export class GameServer {
       inventory: session.inventory.toDto(),
       skills: session.skills.toDto(),
       friends: [...session.friends],
+      appearance: session.appearance,
       updatedAt: Date.now(),
     }
   }

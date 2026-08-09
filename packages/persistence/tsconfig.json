@@ -5,5 +5,15 @@
     "outDir": "dist"
   },
   "include": ["src"],
-  "references": [{ "path": "../shared" }, { "path": "../gameplay" }]
+  "references": [
+    {
+      "path": "../shared"
+    },
+    {
+      "path": "../gameplay"
+    },
+    {
+      "path": "../protocol"
+    }
+  ]
 }

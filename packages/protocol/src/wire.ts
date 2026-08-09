@@ -1,3 +1,5 @@
+import type { Appearance } from './appearance.js'
+
 /**
  * Wire-level DTO shapes shared by many messages.
  *
@@ -39,6 +41,8 @@ export interface WireEntity {
   name?: string
   /** Persistent player id, when kind === 'player' (trust/friends target). */
   player?: string
+  /** Avatar description, when kind === 'player'. */
+  appearance?: Appearance
   /** Owning player id, when kind === 'prop' and player-placed (prop protection). */
   owner?: string
   /** Remaining units, when kind === 'resource'. */
@@ -59,6 +63,8 @@ export interface WirePlayerState {
   yaw: number
   pitch: number
   grounded: boolean
+  /** Equipped item def id (third-person held-item display), if any. */
+  item?: string
 }
 
 export interface WireItemStack {

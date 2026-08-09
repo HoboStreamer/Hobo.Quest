@@ -16,8 +16,10 @@ import { join } from 'node:path'
 import WebSocket from 'ws'
 import {
   PROTOCOL_VERSION,
+  defaultAppearance,
   encodeClientMessage,
   decodeServerMessage,
+  type Appearance,
   type ClientMessage,
   type ServerMessage,
   type WireEntity,
@@ -83,14 +85,20 @@ class TestClient {
   private waiters: { pred: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] =
     []
 
-  async connect(name: string, token: string): Promise<void> {
+  async connect(name: string, token: string, appearance?: Appearance): Promise<void> {
     this.ws = new WebSocket(URL)
     await new Promise<void>((res, rej) => {
       this.ws.on('open', () => res())
       this.ws.on('error', rej)
     })
     this.ws.on('message', (data) => this.handle(String(data)))
-    this.send({ t: 'hello', v: PROTOCOL_VERSION, token, name })
+    this.send({
+      t: 'hello',
+      v: PROTOCOL_VERSION,
+      token,
+      name,
+      appearance: appearance ?? defaultAppearance(),
+    })
     await this.waitFor((m) => m.t === 'welcome')
   }
 
@@ -483,7 +491,14 @@ async function main(): Promise<void> {
 
   console.log('phase: prop protection + trust (second player)')
   const b = new TestClient()
-  await b.connect('Bob', 'token_bbbbbbbbbbbb')
+  const bobLook: Appearance = {
+    ...defaultAppearance(),
+    body: 'female',
+    hairStyle: 'ponytail',
+    skin: 5,
+    top: 7,
+  }
+  await b.connect('Bob', 'token_bbbbbbbbbbbb', bobLook)
   await b.waitFor((m) => m.t === 'snap')
   await walkPath(b, [
     [0, 24],
@@ -500,6 +515,15 @@ async function main(): Promise<void> {
   // Alice trusts Bob (found via replicated player identity).
   const bobEntry = [...a.entities.values()].find((e) => e.kind === 'player' && e.name === 'Bob')
   assert(bobEntry?.player, 'Alice sees Bob with player identity')
+  assert(
+    bobEntry.appearance?.hairStyle === 'ponytail' && bobEntry.appearance.body === 'female',
+    'Bob\u2019s avatar customization replicated to Alice',
+  )
+  const aliceSnap = await b.waitFor(
+    (m) => m.t === 'snap' && m.players.some((p) => p.id === a.entityId && p.item !== undefined),
+    8000,
+  )
+  assert(aliceSnap, 'equipped item replicated in player snapshots (held-item display)')
   a.results.length = 0
   a.send({ t: 'trust', player: bobEntry.player as string, trusted: true })
   await a.waitFor((m) => m.t === 'result' && m.action === 'trust')

@@ -1,4 +1,4 @@
-import type { ClientInput } from '@hobo/protocol'
+import type { Appearance, ClientInput } from '@hobo/protocol'
 import type { ContentRegistry } from '@hobo/content'
 import type { Inventory, SkillSet } from '@hobo/gameplay'
 import { CraftQueue, createMoveState, type PlayerMoveState } from '@hobo/gameplay'
@@ -37,6 +37,7 @@ export interface PlayerSession {
   skills: SkillSet
   /** Player ids THIS player trusts with their props (one-directional). */
   friends: Set<string>
+  appearance: Appearance
   craftQueue: CraftQueue
   activeHotbar: number
   held: HeldProp | null
@@ -68,6 +69,7 @@ export interface SessionInit {
   inventory: Inventory
   skills: SkillSet
   friends: Set<string>
+  appearance: Appearance
   content: ContentRegistry
   send(text: string): void
   closeConnection(code: number, reason: string): void
@@ -86,6 +88,7 @@ export function createSession(init: SessionInit): PlayerSession {
     inventory: init.inventory,
     skills: init.skills,
     friends: init.friends,
+    appearance: init.appearance,
     craftQueue: new CraftQueue(),
     activeHotbar: 0,
     held: null,

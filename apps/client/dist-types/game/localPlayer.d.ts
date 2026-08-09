@@ -20,6 +20,8 @@ export declare class LocalPlayer {
   /** Previous/current tick positions for render interpolation. */
   private prevPos
   private currPos
+  /** Interpolated render position (capsule center), updated each frame. */
+  readonly renderPos: Vector3
   constructor(
     scene: Scene,
     physics: PhysicsWorld,
@@ -39,6 +41,8 @@ export declare class LocalPlayer {
   onSnapshot(snap: ServerSnapshot): void
   /** Per-frame: camera follows interpolated predicted position. */
   frameUpdate(alpha: number): void
+  get viewYaw(): number
+  get viewPitch(): number
   get eye(): Vector3
   viewDir(out: { x: number; y: number; z: number }): void
 }

@@ -43,6 +43,7 @@ export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity 
 
 export function wirePlayerFor(session: PlayerSession): WirePlayerState {
   const { pos, vel } = session.move
+  const item = session.inventory.get(session.activeHotbar)?.defId
   return {
     id: session.entityId as string,
     pos: [pos.x, pos.y, pos.z],
@@ -50,6 +51,7 @@ export function wirePlayerFor(session: PlayerSession): WirePlayerState {
     yaw: session.yaw,
     pitch: session.pitch,
     grounded: session.move.grounded,
+    ...(item !== undefined ? { item } : {}),
   }
 }
 

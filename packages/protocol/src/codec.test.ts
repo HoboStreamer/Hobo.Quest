@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { decodeClientMessage, encodeClientMessage } from './codec.js'
 import type { ClientMessage } from './messages/client.js'
+import { defaultAppearance } from './appearance.js'
 
 describe('protocol codec', () => {
   it('roundtrips every client message kind', () => {
     const messages: ClientMessage[] = [
-      { t: 'hello', v: 1, token: 'abcdefgh12345678', name: 'Tester' },
+      {
+        t: 'hello',
+        v: 1,
+        token: 'abcdefgh12345678',
+        name: 'Tester',
+        appearance: defaultAppearance(),
+      },
       { t: 'input', seq: 42, moveX: 1, moveZ: -0.5, yaw: 1.2, pitch: -0.3, buttons: 5 },
       { t: 'use', target: 'abc123' },
       { t: 'craft', recipe: 'craft_wooden_crate' },

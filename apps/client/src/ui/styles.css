@@ -358,3 +358,127 @@ body {
 .trust-btn.trusted {
   background: #2d6b45;
 }
+
+.customize-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  pointer-events: auto;
+}
+
+.customize-panel {
+  margin-left: 4vw;
+  width: 320px;
+  max-height: 92vh;
+  overflow-y: auto;
+  background: rgba(10, 14, 18, 0.92);
+  border: 1px solid #3a4450;
+  border-radius: 10px;
+  padding: 18px;
+}
+
+.customize-panel h1 {
+  font-size: 26px;
+  letter-spacing: 0.12em;
+  color: #f0b040;
+  margin-bottom: 12px;
+}
+
+.customize-panel input[type='text'],
+.customize-panel input#cname {
+  width: 100%;
+  background: #141a20;
+  color: #fff;
+  border: 1px solid #3a4450;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+.cust-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8fa0b0;
+  margin: 8px 0 4px;
+}
+
+.cust-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 4px;
+}
+
+.swatch {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.swatch.selected {
+  border-color: #f0b040;
+}
+
+.cust-btn {
+  background: #232b33;
+  color: #dde;
+  border: 1px solid #3a4450;
+  border-radius: 5px;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.cust-btn.selected {
+  background: #2a5a8a;
+  border-color: #58a4c4;
+}
+
+.cust-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.cust-sliders label {
+  font-size: 12px;
+  color: #9fb0c0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.cust-sliders input {
+  flex: 1;
+}
+
+.cust-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cust-actions button {
+  flex: 1;
+  background: #232b33;
+  color: #dde;
+  border: 1px solid #3a4450;
+  border-radius: 6px;
+  padding: 10px 0;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.cust-actions button.primary {
+  background: #2a5a8a;
+  border-color: #58a4c4;
+  font-weight: 600;
+}

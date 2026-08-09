@@ -24,6 +24,8 @@ export declare class InteractionController {
   private readonly content
   private readonly connection
   physgunActive: boolean
+  /** Cosmetic hook: a swing was sent (viewmodel + body animation). */
+  onSwing: (() => void) | null
   private lastSwingMs
   private pendingRotate
   constructor(

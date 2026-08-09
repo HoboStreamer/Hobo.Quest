@@ -36,6 +36,8 @@ export interface AimTarget {
 
 export class InteractionController {
   physgunActive = false
+  /** Cosmetic hook: a swing was sent (viewmodel + body animation). */
+  onSwing: (() => void) | null = null
   private lastSwingMs = 0
   private pendingRotate = { dyaw: 0, dpitch: 0 }
 
@@ -165,6 +167,7 @@ export class InteractionController {
     const target = this.aim()
     if (target?.kind !== 'resource') return
     this.lastSwingMs = now
+    this.onSwing?.()
     this.connection.send({ t: 'use', target: target.entityId })
   }
 

@@ -18,6 +18,8 @@ export class InputTracker {
 
   onAction: ((action: InputAction) => void) | null = null
   onWheel: ((delta: number) => void) | null = null
+  private lookDx = 0
+  private lookDy = 0
   /** While R is held, mouse motion rotates the held prop instead of the view. */
   rotateModifier = false
 
@@ -42,6 +44,8 @@ export class InputTracker {
       }
       this.yaw += e.movementX * this.sensitivity
       this.pitch -= e.movementY * this.sensitivity
+      this.lookDx += e.movementX * this.sensitivity
+      this.lookDy += e.movementY * this.sensitivity
       const limit = Math.PI / 2 - 0.01
       this.pitch = Math.max(-limit, Math.min(limit, this.pitch))
     })
@@ -82,6 +86,14 @@ export class InputTracker {
       { passive: true },
     )
     window.addEventListener('blur', () => this.keys.clear())
+  }
+
+  /** Accumulated look deltas since the last call (viewmodel sway). */
+  consumeLookDelta(): { dx: number; dy: number } {
+    const d = { dx: this.lookDx, dy: this.lookDy }
+    this.lookDx = 0
+    this.lookDy = 0
+    return d
   }
 
   keyDown(code: string): boolean {
