@@ -28,11 +28,15 @@ export class FirstPersonBody {
   ) {
     this.avatar = new Avatar(scene, content, appearance, 'fp-body')
     this.avatar.setHeadVisible(false)
+    // Arms belong to the viewmodel in first person; floating body-sim hands
+    // in front of the camera break the illusion.
+    this.avatar.setArmsVisible(false)
   }
 
   setAppearance(appearance: Appearance): void {
     this.avatar.setAppearance(appearance)
     this.avatar.setHeadVisible(false)
+    this.avatar.setArmsVisible(false)
   }
 
   triggerSwing(): void {

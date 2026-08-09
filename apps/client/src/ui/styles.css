@@ -230,15 +230,6 @@ body {
   color: #8fa0b0;
 }
 
-.help {
-  position: absolute;
-  bottom: 14px;
-  left: 12px;
-  font-size: 11px;
-  color: #6a7a88;
-  line-height: 1.6;
-}
-
 .overlay-center {
   position: absolute;
   inset: 0;
@@ -481,4 +472,141 @@ body {
   background: #2a5a8a;
   border-color: #58a4c4;
   font-weight: 600;
+}
+
+/* ── Tab menu ─────────────────────────────────────────────── */
+
+.menu {
+  position: absolute;
+  left: 50%;
+  bottom: 92px;
+  transform: translateX(-50%);
+  width: 460px;
+  max-height: 62vh;
+  display: none;
+  flex-direction: column;
+  background: rgba(9, 13, 17, 0.94);
+  border: 1px solid #39434f;
+  border-radius: 12px;
+  overflow: hidden;
+  pointer-events: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.menu-tabs {
+  display: flex;
+  border-bottom: 1px solid #2a333d;
+  background: rgba(16, 21, 27, 0.9);
+}
+
+.menu-tab {
+  flex: 1;
+  background: none;
+  border: 0;
+  color: #8fa0b0;
+  padding: 11px 0;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition:
+    color 0.12s,
+    border-color 0.12s;
+}
+
+.menu-tab:hover {
+  color: #cfd8e0;
+}
+
+.menu-tab.active {
+  color: #f0b040;
+  border-bottom-color: #f0b040;
+}
+
+.menu-body {
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.inv-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 64px);
+  gap: 8px;
+  justify-content: center;
+}
+
+.slot-icon {
+  width: 46px;
+  height: 46px;
+  image-rendering: auto;
+  pointer-events: none;
+}
+
+.slot.dragging {
+  opacity: 0.4;
+}
+
+.slot.drop-target {
+  border-color: #58c4e8;
+  background: rgba(88, 196, 232, 0.12);
+}
+
+.craft-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recipe {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #2c3540;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 0;
+}
+
+.recipe-icon {
+  width: 46px;
+  height: 46px;
+  flex: none;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.recipe-icon img {
+  width: 42px;
+  height: 42px;
+}
+
+.recipe-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.craft-btn {
+  flex: none;
+  background: #2a5a8a;
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.craft-btn:disabled {
+  background: #333c46;
+  color: #778;
+  cursor: default;
+}
+
+.skills-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }

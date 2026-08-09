@@ -24,6 +24,8 @@ export type EntityKind = 'player' | 'prop' | 'resource'
 export interface PropComponent {
   defId: string
   motion: MotionState
+  /** Items recovered by picking this prop up (E). Most props carry their own item. */
+  lootCount: number
 }
 
 export interface ResourceComponent {

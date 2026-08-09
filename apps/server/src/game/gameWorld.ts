@@ -97,28 +97,34 @@ export class GameWorld {
     motion: MotionState
     owner?: PlayerId
     id?: EntityId
+    /** Items recovered on pickup; every prop defaults to carrying itself. */
+    lootCount?: number
+    /** Initial toss velocity (dropping an item throws it forward). */
+    velocity?: Vec3
   }): GameEntity {
-    const def = this.content.itemOrThrow(opts.defId)
-    if (!def.world) throw new Error(`item '${opts.defId}' has no world capability`)
+    const rep = this.content.worldRepOf(opts.defId)
     const entity: GameEntity = {
       id: opts.id ?? newEntityId(),
       kind: 'prop',
       transform: { pos: { ...opts.pos }, rot: { ...opts.rot } },
-      prop: { defId: opts.defId, motion: opts.motion },
+      prop: { defId: opts.defId, motion: opts.motion, lootCount: opts.lootCount ?? 1 },
       ...(opts.owner !== undefined ? { owner: opts.owner } : {}),
       persistent: true,
       dirty: true,
     }
     this.entities.add(entity)
     const bodyId = this.physics.addBody({
-      shape: toShapeDesc(def.world.shape),
+      shape: toShapeDesc(rep.shape),
       motion: opts.motion === 'dynamic' ? 'dynamic' : 'static',
       pos: opts.pos,
       rot: opts.rot,
-      massKg: def.world.massKg,
+      massKg: rep.massKg,
       layer: CollisionLayer.Prop,
       collidesWith: PROP_COLLIDES,
     })
+    if (opts.velocity && opts.motion === 'dynamic') {
+      this.physics.setLinearVelocity(bodyId, opts.velocity)
+    }
     this.bodyByEntity.set(entity.id, bodyId)
     this.entityByBody.set(bodyId, entity.id)
     return entity
@@ -397,6 +403,7 @@ export class GameWorld {
         rot,
         motion: row.motion,
         id: row.id as EntityId,
+        lootCount: Number(row.state?.lootCount ?? 1),
         ...(row.ownerId ? { owner: row.ownerId as PlayerId } : {}),
       })
       entity.dirty = false
@@ -464,7 +471,9 @@ function entityToDto(entity: GameEntity, now: number): WorldEntityDto {
     motion: entity.prop?.motion ?? 'static',
     state: entity.resource
       ? { remaining: entity.resource.remaining, depletedUntil: entity.resource.depletedUntil }
-      : null,
+      : entity.prop
+        ? { lootCount: entity.prop.lootCount }
+        : null,
     updatedAt: now,
   }
 }

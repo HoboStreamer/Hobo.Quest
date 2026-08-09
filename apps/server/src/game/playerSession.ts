@@ -17,6 +17,8 @@ export interface HeldProp {
   pitchOffset: number
   /** Object yaw relative to player yaw at grab time, so it turns with the view. */
   grabYawDelta: number
+  /** Grid-lock: quantize the drive target while held. */
+  grid: boolean
 }
 
 /**

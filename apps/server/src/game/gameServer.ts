@@ -34,8 +34,8 @@ import type { GameWorld } from './gameWorld.js'
 import {
   equippedTool,
   handleCraft,
+  handleDrop,
   handleInvMove,
-  handlePlace,
   handleUse,
   handleWeld,
   nearbyWorkstationKinds,
@@ -132,7 +132,9 @@ export class GameServer {
       case 'use': {
         // Swing cooldown: silently drop spam faster than ~5 swings/sec.
         if (this.tick - session.lastUseTick < 6) break
-        const gather = handleUse(session, this.world, msg, Date.now())
+        const gather = handleUse(session, this.world, msg, Date.now(), (e) =>
+          this.canManipulate(session, e),
+        )
         this.send(session, gather.outcome)
         if (!gather.outcome.ok) break
         session.lastUseTick = this.tick
@@ -140,6 +142,10 @@ export class GameServer {
         if (gather.xpChanged) this.sendSkills(session)
         for (const up of gather.levelUps) {
           this.send(session, { t: 'levelup', skill: up.skill, level: up.level })
+        }
+        if (gather.pickedUp) {
+          if (session.held?.entityId === gather.pickedUp.id) this.releaseHeld(session)
+          this.broadcastDespawn(gather.pickedUp.id)
         }
         if (gather.changed?.resource) {
           this.broadcastToKnowing(gather.changed.id, {
@@ -197,13 +203,13 @@ export class GameServer {
         }
         break
       }
-      case 'place': {
-        const { outcome, placedId } = handlePlace(session, this.world, msg)
+      case 'drop': {
+        const { outcome, droppedId } = handleDrop(session, this.world, msg)
         this.send(session, outcome)
         if (outcome.ok) {
           this.sendInventory(session)
-          if (placedId) {
-            const entity = this.world.entities.get(placedId as EntityId)
+          if (droppedId) {
+            const entity = this.world.entities.get(droppedId as EntityId)
             if (entity) this.broadcastSpawn(entity)
           }
         }
@@ -336,11 +342,13 @@ export class GameServer {
     }
     this.world.entities.add(entity)
 
-    // Kinematic capsule so props collide with players.
+    // Kinematic capsule so props collide with players. Shorter than the
+    // movement hull and lifted off the feet: standing ON a prop must not
+    // press it down (that caused sink/jitter loops when prop-surfing).
     const bodyId = this.world.physics.addBody({
-      shape: { type: 'capsule', radius: MOVE.capsuleRadius, height: MOVE.capsuleHeight },
+      shape: { type: 'capsule', radius: MOVE.capsuleRadius, height: MOVE.capsuleHeight - 0.3 },
       motion: 'kinematic',
-      pos: session.move.pos,
+      pos: vec3(session.move.pos.x, session.move.pos.y + 0.15, session.move.pos.z),
       layer: CollisionLayer.Player,
       collidesWith: CollisionLayer.Static | CollisionLayer.Prop,
     })
@@ -394,6 +402,8 @@ export class GameServer {
       adjustDistance(session, msg.dist)
     } else if (msg.a === 'rotate') {
       rotateHeld(session, msg.dyaw, msg.dpitch, msg.snap ?? false)
+    } else if (msg.a === 'grid') {
+      if (session.held) session.held.grid = msg.on
     } else if (msg.a === 'freeze') {
       const frozen = freezeHeld(session, this.world)
       if (frozen) {
@@ -593,7 +603,10 @@ export class GameServer {
     }
     const bodyId = this.playerBodies.get(session.playerId)
     if (bodyId !== undefined) {
-      this.world.physics.setTransform(bodyId, session.move.pos)
+      _bodyPosScratch.x = session.move.pos.x
+      _bodyPosScratch.y = session.move.pos.y + 0.15
+      _bodyPosScratch.z = session.move.pos.z
+      this.world.physics.setTransform(bodyId, _bodyPosScratch)
     }
     const entity = this.world.entities.get(session.entityId)
     if (entity) qfromYaw(entity.transform.rot, session.yaw)
@@ -760,3 +773,4 @@ export class GameServer {
 }
 
 const _eyeScratch = vec3()
+const _bodyPosScratch = vec3()

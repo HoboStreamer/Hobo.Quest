@@ -18,10 +18,10 @@ export class InputTracker {
 
   onAction: ((action: InputAction) => void) | null = null
   onWheel: ((delta: number) => void) | null = null
+  /** When this returns true, mouse motion is redirected to rotate_held. */
+  captureLook: (() => boolean) | null = null
   private lookDx = 0
   private lookDy = 0
-  /** While R is held, mouse motion rotates the held prop instead of the view. */
-  rotateModifier = false
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     canvas.addEventListener('click', () => {
@@ -32,9 +32,12 @@ export class InputTracker {
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas
     })
+    document.addEventListener('contextmenu', (e) => {
+      if (this.locked) e.preventDefault()
+    })
     document.addEventListener('mousemove', (e) => {
       if (!this.locked || this.uiCapture) return
-      if (this.rotateModifier) {
+      if (this.captureLook?.()) {
         this.onAction?.({
           kind: 'rotate_held',
           dyaw: e.movementX * 0.005,
@@ -51,15 +54,15 @@ export class InputTracker {
     })
     document.addEventListener('keydown', (e) => {
       if (e.repeat) return
-      if (e.code === 'KeyR') this.rotateModifier = true
       this.keys.add(e.code)
+      if (e.code === 'KeyE' && !this.uiCapture) {
+        e.preventDefault()
+        this.onAction?.({ kind: 'use_down' })
+        return
+      }
       const action = KEY_ACTIONS[e.code]
       if (action) {
-        const uiToggle =
-          action === 'toggle_inventory' ||
-          action === 'toggle_craft' ||
-          action === 'toggle_skills' ||
-          action === 'toggle_players'
+        const uiToggle = action === 'toggle_menu'
         if (!this.uiCapture || uiToggle) {
           e.preventDefault()
           this.onAction?.({ kind: action })
@@ -68,12 +71,15 @@ export class InputTracker {
       if (e.code === 'Tab') e.preventDefault()
     })
     document.addEventListener('keyup', (e) => {
-      if (e.code === 'KeyR') this.rotateModifier = false
       this.keys.delete(e.code)
+      if (e.code === 'KeyE' && !this.uiCapture) {
+        this.onAction?.({ kind: 'use_up' })
+      }
     })
     document.addEventListener('pointerdown', (e) => {
       if (!this.locked || this.uiCapture) return
       if (e.button === 0) this.onAction?.({ kind: 'primary_down' })
+      if (e.button === 2) this.onAction?.({ kind: 'rmb_down' })
     })
     document.addEventListener('pointerup', (e) => {
       if (e.button === 0) this.onAction?.({ kind: 'primary_up' })
@@ -100,6 +106,10 @@ export class InputTracker {
     return !this.uiCapture && this.keys.has(code)
   }
 
+  get shiftHeld(): boolean {
+    return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')
+  }
+
   get pointerLocked(): boolean {
     return this.locked
   }
@@ -110,16 +120,13 @@ export class InputTracker {
 }
 
 export type InputAction =
-  | { kind: 'use' }
-  | { kind: 'freeze' }
-  | { kind: 'secondary' }
-  | { kind: 'place' }
-  | { kind: 'toggle_inventory' }
-  | { kind: 'toggle_craft' }
-  | { kind: 'toggle_skills' }
-  | { kind: 'toggle_players' }
+  | { kind: 'use_down' }
+  | { kind: 'use_up' }
+  | { kind: 'drop' }
+  | { kind: 'toggle_menu' }
   | { kind: 'primary_down' }
   | { kind: 'primary_up' }
+  | { kind: 'rmb_down' }
   | { kind: 'hotbar1' }
   | { kind: 'hotbar2' }
   | { kind: 'hotbar3' }
@@ -128,15 +135,12 @@ export type InputAction =
   | { kind: 'hotbar6' }
   | { kind: 'rotate_held'; dyaw: number; dpitch: number }
 
-const KEY_ACTIONS: Record<string, Exclude<InputAction, { kind: 'rotate_held' }>['kind']> = {
-  KeyE: 'use',
-  KeyF: 'freeze',
-  KeyQ: 'secondary',
-  KeyX: 'place',
-  Tab: 'toggle_inventory',
-  KeyC: 'toggle_craft',
-  KeyK: 'toggle_skills',
-  KeyP: 'toggle_players',
+const KEY_ACTIONS: Record<
+  string,
+  Exclude<InputAction, { kind: 'rotate_held' } | { kind: 'use_down' } | { kind: 'use_up' }>['kind']
+> = {
+  KeyG: 'drop',
+  Tab: 'toggle_menu',
   Digit1: 'hotbar1',
   Digit2: 'hotbar2',
   Digit3: 'hotbar3',

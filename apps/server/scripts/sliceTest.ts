@@ -460,24 +460,45 @@ async function main(): Promise<void> {
   await craftAndWait(a, 'craft_wooden_wall', 'wooden_wall')
   await craftAndWait(a, 'craft_wooden_crate', 'wooden_crate')
 
-  const me = a.me as WirePlayerState
+  // Dropping IS placement now: the stack becomes a physical prop.
   const wallSlot = a.slotOf('wooden_wall')
-  a.send({ t: 'place', slot: wallSlot, pos: [me.pos[0] + 2, 1.3, me.pos[2]], yaw: 0 })
+  a.send({ t: 'drop', slot: wallSlot, count: 1 })
   const wallSpawn = (await a.waitFor(
     (m) => m.t === 'spawn' && m.entities.some((e) => e.def === 'wooden_wall'),
   )) as Extract<ServerMessage, { t: 'spawn' }>
   const wall = wallSpawn.entities.find((e) => e.def === 'wooden_wall')
-  assert(wall, 'wooden wall placed as physical entity')
-  assert(wall.owner !== undefined, 'placed prop carries owner id')
+  assert(wall, 'dropped wall became a physical entity')
+  assert(wall.owner !== undefined, 'dropped prop carries owner id')
+  assert(a.count('wooden_wall') === 0, 'wall left the inventory')
 
+  // Step aside so the crate lands well clear of the wall (Bob aims at it).
+  await walkTo(a, (a.me as WirePlayerState).pos[0] + 4, (a.me as WirePlayerState).pos[2] - 3)
+  await settle(a)
   const crateSlot = a.slotOf('wooden_crate')
-  a.send({ t: 'place', slot: crateSlot, pos: [me.pos[0] + 2, 0.6, me.pos[2] + 1.6], yaw: 0 })
+  a.send({ t: 'drop', slot: crateSlot, count: 1 })
   const crateSpawn = (await a.waitFor(
     (m) => m.t === 'spawn' && m.entities.some((e) => e.def === 'wooden_crate' && e.id !== crate.id),
   )) as Extract<ServerMessage, { t: 'spawn' }>
   const crate2 = crateSpawn.entities.find((e) => e.def === 'wooden_crate' && e.id !== crate.id)
-  assert(crate2, 'crafted crate placed')
+  assert(crate2, 'crafted crate dropped into the world')
   await sleep(600)
+
+  console.log('phase: pickup (E recovers dropped items)')
+  const stonesBefore = a.count('stone')
+  assert(stonesBefore >= 2, `has stones to drop (${stonesBefore})`)
+  const stoneSlot = a.slotOf('stone')
+  a.send({ t: 'drop', slot: stoneSlot, count: 2 })
+  const stoneSpawn = (await a.waitFor(
+    (m) => m.t === 'spawn' && m.entities.some((e) => e.def === 'stone'),
+  )) as Extract<ServerMessage, { t: 'spawn' }>
+  const stoneProp = stoneSpawn.entities.find((e) => e.def === 'stone')
+  assert(stoneProp, 'material stack dropped as physical prop (fallback shape)')
+  assert(a.count('stone') === stonesBefore - 2, '2 stones left the inventory')
+  await sleep(700) // let it land nearby
+  const pickup = await a.use(stoneProp.id)
+  assert(pickup.ok, 'picked the dropped stones back up')
+  await sleep(150)
+  assert(a.count('stone') === stonesBefore, 'both stones recovered from one prop')
 
   // Build flow: grab the wall, freeze it in the air — it must stay put.
   await a.equip('physgun')
@@ -536,6 +557,16 @@ async function main(): Promise<void> {
 
   await aimAt(b, b.entities.get(crate2.id) as WireEntity)
   const bobGrab2 = await grabResult(b)
+  if (!bobGrab2.ok) {
+    console.log(
+      '  grab2 failed:',
+      JSON.stringify(bobGrab2),
+      'bob:',
+      b.me?.pos,
+      'crate2:',
+      b.entities.get(crate2.id)?.pos,
+    )
+  }
   assert(bobGrab2.ok && bobGrab2.target === crate2.id, 'trusted friend can grab the prop')
   b.send({ t: 'physgun', a: 'release' })
   await sleep(200)

@@ -1,7 +1,7 @@
 import type {
   ClientCraft,
+  ClientDrop,
   ClientInvMove,
-  ClientPlace,
   ClientUse,
   ClientWeld,
   ServerActionResult,
@@ -9,6 +9,7 @@ import type {
 import { DEFAULT_MOVEMENT, type GameEntity, type LevelUp } from '@hobo/gameplay'
 import type { ItemDef } from '@hobo/content'
 import { asEntityId, qfromYaw, quat, v3dist, vec3 } from '@hobo/shared'
+import { viewDirection } from './playerSession.js'
 import type { GameWorld } from './gameWorld.js'
 import { eyePosition, type PlayerSession } from './playerSession.js'
 
@@ -39,6 +40,8 @@ export interface GatherResult {
   outcome: ActionOutcome
   /** Entity whose remaining count changed (for replication), if any. */
   changed: GameEntity | null
+  /** Entity picked up and removed from the world, if any. */
+  pickedUp: GameEntity | null
   levelUps: LevelUp[]
   xpChanged: boolean
 }
@@ -52,9 +55,31 @@ export function handleUse(
   world: GameWorld,
   msg: ClientUse,
   nowMs: number,
+  canManipulate: (entity: GameEntity) => boolean,
 ): GatherResult {
-  const none = { changed: null, levelUps: [], xpChanged: false }
+  const none = { changed: null, pickedUp: null, levelUps: [], xpChanged: false }
   const entity = world.entities.get(asEntityId(msg.target))
+
+  // Props carry their own item: E picks them back up into the inventory.
+  if (entity?.prop) {
+    eyePosition(session, DEFAULT_MOVEMENT.eyeOffset, _eye)
+    if (v3dist(_eye, entity.transform.pos) > HAND_USE_RANGE + 0.5) {
+      return { outcome: result('use', false, 'out_of_range'), ...none }
+    }
+    if (!canManipulate(entity)) {
+      return { outcome: result('use', false, 'not_owner'), ...none }
+    }
+    const count = Math.max(1, entity.prop.lootCount)
+    if (!session.inventory.canFit(entity.prop.defId, count)) {
+      return { outcome: result('use', false, 'inventory_full'), ...none }
+    }
+    session.inventory.add(entity.prop.defId, count)
+    session.dirty = true
+    const picked = entity
+    world.despawn(entity.id)
+    return { outcome: result('use', true), ...none, pickedUp: picked }
+  }
+
   if (!entity?.resource) return { outcome: result('use', false, 'no_target'), ...none }
   const nodeType = world.content.nodeType(entity.resource.nodeTypeId)
   if (!nodeType) return { outcome: result('use', false, 'no_target'), ...none }
@@ -95,6 +120,7 @@ export function handleUse(
   return {
     outcome: result('use', true),
     changed: entity,
+    pickedUp: null,
     levelUps,
     xpChanged: nodeType.xpPerGather > 0,
   }
@@ -140,36 +166,41 @@ export function nearbyWorkstationKinds(
   return kinds
 }
 
-export function handlePlace(
+/**
+ * Dropping IS placement: the stack leaves the inventory and becomes a
+ * physical prop tossed gently in front of the player, ready for physgun
+ * positioning. One prop carries the whole dropped count as loot.
+ */
+const _dropDir = vec3()
+
+export function handleDrop(
   session: PlayerSession,
   world: GameWorld,
-  msg: ClientPlace,
-): { outcome: ActionOutcome; placedId: string | null } {
+  msg: ClientDrop,
+): { outcome: ActionOutcome; droppedId: string | null } {
   const stack = session.inventory.get(msg.slot)
-  if (!stack) return { outcome: result('place', false, 'empty_slot'), placedId: null }
-  const def = world.content.item(stack.defId)
-  if (!def?.placeable || !def.world) {
-    return { outcome: result('place', false, 'not_placeable'), placedId: null }
-  }
-  const pos = vec3(msg.pos[0], msg.pos[1], msg.pos[2])
+  if (!stack) return { outcome: result('drop', false, 'empty_slot'), droppedId: null }
+  const removed = session.inventory.removeFromSlot(msg.slot, msg.count)
+  if (!removed) return { outcome: result('drop', false, 'empty_slot'), droppedId: null }
+
   eyePosition(session, DEFAULT_MOVEMENT.eyeOffset, _eye)
-  if (v3dist(_eye, pos) > def.placeable.maxRange + 0.75) {
-    return { outcome: result('place', false, 'out_of_range'), placedId: null }
-  }
-  if (!world.zones.rulesAt(pos).build) {
-    return { outcome: result('place', false, 'zone_forbids_build'), placedId: null }
-  }
-  const removed = session.inventory.removeFromSlot(msg.slot, 1)
-  if (!removed) return { outcome: result('place', false, 'empty_slot'), placedId: null }
+  viewDirection(session, _dropDir)
+  const spawnPos = vec3(
+    _eye.x + _dropDir.x * 1.1,
+    _eye.y + _dropDir.y * 1.1 - 0.15,
+    _eye.z + _dropDir.z * 1.1,
+  )
   const entity = world.spawnProp({
-    defId: stack.defId,
-    pos,
-    rot: qfromYaw(quat(), msg.yaw),
+    defId: removed.defId,
+    pos: spawnPos,
+    rot: qfromYaw(quat(), session.yaw),
     motion: 'dynamic',
     owner: session.playerId,
+    lootCount: removed.count,
+    velocity: vec3(_dropDir.x * 2.5, 1.2, _dropDir.z * 2.5),
   })
   session.dirty = true
-  return { outcome: result('place', true), placedId: entity.id }
+  return { outcome: result('drop', true), droppedId: entity.id }
 }
 
 export interface WeldOutcome {

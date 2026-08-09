@@ -152,4 +152,32 @@ export class ContentRegistry {
   allNodeTypes(): readonly ResourceNodeType[] {
     return [...this.nodeTypes.values()]
   }
+
+  /**
+   * Physical representation for ANY item: its authored world capability, or
+   * a category-styled fallback so every item can exist in the world (drops,
+   * loot). Keeping this in content means "everything is physical" without
+   * per-item boilerplate.
+   */
+  worldRepOf(id: string): NonNullable<ItemDef['world']> {
+    const def = this.itemOrThrow(id)
+    if (def.world) return def.world
+    const color = FALLBACK_COLORS[def.category] ?? '#8a7a5a'
+    return {
+      shape: { type: 'box', size: [0.28, 0.28, 0.28] },
+      massKg: 3,
+      color,
+      physgun: true,
+    }
+  }
+}
+
+const FALLBACK_COLORS: Record<string, string> = {
+  material: '#9a8a6a',
+  resource: '#7a8a72',
+  component: '#7a8a92',
+  tool: '#4a5866',
+  food: '#a08a5a',
+  seed: '#6a8a5a',
+  misc: '#8a8a8a',
 }

@@ -42,6 +42,8 @@ export interface AvatarRig {
   /** Eye height above the root (for sanity checks / camera alignment). */
   eyeHeight: number
   setHeadVisible(visible: boolean): void
+  /** First person hides the arms too — the viewmodel represents them. */
+  setArmsVisible(visible: boolean): void
   dispose(): void
 }
 export declare function buildAvatarRig(

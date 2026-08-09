@@ -16,6 +16,7 @@ import { Viewmodel } from './render/viewmodel.js'
 import { ClientState } from './state/clientState.js'
 import { customizeScreen } from './ui/customizeScreen.js'
 import { Hud } from './ui/hud.js'
+import { IconFactory } from './ui/iconFactory.js'
 
 /**
  * Client bootstrap: engine/scene -> character customization (live preview)
@@ -60,9 +61,9 @@ async function start(): Promise<void> {
   const state = new ClientState()
   const connection = new Connection()
   const input = new InputTracker(canvas)
-  ;(window as unknown as { __hoboInput?: InputTracker }).__hoboInput = input
   const view = new EntityView(scene, physics, content, state)
-  const hud = new Hud(uiRoot, state, content, connection)
+  const icons = new IconFactory(scene, content)
+  const hud = new Hud(uiRoot, state, content, connection, icons)
 
   const world = content.world
   const player = new LocalPlayer(scene, physics, input, connection, state, {
@@ -72,7 +73,24 @@ async function start(): Promise<void> {
   })
   scene.activeCamera = player.camera
   releaseCamera()
-  const interact = new InteractionController(physics, player, view, state, content, connection)
+  const interact = new InteractionController(
+    physics,
+    player,
+    view,
+    state,
+    content,
+    connection,
+    input,
+  )
+  // Debug handles for the automated visual/E2E harness.
+  ;(window as unknown as Record<string, unknown>).__hobo = {
+    input,
+    interact,
+    state,
+    connection,
+    player,
+    icons,
+  }
   const fpBody = new FirstPersonBody(scene, content, appearance, player, state)
   const viewmodel = new Viewmodel(scene, content, player.camera)
   const beams = new BeamRenderer(scene)
@@ -88,17 +106,8 @@ async function start(): Promise<void> {
   }
   input.onAction = (action) => {
     switch (action.kind) {
-      case 'toggle_inventory':
-        hud.toggleInventory()
-        return
-      case 'toggle_craft':
-        hud.toggleCraft()
-        return
-      case 'toggle_skills':
-        hud.toggleSkills()
-        return
-      case 'toggle_players':
-        hud.togglePlayers()
+      case 'toggle_menu':
+        hud.toggleMenu()
         return
       case 'hotbar1':
       case 'hotbar2':
@@ -203,13 +212,15 @@ function promptFor(
     return `E — gather ${itemName}`
   }
   if (target.kind === 'prop') {
+    if (interact.physgunActive)
+      return 'RMB — freeze · E — rotate · Shift — grid · wheel — push/pull'
     const entity = state.entities.get(target.entityId)
     const owned = entity?.owner !== undefined && entity.owner !== state.myPlayerId
-    const suffix = owned ? ' · owned by another player' : ''
-    if (tool === 'physgun') {
-      return (target.frozen ? 'LMB — grab · Q — unfreeze' : 'Hold LMB — grab') + suffix
-    }
     if (owned) return 'Owned by another player'
+    const itemName = content.item(target.def ?? '')?.name ?? 'prop'
+    if (tool === 'physgun')
+      return `Hold LMB — grab${target.frozen ? ' (unfreezes)' : ''} · E — pick up`
+    return `E — pick up ${itemName}`
   }
   return null
 }

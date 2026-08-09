@@ -32,6 +32,7 @@ export declare class Avatar {
   private toolProp
   private toolItemDef
   private headVisible
+  private armsVisible
   constructor(scene: Scene, content: ContentRegistry, appearance: Appearance, name: string)
   static appearanceOrDefault(a: Appearance | undefined): Appearance
   get eyeHeight(): number
@@ -39,6 +40,7 @@ export declare class Avatar {
   /** Rebuilds the rig (customization preview edits). Preserves pose state loosely. */
   setAppearance(appearance: Appearance): void
   setHeadVisible(visible: boolean): void
+  setArmsVisible(visible: boolean): void
   triggerSwing(): void
   /** World position the physgun beam should start from (hand/muzzle). */
   beamOrigin(): Vector3

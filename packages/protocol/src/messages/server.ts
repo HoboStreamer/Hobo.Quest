@@ -77,7 +77,7 @@ export interface ServerCraftState {
 /** Result of an explicit player request (craft, place, use...). */
 export interface ServerActionResult {
   t: 'result'
-  action: 'craft' | 'place' | 'use' | 'inv_move' | 'physgun' | 'weld' | 'unweld' | 'trust'
+  action: 'craft' | 'drop' | 'use' | 'inv_move' | 'physgun' | 'weld' | 'unweld' | 'trust'
   ok: boolean
   error?: string
 }

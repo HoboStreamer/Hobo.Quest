@@ -47,10 +47,14 @@ pnpm dev:client
 Open http://localhost:5173 in two browser windows to see multiplayer.
 
 **Controls:** WASD move · Space jump (hold to bunnyhop) · Shift sprint ·
-LMB use equipped tool (physgun grab / axe·pickaxe swing) · mouse wheel
-push/pull · R+mouse rotate held · F freeze · Q unfreeze · E gather ·
-X place selected item · 1-6 hotbar · Tab inventory · C crafting ·
-K skills · P players (trust friends with your props).
+1-6 hotbar · Tab menu (inventory / crafting / skills / players) · G drop
+held item · E gather / pick up props.
+**Physgun (GMod-style):** hold LMB grab (grabbing a frozen prop unfreezes
+it) · release to let go · RMB freeze · wheel push/pull · hold E rotate
+like a globe (Shift+E snaps) · hold Shift for grid-lock.
+**Building:** craft pieces → drop them (G or drag out of the inventory) →
+position with the physgun → freeze. Dropping IS placement; E picks any
+prop back up into your inventory.
 
 **The loop:** spawn in Hoboville (safe city — no PvP, no building, no
 physgun), gather branches/stones/scrap outside the gates, craft tools,

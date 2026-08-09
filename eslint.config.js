@@ -7,6 +7,7 @@ export default tseslint.config(
       '**/dist/**',
       '**/dist-types/**',
       '**/node_modules/**',
+      'scratch/**',
       '**/*.js',
       '!eslint.config.js',
     ],

@@ -7,8 +7,6 @@ import { AppearanceSchema } from '../appearance.js'
  * validation and typing can never drift apart.
  */
 
-const vec3 = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()])
-
 export const ClientHelloSchema = z.object({
   t: z.literal('hello'),
   v: z.number().int(),
@@ -45,12 +43,15 @@ export const ClientCraftSchema = z.object({
   recipe: z.string().max(64),
 })
 
-/** Place the placeable item currently in the given inventory slot. */
-export const ClientPlaceSchema = z.object({
-  t: z.literal('place'),
+/**
+ * Drop items from a slot into the world (they become physical props).
+ * Dropping IS placement: crafted pieces are dropped, then positioned and
+ * frozen with the physgun.
+ */
+export const ClientDropSchema = z.object({
+  t: z.literal('drop'),
   slot: z.number().int().nonnegative().max(255),
-  pos: vec3,
-  yaw: z.number().finite(),
+  count: z.number().int().positive().max(9999),
 })
 
 export const ClientInvMoveSchema = z.object({
@@ -91,6 +92,8 @@ export const ClientPhysgunSchema = z.discriminatedUnion('a', [
   }),
   z.object({ t: z.literal('physgun'), a: z.literal('freeze') }),
   z.object({ t: z.literal('physgun'), a: z.literal('unfreeze'), target: z.string().max(32) }),
+  /** Grid-lock: snap the held prop's drive target to a coarse grid. */
+  z.object({ t: z.literal('physgun'), a: z.literal('grid'), on: z.boolean() }),
 ])
 
 /**
@@ -121,7 +124,7 @@ export const ClientMessageSchema = z.union([
   ClientInputSchema,
   ClientUseSchema,
   ClientCraftSchema,
-  ClientPlaceSchema,
+  ClientDropSchema,
   ClientInvMoveSchema,
   ClientHotbarSelectSchema,
   ClientPhysgunSchema,
@@ -134,7 +137,7 @@ export type ClientHello = z.infer<typeof ClientHelloSchema>
 export type ClientInput = z.infer<typeof ClientInputSchema>
 export type ClientUse = z.infer<typeof ClientUseSchema>
 export type ClientCraft = z.infer<typeof ClientCraftSchema>
-export type ClientPlace = z.infer<typeof ClientPlaceSchema>
+export type ClientDrop = z.infer<typeof ClientDropSchema>
 export type ClientInvMove = z.infer<typeof ClientInvMoveSchema>
 export type ClientHotbarSelect = z.infer<typeof ClientHotbarSelectSchema>
 export type ClientPhysgun = z.infer<typeof ClientPhysgunSchema>

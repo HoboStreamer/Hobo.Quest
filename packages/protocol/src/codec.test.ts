@@ -16,11 +16,12 @@ describe('protocol codec', () => {
       { t: 'input', seq: 42, moveX: 1, moveZ: -0.5, yaw: 1.2, pitch: -0.3, buttons: 5 },
       { t: 'use', target: 'abc123' },
       { t: 'craft', recipe: 'craft_wooden_crate' },
-      { t: 'place', slot: 3, pos: [1, 2, 3], yaw: 0.5 },
+      { t: 'drop', slot: 3, count: 5 },
       { t: 'inv_move', from: 0, to: 5, count: 3 },
       { t: 'hotbar', slot: 2 },
       { t: 'physgun', a: 'grab' },
       { t: 'physgun', a: 'rotate', dyaw: 0.1, dpitch: -0.1, snap: true },
+      { t: 'physgun', a: 'grid', on: true },
     ]
     for (const msg of messages) {
       expect(decodeClientMessage(encodeClientMessage(msg))).toEqual(msg)

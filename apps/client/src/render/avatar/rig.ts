@@ -49,6 +49,8 @@ export interface AvatarRig {
   /** Eye height above the root (for sanity checks / camera alignment). */
   eyeHeight: number
   setHeadVisible(visible: boolean): void
+  /** First person hides the arms too — the viewmodel represents them. */
+  setArmsVisible(visible: boolean): void
   dispose(): void
 }
 
@@ -124,6 +126,7 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
   const shoes = outfitColor(appearance.shoes)
   const meshes: Mesh[] = []
   const headMeshes: Mesh[] = []
+  const armMeshes: Mesh[] = []
 
   const mesh = (
     n: string,
@@ -238,6 +241,7 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
     skin,
     neck,
     [0, -OVERLAP * 2, 0],
+    true,
   )
   const head = node('head', neck, 0, d.neckH, 0)
   mesh(
@@ -344,6 +348,7 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
       shoulder,
       [0, OVERLAP, 0],
     )
+    armMeshes.push(meshes[meshes.length - 1] as Mesh)
     const elbow = node(`elbow${side}`, shoulder, 0, -d.armUpperLen, 0)
     elbows[side] = elbow
     mesh(
@@ -360,6 +365,7 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
       elbow,
       [0, OVERLAP, 0],
     )
+    armMeshes.push(meshes[meshes.length - 1] as Mesh)
     const hand = node(`hand${side}`, elbow, 0, -d.armForeLen, 0)
     mesh(
       `handM${side}`,
@@ -375,6 +381,7 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
       hand,
       [0, OVERLAP, 0],
     )
+    armMeshes.push(meshes[meshes.length - 1] as Mesh)
     if (side === 'R') handR = hand
   }
 
@@ -471,6 +478,9 @@ export function buildAvatarRig(scene: Scene, appearance: Appearance, name: strin
       hipY + d.pelvisH * 0.5 + d.pelvisH * 0.5 + d.torsoH + d.chestH + d.neckH + d.headH * 0.55,
     setHeadVisible(visible: boolean): void {
       for (const m of headMeshes) m.isVisible = visible
+    },
+    setArmsVisible(visible: boolean): void {
+      for (const m of armMeshes) m.isVisible = visible
     },
     dispose(): void {
       for (const m of meshes) m.dispose()

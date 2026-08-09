@@ -26,6 +26,7 @@ export interface AnimatorInput {
 
 interface Pose {
   spineX: number
+  spineY: number
   spineZ: number
   chestX: number
   headX: number
@@ -43,11 +44,35 @@ interface Pose {
 }
 
 const RUN_SPEED = 7.2
-const WALK_STRIDE = 2.4 // phase radians advanced per meter
+const WALK_STRIDE = 2.15 // phase radians advanced per meter
+
+/**
+ * Per-group smoothing rates (1/s). Slower spine/arms trail the snappier
+ * legs, which is what makes the gait read as fluid instead of robotic.
+ */
+const DAMP: Record<keyof ReturnType<typeof zeroPose>, number> = {
+  spineX: 7,
+  spineY: 6,
+  spineZ: 6,
+  chestX: 7,
+  headX: 10,
+  shoulderLX: 9,
+  shoulderLZ: 8,
+  shoulderRX: 9,
+  shoulderRZ: 8,
+  elbowLX: 8,
+  elbowRX: 8,
+  hipLX: 13,
+  hipRX: 13,
+  kneeLX: 13,
+  kneeRX: 13,
+  bobY: 12,
+}
 
 function zeroPose(): Pose {
   return {
     spineX: 0,
+    spineY: 0,
     spineZ: 0,
     chestX: 0,
     headX: 0,
@@ -90,22 +115,29 @@ export class AvatarAnimator {
 
     // ── Locomotion (grounded) ────────────────────────────────────────
     const moveAmp = Math.min(speedNorm * 1.6, 1)
-    const legSwing = 0.75 * moveAmp
-    const armSwing = 0.45 * moveAmp
+    const legSwing = 0.68 * moveAmp
+    const armSwing = 0.36 * moveAmp
     const s = Math.sin(this.phase)
     const c = Math.sin(this.phase + Math.PI)
     target.hipLX = s * legSwing
     target.hipRX = c * legSwing
-    // Knees bend on the back/lift part of the cycle.
-    target.kneeLX = Math.max(0, Math.sin(this.phase + Math.PI * 0.72)) * legSwing * 1.15
-    target.kneeRX = Math.max(0, Math.sin(this.phase + Math.PI * 1.72)) * legSwing * 1.15
+    // Knees: smooth raised-cosine lift (no snap at the extremes).
+    const lift = (ph: number) => {
+      const w = Math.sin(ph)
+      return w > 0 ? w * w : 0
+    }
+    target.kneeLX = lift(this.phase + Math.PI * 0.65) * legSwing * 1.25
+    target.kneeRX = lift(this.phase + Math.PI * 1.65) * legSwing * 1.25
     target.shoulderLX = c * armSwing
     target.shoulderRX = s * armSwing
-    target.elbowLX = -0.25 - Math.max(0, c) * 0.5 * moveAmp
-    target.elbowRX = -0.25 - Math.max(0, s) * 0.5 * moveAmp
-    target.spineX = 0.1 * speedNorm
-    target.bobY = Math.abs(Math.sin(this.phase)) * 0.035 * moveAmp - 0.015 * moveAmp
-    target.spineZ = Math.sin(this.phase) * 0.03 * moveAmp
+    // Elbows trail the shoulder swing softly.
+    target.elbowLX = -0.28 - (Math.max(0, c) * 0.4 + 0.08) * moveAmp
+    target.elbowRX = -0.28 - (Math.max(0, s) * 0.4 + 0.08) * moveAmp
+    target.spineX = 0.09 * speedNorm
+    // Torso counter-rotates against the hips and sways with the step.
+    target.spineY = Math.sin(this.phase) * 0.09 * moveAmp
+    target.spineZ = Math.sin(this.phase) * 0.028 * moveAmp
+    target.bobY = -0.012 * moveAmp + Math.sin(this.phase * 2 - 0.6) * 0.022 * moveAmp
 
     // ── Idle overlay when still ──────────────────────────────────────
     if (speedNorm < 0.05) {
@@ -159,10 +191,10 @@ export class AvatarAnimator {
       }
     }
 
-    // ── Exponentially damp live pose toward target ───────────────────
-    const k = 1 - Math.exp(-dt * 14)
+    // ── Exponentially damp live pose toward target (per-group rates) ──
     const p = this.pose
     for (const key of Object.keys(p) as (keyof Pose)[]) {
+      const k = 1 - Math.exp(-dt * DAMP[key])
       p[key] += (target[key] - p[key]) * k
     }
 
@@ -170,6 +202,7 @@ export class AvatarAnimator {
     const j = this.joints
     j.bob.position.y = p.bobY
     j.spine.rotation.x = p.spineX
+    j.spine.rotation.y = p.spineY
     j.spine.rotation.z = p.spineZ
     j.chest.rotation.x = p.chestX
     j.head.rotation.x = p.headX

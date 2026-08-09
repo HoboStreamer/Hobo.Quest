@@ -4,7 +4,7 @@ import type { ContentRegistry } from '@hobo/content'
 import type { Connection } from '../net/connection.js'
 import type { EntityView } from '../render/entityView.js'
 import type { ClientState } from '../state/clientState.js'
-import type { InputAction } from '../input/inputTracker.js'
+import type { InputAction, InputTracker } from '../input/inputTracker.js'
 import type { LocalPlayer } from './localPlayer.js'
 
 /**
@@ -12,12 +12,13 @@ import type { LocalPlayer } from './localPlayer.js'
  * client-side half of the tool system. Client rays exist only for UX
  * (prompts, target picking); the server re-validates everything.
  *
- * Primary fire by equipped tool:
- *   physgun — hold to grab, wheel push/pull, R+mouse rotate, F freeze
- *   axe/pickaxe — swing at the aimed resource node
- *   bare hands — gather hand-gatherable nodes (same as E)
- *
- * Building = craft pieces, place them, position with the physgun, freeze.
+ * Physgun (GMod scheme):
+ *   hold LMB — grab (grabbing a frozen prop unfreezes it) · release — let go
+ *   RMB — freeze in place · wheel — push/pull
+ *   hold E — rotate like a globe (Shift+E snaps to 15°)
+ *   hold Shift — grid-lock the carried prop's position
+ * Everything else:
+ *   LMB — swing tool / gather · E — gather / pick up props · G — drop item
  */
 
 const AIM_RANGE = 8
@@ -36,10 +37,14 @@ export interface AimTarget {
 
 export class InteractionController {
   physgunActive = false
+  /** Hold-E rotate mode while carrying (mouse steers the prop, not the view). */
+  rotating = false
   /** Cosmetic hook: a swing was sent (viewmodel + body animation). */
   onSwing: (() => void) | null = null
+
   private lastSwingMs = 0
   private pendingRotate = { dyaw: 0, dpitch: 0 }
+  private gridOn = false
 
   constructor(
     private readonly physics: PhysicsWorld,
@@ -48,7 +53,10 @@ export class InteractionController {
     private readonly state: ClientState,
     private readonly content: ContentRegistry,
     private readonly connection: Connection,
-  ) {}
+    private readonly input: InputTracker,
+  ) {
+    input.captureLook = () => this.rotating && this.physgunActive
+  }
 
   equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null {
     const defId = this.state.activeItemDef()
@@ -81,13 +89,6 @@ export class InteractionController {
   handle(action: InputAction): void {
     const tool = this.equippedToolKind()
     switch (action.kind) {
-      case 'use': {
-        const target = this.aim()
-        if (target?.kind === 'resource') {
-          this.connection.send({ t: 'use', target: target.entityId })
-        }
-        break
-      }
       case 'primary_down': {
         if (tool === 'physgun') {
           this.connection.send({ t: 'physgun', a: 'grab' })
@@ -100,24 +101,33 @@ export class InteractionController {
       case 'primary_up': {
         if (this.physgunActive) {
           this.connection.send({ t: 'physgun', a: 'release' })
-          this.physgunActive = false
+          this.endCarry()
         }
         break
       }
-      case 'freeze':
-        if (tool === 'physgun' && this.physgunActive) {
+      case 'rmb_down': {
+        if (this.physgunActive) {
           this.connection.send({ t: 'physgun', a: 'freeze' })
-          this.physgunActive = false
+          this.endCarry()
         }
         break
-      case 'secondary': {
-        // Q: unfreeze the aimed frozen prop (physgun equipped).
-        if (tool === 'physgun') {
-          const target = this.aim()
-          if (target?.kind === 'prop' && target.frozen) {
-            this.connection.send({ t: 'physgun', a: 'unfreeze', target: target.entityId })
-          }
+      }
+      case 'use_down': {
+        if (this.physgunActive) {
+          this.rotating = true
+          break
         }
+        const target = this.aim()
+        if (target) this.connection.send({ t: 'use', target: target.entityId })
+        break
+      }
+      case 'use_up':
+        this.rotating = false
+        break
+      case 'drop': {
+        const slot = this.state.activeHotbar
+        const stack = this.state.inventory?.slots.find((s) => s.i === slot)
+        if (stack) this.connection.send({ t: 'drop', slot, count: 1 })
         break
       }
       case 'rotate_held':
@@ -126,27 +136,38 @@ export class InteractionController {
         this.pendingRotate.dyaw += action.dyaw
         this.pendingRotate.dpitch += action.dpitch
         break
-      case 'place':
-        this.tryPlace()
-        break
       default:
         break
     }
   }
 
-  /** Called once per fixed tick: flush coalesced rotation intent. */
+  private endCarry(): void {
+    this.physgunActive = false
+    this.rotating = false
+    this.gridOn = false
+  }
+
+  /** Called once per fixed tick: flush coalesced rotate + grid-lock state. */
   flushTick(): void {
     const { dyaw, dpitch } = this.pendingRotate
-    if (this.physgunActive && (dyaw !== 0 || dpitch !== 0)) {
+    if (this.physgunActive && this.rotating && (dyaw !== 0 || dpitch !== 0)) {
       this.connection.send({
         t: 'physgun',
         a: 'rotate',
         dyaw: clampRot(dyaw),
         dpitch: clampRot(dpitch),
+        snap: this.input.shiftHeld,
       })
     }
     this.pendingRotate.dyaw = 0
     this.pendingRotate.dpitch = 0
+
+    // Shift (outside rotate mode) grid-locks the carried prop.
+    const wantGrid = this.physgunActive && !this.rotating && this.input.shiftHeld
+    if (wantGrid !== this.gridOn) {
+      this.gridOn = wantGrid
+      this.connection.send({ t: 'physgun', a: 'grid', on: wantGrid })
+    }
   }
 
   onWheel(delta: number): void {
@@ -157,7 +178,7 @@ export class InteractionController {
 
   onHotbarChanged(): void {
     if (this.physgunActive && this.equippedToolKind() !== 'physgun') {
-      this.physgunActive = false
+      this.endCarry()
     }
   }
 
@@ -169,50 +190,6 @@ export class InteractionController {
     this.lastSwingMs = now
     this.onSwing?.()
     this.connection.send({ t: 'use', target: target.entityId })
-  }
-
-  private tryPlace(): void {
-    const slot = this.state.activeHotbar
-    const stack = this.state.inventory?.slots.find((s) => s.i === slot)
-    if (!stack) return
-    const def = this.content.item(stack.stack.def)
-    if (!def?.placeable || !def.world) return
-
-    _eye.x = this.player.eye.x
-    _eye.y = this.player.eye.y
-    _eye.z = this.player.eye.z
-    this.player.viewDir(_dir)
-    v3addScaled(_to, _eye, _dir, def.placeable.maxRange)
-    const hit = this.physics.raycast(_eye, _to, CollisionLayer.Static | CollisionLayer.Prop)
-
-    const shape = def.world.shape
-    const halfHeight =
-      shape.type === 'box'
-        ? shape.size[1] / 2
-        : shape.type === 'cylinder'
-          ? shape.height / 2
-          : shape.radius
-    let px: number
-    let py: number
-    let pz: number
-    if (hit) {
-      px = hit.point.x + hit.normal.x * halfHeight
-      py = hit.point.y + hit.normal.y * (halfHeight + 0.02)
-      pz = hit.point.z + hit.normal.z * halfHeight
-    } else {
-      px = _to.x
-      py = Math.max(_to.y, halfHeight + 0.02)
-      pz = _to.z
-    }
-    // Face the placed object toward the player.
-    let yaw = Math.atan2(_eye.x - px, _eye.z - pz) + Math.PI
-    const snap = def.placeable.snapStep
-    if (snap > 0) {
-      px = Math.round(px / snap) * snap
-      pz = Math.round(pz / snap) * snap
-      yaw = Math.round(yaw / (Math.PI / 2)) * (Math.PI / 2)
-    }
-    this.connection.send({ t: 'place', slot, pos: [px, py, pz], yaw })
   }
 }
 

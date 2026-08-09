@@ -35,6 +35,10 @@ export declare class GameWorld {
     motion: MotionState
     owner?: PlayerId
     id?: EntityId
+    /** Items recovered on pickup; every prop defaults to carrying itself. */
+    lootCount?: number
+    /** Initial toss velocity (dropping an item throws it forward). */
+    velocity?: Vec3
   }): GameEntity
   /** Spawns a resource node instance of a content-defined node type. */
   spawnResource(opts: {

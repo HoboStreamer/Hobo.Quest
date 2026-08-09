@@ -63,8 +63,7 @@ export function tryGrab(
   if (!hit) return 'no_target'
   const entity = world.entityOfBody(hit.bodyId)
   if (!entity?.prop) return 'no_target'
-  const def = world.content.item(entity.prop.defId)
-  if (!def?.world?.physgun) return 'not_allowed'
+  if (!world.content.worldRepOf(entity.prop.defId).physgun) return 'not_allowed'
   if (heldByOthers.has(entity.id)) return 'already_held'
   if (!world.zones.rulesAt(entity.transform.pos).physgun) return 'zone'
   if (!canManipulate(entity)) return 'not_owner'
@@ -83,6 +82,7 @@ export function tryGrab(
     yawOffset: 0,
     pitchOffset: 0,
     grabYawDelta: extractYaw(_bodyRot) - session.yaw,
+    grid: false,
   }
   return entity
 }
@@ -146,6 +146,13 @@ export function driveHeld(session: PlayerSession, world: GameWorld, eyeOffset: n
   eyePosition(session, eyeOffset, _eye)
   viewDirection(session, _dir)
   v3addScaled(_target, _eye, _dir, held.dist)
+  if (held.grid) {
+    // Grid-lock: quantize the drive target for tidy construction.
+    const g = 0.25
+    _target.x = Math.round(_target.x / g) * g
+    _target.y = Math.round(_target.y / g) * g
+    _target.z = Math.round(_target.z / g) * g
+  }
 
   world.physics.getTransform(bodyId, _bodyPos, _bodyRot)
   v3sub(_vel, _target, _bodyPos)

@@ -259,7 +259,7 @@ export class EntityView {
   }
 }
 
-const HELD_GLOW = new Color3(0.25, 0.35, 0.5)
+const HELD_GLOW = new Color3(0.06, 0.1, 0.16)
 const NO_GLOW = new Color3(0, 0, 0)
 
 function pushSample(buffer: InterpSample[], sample: InterpSample): void {

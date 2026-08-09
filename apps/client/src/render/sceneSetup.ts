@@ -41,15 +41,22 @@ export function createScene(engine: AbstractEngine): Scene {
   return scene
 }
 
-const materialCache = new Map<string, StandardMaterial>()
+// Per-scene material caches — multiple scenes (game, icon renderer,
+// preview) must never share or overwrite each other's materials.
+const materialCaches = new WeakMap<Scene, Map<string, StandardMaterial>>()
 
 export function materialFor(scene: Scene, hex: string): StandardMaterial {
-  let mat = materialCache.get(hex)
-  if (!mat || mat.getScene() !== scene) {
+  let cache = materialCaches.get(scene)
+  if (!cache) {
+    cache = new Map()
+    materialCaches.set(scene, cache)
+  }
+  let mat = cache.get(hex)
+  if (!mat) {
     mat = new StandardMaterial(`mat:${hex}`, scene)
     mat.diffuseColor = Color3.FromHexString(hex)
     mat.specularColor = new Color3(0.08, 0.08, 0.08)
-    materialCache.set(hex, mat)
+    cache.set(hex, mat)
   }
   return mat
 }

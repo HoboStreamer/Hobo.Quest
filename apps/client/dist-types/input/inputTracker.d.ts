@@ -18,10 +18,10 @@ export declare class InputTracker {
   uiCapture: boolean
   onAction: ((action: InputAction) => void) | null
   onWheel: ((delta: number) => void) | null
+  /** When this returns true, mouse motion is redirected to rotate_held. */
+  captureLook: (() => boolean) | null
   private lookDx
   private lookDy
-  /** While R is held, mouse motion rotates the held prop instead of the view. */
-  rotateModifier: boolean
   constructor(canvas: HTMLCanvasElement)
   /** Accumulated look deltas since the last call (viewmodel sway). */
   consumeLookDelta(): {
@@ -29,39 +29,31 @@ export declare class InputTracker {
     dy: number
   }
   keyDown(code: string): boolean
+  get shiftHeld(): boolean
   get pointerLocked(): boolean
   exitLock(): void
 }
 export type InputAction =
   | {
-      kind: 'use'
+      kind: 'use_down'
     }
   | {
-      kind: 'freeze'
+      kind: 'use_up'
     }
   | {
-      kind: 'secondary'
+      kind: 'drop'
     }
   | {
-      kind: 'place'
-    }
-  | {
-      kind: 'toggle_inventory'
-    }
-  | {
-      kind: 'toggle_craft'
-    }
-  | {
-      kind: 'toggle_skills'
-    }
-  | {
-      kind: 'toggle_players'
+      kind: 'toggle_menu'
     }
   | {
       kind: 'primary_down'
     }
   | {
       kind: 'primary_up'
+    }
+  | {
+      kind: 'rmb_down'
     }
   | {
       kind: 'hotbar1'

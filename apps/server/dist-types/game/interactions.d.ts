@@ -1,7 +1,7 @@
 import type {
   ClientCraft,
+  ClientDrop,
   ClientInvMove,
-  ClientPlace,
   ClientUse,
   ClientWeld,
   ServerActionResult,
@@ -19,6 +19,8 @@ export interface GatherResult {
   outcome: ActionOutcome
   /** Entity whose remaining count changed (for replication), if any. */
   changed: GameEntity | null
+  /** Entity picked up and removed from the world, if any. */
+  pickedUp: GameEntity | null
   levelUps: LevelUp[]
   xpChanged: boolean
 }
@@ -31,6 +33,7 @@ export declare function handleUse(
   world: GameWorld,
   msg: ClientUse,
   nowMs: number,
+  canManipulate: (entity: GameEntity) => boolean,
 ): GatherResult
 export declare function handleCraft(
   session: PlayerSession,
@@ -43,13 +46,13 @@ export declare function nearbyWorkstationKinds(
   session: PlayerSession,
   world: GameWorld,
 ): ReadonlySet<string>
-export declare function handlePlace(
+export declare function handleDrop(
   session: PlayerSession,
   world: GameWorld,
-  msg: ClientPlace,
+  msg: ClientDrop,
 ): {
   outcome: ActionOutcome
-  placedId: string | null
+  droppedId: string | null
 }
 export interface WeldOutcome {
   outcome: ActionOutcome

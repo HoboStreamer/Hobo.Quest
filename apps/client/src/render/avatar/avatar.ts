@@ -35,6 +35,7 @@ export class Avatar {
   private toolProp: ToolProp | null = null
   private toolItemDef: string | undefined
   private headVisible = true
+  private armsVisible = true
 
   constructor(
     private readonly scene: Scene,
@@ -68,11 +69,17 @@ export class Avatar {
     this.rig = buildAvatarRig(this.scene, appearance, this.name)
     this.animator = new AvatarAnimator(this.rig.joints)
     this.rig.setHeadVisible(this.headVisible)
+    this.rig.setArmsVisible(this.armsVisible)
   }
 
   setHeadVisible(visible: boolean): void {
     this.headVisible = visible
     this.rig.setHeadVisible(visible)
+  }
+
+  setArmsVisible(visible: boolean): void {
+    this.armsVisible = visible
+    this.rig.setArmsVisible(visible)
   }
 
   triggerSwing(): void {
