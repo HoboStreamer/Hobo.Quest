@@ -21,6 +21,10 @@ export class Hud {
 
   inventoryOpen = false
   craftOpen = false
+  skillsOpen = false
+  playersOpen = false
+  private skillsPanel!: HTMLElement
+  private playersPanel!: HTMLElement
   onUiCaptureChange: ((captured: boolean) => void) | null = null
 
   constructor(
@@ -40,6 +44,17 @@ export class Hud {
     state.events.on('actionResult', (r) => {
       if (!r.ok && r.error) this.toast(`${r.action}: ${humanize(r.error)}`, true)
     })
+    state.events.on('skills', () => {
+      this.renderSkills()
+      this.renderCrafting()
+    })
+    state.events.on('levelUp', ({ skill, level }) => {
+      const def = this.content.skill(skill)
+      this.toast(`⭐ ${def?.name ?? skill} reached level ${level}!`)
+    })
+    state.events.on('friendsChanged', () => this.renderPlayers())
+    state.events.on('entityAdded', () => this.renderPlayers())
+    state.events.on('entityRemoved', () => this.renderPlayers())
   }
 
   private build(): void {
@@ -51,12 +66,16 @@ export class Hud {
       <div class="hotbar" id="hotbar"></div>
       <div class="panel" id="inventory-panel"><h2>Inventory</h2><div class="inv-grid" id="inv-grid"></div></div>
       <div class="panel" id="craft-panel"><h2>Crafting</h2><div id="craft-list"></div></div>
-      <div class="help">WASD move · Space jump · Shift sprint · LMB physgun · wheel push/pull · R+mouse rotate · F freeze · Q unfreeze · E gather · X place · Tab inventory · C craft</div>
+      <div class="panel" id="skills-panel"><h2>Skills</h2><div id="skills-list"></div></div>
+      <div class="panel" id="players-panel"><h2>Players</h2><div class="hint-line">Trusted players can move and unfreeze your props.</div><div id="players-list"></div></div>
+      <div class="help">WASD move · Space jump · Shift sprint · LMB use tool · wheel push/pull · R+mouse rotate · F freeze · Q unfreeze · E gather · X place · Tab inventory · C craft · K skills · P players</div>
     `
     this.hotbarEl = this.byId('hotbar')
     this.invPanel = this.byId('inventory-panel')
     this.invGrid = this.byId('inv-grid')
     this.craftPanel = this.byId('craft-panel')
+    this.skillsPanel = this.byId('skills-panel')
+    this.playersPanel = this.byId('players-panel')
     this.promptEl = this.byId('prompt')
     this.statusEl = this.byId('status')
     this.toastArea = this.byId('toasts')
@@ -84,16 +103,90 @@ export class Hud {
     this.updateCapture()
   }
 
+  toggleSkills(): void {
+    this.skillsOpen = !this.skillsOpen
+    this.skillsPanel.style.display = this.skillsOpen ? 'block' : 'none'
+    this.renderSkills()
+    this.updateCapture()
+  }
+
+  togglePlayers(): void {
+    this.playersOpen = !this.playersOpen
+    this.playersPanel.style.display = this.playersOpen ? 'block' : 'none'
+    this.renderPlayers()
+    this.updateCapture()
+  }
+
   closeAll(): void {
     this.inventoryOpen = false
     this.craftOpen = false
+    this.skillsOpen = false
+    this.playersOpen = false
     this.invPanel.style.display = 'none'
     this.craftPanel.style.display = 'none'
+    this.skillsPanel.style.display = 'none'
+    this.playersPanel.style.display = 'none'
     this.updateCapture()
   }
 
   private updateCapture(): void {
-    this.onUiCaptureChange?.(this.inventoryOpen || this.craftOpen)
+    this.onUiCaptureChange?.(
+      this.inventoryOpen || this.craftOpen || this.skillsOpen || this.playersOpen,
+    )
+  }
+
+  /** Online players + persistent trusted list, with trust toggles. */
+  renderPlayers(): void {
+    if (!this.playersOpen) return
+    const list = this.byId('players-list')
+    list.replaceChildren()
+    const online = this.state.onlinePlayers()
+    const rows = new Map<string, { name: string; online: boolean }>()
+    for (const p of online) rows.set(p.playerId, { name: p.name, online: true })
+    for (const f of this.state.friends) {
+      if (!rows.has(f.id)) rows.set(f.id, { name: f.name, online: false })
+    }
+    if (rows.size === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'hint-line'
+      empty.textContent = 'Nobody else around.'
+      list.appendChild(empty)
+      return
+    }
+    for (const [id, info] of rows) {
+      const row = document.createElement('div')
+      row.className = 'player-row'
+      const label = document.createElement('span')
+      label.textContent = `${info.name}${info.online ? '' : ' (offline)'}`
+      row.appendChild(label)
+      const trusted = this.state.isFriend(id)
+      const button = document.createElement('button')
+      button.className = trusted ? 'trust-btn trusted' : 'trust-btn'
+      button.textContent = trusted ? 'Trusted ✓' : 'Trust'
+      button.addEventListener('click', () => {
+        this.connection.send({ t: 'trust', player: id, trusted: !trusted })
+      })
+      row.appendChild(button)
+      list.appendChild(row)
+    }
+  }
+
+  renderSkills(): void {
+    if (!this.skillsOpen) return
+    const list = this.byId('skills-list')
+    list.replaceChildren()
+    for (const skill of this.state.skills) {
+      const def = this.content.skill(skill.id)
+      const el = document.createElement('div')
+      el.className = 'skill-row'
+      const pct = skill.nextXp > 0 ? Math.min(100, (skill.xp / skill.nextXp) * 100) : 100
+      el.innerHTML = `
+        <div class="skill-head"><span>${def?.name ?? skill.id}</span><span class="skill-level">Lv ${skill.level}</span></div>
+        <div class="skill-bar"><div class="skill-fill" style="width:${pct.toFixed(1)}%"></div></div>
+        <div class="skill-xp">${skill.xp} / ${skill.nextXp > 0 ? skill.nextXp : 'max'} xp</div>
+      `
+      list.appendChild(el)
+    }
   }
 
   setPrompt(text: string | null): void {
@@ -217,6 +310,16 @@ export class Hud {
         const req = document.createElement('div')
         req.className = 'req'
         req.textContent = `Requires: ${recipe.workstation}`
+        el.appendChild(req)
+      }
+      if (recipe.requiredSkill) {
+        const have = this.state.skillLevel(recipe.requiredSkill.skill)
+        const req = document.createElement('div')
+        req.className = have >= recipe.requiredSkill.level ? 'req' : 'req missing'
+        const skillName =
+          this.content.skill(recipe.requiredSkill.skill)?.name ?? recipe.requiredSkill.skill
+        req.textContent = `${skillName} level ${recipe.requiredSkill.level} (you: ${have})`
+        if (have < recipe.requiredSkill.level) craftable = false
         el.appendChild(req)
       }
       const active = this.state.craftJobs.filter((j) => j.recipe === recipe.id).length

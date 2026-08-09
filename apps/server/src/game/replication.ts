@@ -22,13 +22,19 @@ export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity 
     rot: [rot.x, rot.y, rot.z, rot.w] as [number, number, number, number],
   }
   if (entity.prop) {
-    return { ...base, kind: 'prop', def: entity.prop.defId, motion: entity.prop.motion }
+    return {
+      ...base,
+      kind: 'prop',
+      def: entity.prop.defId,
+      motion: entity.prop.motion,
+      ...(entity.owner !== undefined ? { owner: entity.owner as string } : {}),
+    }
   }
   if (entity.resource) {
     return {
       ...base,
       kind: 'resource',
-      def: entity.resource.itemId,
+      def: entity.resource.nodeTypeId,
       remaining: entity.resource.remaining,
     }
   }

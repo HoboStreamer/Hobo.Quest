@@ -11,7 +11,7 @@ zod-validated with range clamps; outbound are trusted by the client.
 ## Why
 
 Snapshot payloads at slice scale are ~1 KB at 15 Hz per client — bandwidth is
-not the current bottleneck, debuggability is. The message *model* (ids,
+not the current bottleneck, debuggability is. The message _model_ (ids,
 snapshots, deltas, acks) is the hard part and is already
 transport-format-agnostic; a binary codec (flatbuffer-style or hand-rolled)
 slots into the same two functions when measurements justify it.

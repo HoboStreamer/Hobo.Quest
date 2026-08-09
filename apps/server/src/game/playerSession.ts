@@ -1,5 +1,6 @@
 import type { ClientInput } from '@hobo/protocol'
-import type { Inventory } from '@hobo/gameplay'
+import type { ContentRegistry } from '@hobo/content'
+import type { Inventory, SkillSet } from '@hobo/gameplay'
 import { CraftQueue, createMoveState, type PlayerMoveState } from '@hobo/gameplay'
 import type { EntityId, PlayerId, Vec3 } from '@hobo/shared'
 
@@ -33,9 +34,16 @@ export interface PlayerSession {
   pitch: number
   buttons: number
   inventory: Inventory
+  skills: SkillSet
+  /** Player ids THIS player trusts with their props (one-directional). */
+  friends: Set<string>
   craftQueue: CraftQueue
   activeHotbar: number
   held: HeldProp | null
+  /** Tick of the last accepted use/swing (server-side swing cooldown). */
+  lastUseTick: number
+  /** For weld feedback and equipment lookups without threading the registry. */
+  content: ContentRegistry
   /** Pending input commands (bounded queue: anti-speedup). */
   inputQueue: ClientInput[]
   lastInput: ClientInput | null
@@ -58,6 +66,9 @@ export interface SessionInit {
   spawn: Vec3
   yaw: number
   inventory: Inventory
+  skills: SkillSet
+  friends: Set<string>
+  content: ContentRegistry
   send(text: string): void
   closeConnection(code: number, reason: string): void
 }
@@ -73,9 +84,13 @@ export function createSession(init: SessionInit): PlayerSession {
     pitch: 0,
     buttons: 0,
     inventory: init.inventory,
+    skills: init.skills,
+    friends: init.friends,
     craftQueue: new CraftQueue(),
     activeHotbar: 0,
     held: null,
+    lastUseTick: 0,
+    content: init.content,
     inputQueue: [],
     lastInput: null,
     starvedTicks: 0,

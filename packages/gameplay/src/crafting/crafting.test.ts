@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { ContentRegistry, ITEMS, RECIPES, TEST_WORLD } from '@hobo/content'
+import { createContent } from '@hobo/content'
 import { Inventory } from '../inventory/inventory.js'
 import { validateCraft } from './crafting.js'
 import { CraftQueue } from './queue.js'
 
-const content = new ContentRegistry(ITEMS, RECIPES, TEST_WORLD)
+const content = createContent()
 const noStations = { nearbyWorkstations: new Set<string>() }
 const withBench = { nearbyWorkstations: new Set(['workbench']) }
 
@@ -52,6 +52,27 @@ describe('validateCraft', () => {
     full.add('wooden_crate', 4)
     // outputs fit in freed slot — ok
     expect(validateCraft(content, full, 'craft_rope', noStations).ok).toBe(true)
+  })
+})
+
+describe('skill gating', () => {
+  it('rejects recipes below the required skill level and accepts at level', () => {
+    const inv = makeInv()
+    inv.add('sheet_metal', 4)
+    inv.add('wooden_beam', 2)
+    const lowSkill = {
+      nearbyWorkstations: new Set(['workbench']),
+      skillLevel: () => 1,
+    }
+    expect(validateCraft(content, inv, 'craft_metal_wall', lowSkill)).toEqual({
+      ok: false,
+      error: 'missing_skill',
+    })
+    const highSkill = {
+      nearbyWorkstations: new Set(['workbench']),
+      skillLevel: () => 3,
+    }
+    expect(validateCraft(content, inv, 'craft_metal_wall', highSkill).ok).toBe(true)
   })
 })
 

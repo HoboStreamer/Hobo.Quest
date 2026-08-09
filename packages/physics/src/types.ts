@@ -11,6 +11,16 @@ import type { Quat, Vec3 } from '@hobo/shared'
 /** Opaque handle to a body inside a PhysicsWorld instance. Not persistent — never serialize it. */
 export type BodyId = number
 
+/** Opaque handle to a constraint inside a PhysicsWorld instance. Not persistent. */
+export type ConstraintId = number
+
+/**
+ * Constraint descriptions. 'weld' locks all six degrees of freedom at the
+ * bodies' current relative pose. Future sandbox constraints (hinge, slider,
+ * rope, spring, motor...) become new variants of this union.
+ */
+export type ConstraintDesc = { type: 'weld'; bodyA: BodyId; bodyB: BodyId }
+
 /** Collision filter layers (bitmask). */
 export const CollisionLayer = {
   Static: 1 << 0,
@@ -72,6 +82,13 @@ export interface PhysicsWorld {
    */
   isSettled(id: BodyId): boolean
   wake(id: BodyId): void
+
+  /**
+   * Creates a constraint between two bodies (current relative pose is
+   * preserved for 'weld'). Constrained bodies stop colliding with each other.
+   */
+  addConstraint(desc: ConstraintDesc): ConstraintId
+  removeConstraint(id: ConstraintId): void
 
   /** First hit along a segment, filtered by collision mask. */
   raycast(from: Vec3, to: Vec3, collidesWith: number): RayHit | null

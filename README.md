@@ -47,22 +47,29 @@ pnpm dev:client
 Open http://localhost:5173 in two browser windows to see multiplayer.
 
 **Controls:** WASD move · Space jump (hold to bunnyhop) · Shift sprint ·
-LMB hold physgun grab · mouse wheel push/pull · R+mouse rotate held ·
-F freeze · Q unfreeze · E gather · X place selected item · 1-6 hotbar ·
-Tab inventory · C crafting.
+LMB use equipped tool (physgun grab / axe·pickaxe swing) · mouse wheel
+push/pull · R+mouse rotate held · F freeze · Q unfreeze · E gather ·
+X place selected item · 1-6 hotbar · Tab inventory · C crafting ·
+K skills · P players (trust friends with your props).
+
+**The loop:** spawn in Hoboville (safe city — no PvP, no building, no
+physgun), gather branches/stones/scrap outside the gates, craft tools,
+harvest the forest (axe/woodcutting) and quarry (pickaxe/mining), craft
+building pieces, place them in the wilds, position with the physgun and
+freeze. Props are protected: only you and players you trust can move them.
 
 ## Commands
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm dev` | Server + client dev processes in parallel |
-| `pnpm test` | All unit tests (vitest) |
-| `pnpm typecheck` | Strict TypeScript across every package |
-| `pnpm lint` | ESLint (typescript-eslint, no-explicit-any) |
-| `pnpm format` | Prettier write |
-| `pnpm build` | Production build of all packages + client bundle |
-| `tsx apps/server/scripts/sliceTest.ts` | End-to-end vertical-slice test (boots a real server, drives protocol clients, restarts, asserts persistence) |
-| `tsx packages/physics/scripts/smoke.ts` | Headless Havok smoke test |
+| Command                                 | Purpose                                                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `pnpm dev`                              | Server + client dev processes in parallel                                                                    |
+| `pnpm test`                             | All unit tests (vitest)                                                                                      |
+| `pnpm typecheck`                        | Strict TypeScript across every package                                                                       |
+| `pnpm lint`                             | ESLint (typescript-eslint, no-explicit-any)                                                                  |
+| `pnpm format`                           | Prettier write                                                                                               |
+| `pnpm build`                            | Production build of all packages + client bundle                                                             |
+| `tsx apps/server/scripts/sliceTest.ts`  | End-to-end vertical-slice test (boots a real server, drives protocol clients, restarts, asserts persistence) |
+| `tsx packages/physics/scripts/smoke.ts` | Headless Havok smoke test                                                                                    |
 
 ## Production
 

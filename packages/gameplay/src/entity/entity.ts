@@ -27,9 +27,11 @@ export interface PropComponent {
 }
 
 export interface ResourceComponent {
-  itemId: string
+  /** Resource node type id (content-defined behavior: yield, tool, respawn, XP). */
+  nodeTypeId: string
   remaining: number
-  perUse: number
+  /** Epoch ms when a depleted node refills; 0 while the node has stock. */
+  depletedUntil: number
 }
 
 export interface GameEntity {

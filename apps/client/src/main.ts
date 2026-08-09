@@ -1,6 +1,6 @@
 import HavokPhysics from '@babylonjs/havok'
 import havokWasmUrl from '@babylonjs/havok/lib/esm/HavokPhysics.wasm?url'
-import { ContentRegistry, ITEMS, RECIPES, TEST_WORLD } from '@hobo/content'
+import { createContent } from '@hobo/content'
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
 import { InteractionController } from './game/interactionController.js'
@@ -24,7 +24,7 @@ async function start(): Promise<void> {
   const name = await nameScreen(uiRoot, identity.name)
   saveName(name)
 
-  const content = new ContentRegistry(ITEMS, RECIPES, TEST_WORLD)
+  const content = createContent()
   const engine = await createEngine(canvas)
   const scene = createScene(engine)
   buildStaticWorld(scene, content)
@@ -61,14 +61,25 @@ async function start(): Promise<void> {
       case 'toggle_craft':
         hud.toggleCraft()
         return
+      case 'toggle_skills':
+        hud.toggleSkills()
+        return
+      case 'toggle_players':
+        hud.togglePlayers()
+        return
       case 'hotbar1':
       case 'hotbar2':
       case 'hotbar3':
       case 'hotbar4':
       case 'hotbar5':
-      case 'hotbar6':
-        connection.send({ t: 'hotbar', slot: Number(action.kind.slice(-1)) - 1 })
+      case 'hotbar6': {
+        const slot = Number(action.kind.slice(-1)) - 1
+        connection.send({ t: 'hotbar', slot })
+        state.activeHotbar = slot // optimistic; server echoes via inventory msg
+        interact.onHotbarChanged()
+        hud.renderHotbar()
         return
+      }
       default:
         interact.handle(action)
     }
@@ -107,20 +118,15 @@ async function start(): Promise<void> {
 
     if (connection.open && state.myEntityId) {
       const steps = timestep.consume(elapsed)
-      for (let i = 0; i < steps; i++) player.fixedUpdate()
+      for (let i = 0; i < steps; i++) {
+        player.fixedUpdate()
+        interact.flushTick()
+      }
       physics.step(0) // query-only world: refresh broadphase, no dynamics
       player.frameUpdate(timestep.alpha)
       view.update(now / 1000)
 
-      const target = interact.aim()
-      if (target?.kind === 'resource') {
-        const def = content.item(target.def ?? '')
-        hud.setPrompt(`E — Gather ${def?.name ?? 'resource'}`)
-      } else if (target?.kind === 'prop' && target.frozen) {
-        hud.setPrompt('Q — Unfreeze')
-      } else {
-        hud.setPrompt(null)
-      }
+      hud.setPrompt(promptFor(interact, content, state))
       hud.setStatus(
         `${name} · tick ${state.serverTick} · ${engine.getFps().toFixed(0)} fps · ${state.entities.size} entities`,
       )
@@ -129,6 +135,37 @@ async function start(): Promise<void> {
   })
 
   window.addEventListener('resize', () => engine.resize())
+}
+
+/** Context-sensitive crosshair prompt based on aim target + equipped tool. */
+function promptFor(
+  interact: InteractionController,
+  content: ReturnType<typeof createContent>,
+  state: ClientState,
+): string | null {
+  const target = interact.aim()
+  const tool = interact.equippedToolKind()
+  if (!target) return null
+  if (target.kind === 'resource') {
+    const nodeType = content.nodeType(target.def ?? '')
+    if (!nodeType) return null
+    const itemName = content.item(nodeType.item)?.name ?? nodeType.item
+    if (nodeType.requiredTool && tool !== nodeType.requiredTool) {
+      return `${nodeType.name} — requires ${nodeType.requiredTool}`
+    }
+    if (nodeType.requiredTool) return `LMB — harvest ${itemName}`
+    return `E — gather ${itemName}`
+  }
+  if (target.kind === 'prop') {
+    const entity = state.entities.get(target.entityId)
+    const owned = entity?.owner !== undefined && entity.owner !== state.myPlayerId
+    const suffix = owned ? ' · owned by another player' : ''
+    if (tool === 'physgun') {
+      return (target.frozen ? 'LMB — grab · Q — unfreeze' : 'Hold LMB — grab') + suffix
+    }
+    if (owned) return 'Owned by another player'
+  }
+  return null
 }
 
 function nameScreen(uiRoot: HTMLElement, savedName: string | null): Promise<string> {

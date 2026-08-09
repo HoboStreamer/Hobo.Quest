@@ -1,10 +1,16 @@
 import type { ContentRegistry, WorldShape } from '@hobo/content'
 import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
-import type { PersistenceStore, WorldEntityDto } from '@hobo/persistence'
-import { CollisionLayer, type BodyId, type PhysicsWorld, type ShapeDesc } from '@hobo/physics'
+import type { ConstraintDto, PersistenceStore, WorldEntityDto } from '@hobo/persistence'
 import {
-  asItemDefId,
+  CollisionLayer,
+  type BodyId,
+  type ConstraintId,
+  type PhysicsWorld,
+  type ShapeDesc,
+} from '@hobo/physics'
+import {
   newEntityId,
+  newUid,
   qfromYaw,
   quat,
   vec3,
@@ -17,21 +23,32 @@ import {
 
 /**
  * Authoritative world state: the entity store, its physical counterparts,
- * and the mapping between them. Persistence works exclusively through DTOs
- * built here — physics bodies and entity records are runtime-only.
+ * constraints between entities, and the mapping to persistence DTOs.
+ * Physics bodies and entity records are runtime-only; the store is rebuilt
+ * from DTOs on boot.
  */
 
 const PROP_COLLIDES = CollisionLayer.Static | CollisionLayer.Prop | CollisionLayer.Player
+
+interface WeldRecord {
+  id: string
+  a: EntityId
+  b: EntityId
+  physId: ConstraintId
+}
 
 export class GameWorld {
   readonly entities = new EntityStore()
   readonly zones: ZoneIndex
   private readonly bodyByEntity = new Map<EntityId, BodyId>()
   private readonly entityByBody = new Map<BodyId, EntityId>()
-  /** Entities whose props were settled last time we checked (sleep tracking). */
   private readonly settled = new Set<EntityId>()
-  /** Ids deleted since the last persistence flush. */
   private readonly deletedIds = new Set<EntityId>()
+
+  private readonly welds = new Map<string, WeldRecord>()
+  private readonly weldsByEntity = new Map<EntityId, Set<string>>()
+  private readonly weldsDirty = new Set<string>()
+  private readonly weldsDeleted = new Set<string>()
 
   constructor(
     readonly content: ContentRegistry,
@@ -73,7 +90,6 @@ export class GameWorld {
     return id ? this.entities.get(id) : undefined
   }
 
-  /** Spawns a physical prop entity (from placement, world seeding, or restore). */
   spawnProp(opts: {
     defId: string
     pos: Vec3
@@ -108,27 +124,32 @@ export class GameWorld {
     return entity
   }
 
-  /** Spawns a gatherable resource node (static, no physics interaction needed beyond blocking). */
+  /** Spawns a resource node instance of a content-defined node type. */
   spawnResource(opts: {
-    itemId: string
+    nodeTypeId: string
     pos: Vec3
     remaining: number
-    perUse: number
+    depletedUntil?: number
     id?: EntityId
   }): GameEntity {
+    const nodeType = this.content.nodeTypeOrThrow(opts.nodeTypeId)
     const entity: GameEntity = {
       id: opts.id ?? newEntityId(),
       kind: 'resource',
       transform: { pos: { ...opts.pos }, rot: quat() },
-      resource: { itemId: opts.itemId, remaining: opts.remaining, perUse: opts.perUse },
+      resource: {
+        nodeTypeId: opts.nodeTypeId,
+        remaining: opts.remaining,
+        depletedUntil: opts.depletedUntil ?? 0,
+      },
       persistent: true,
       dirty: true,
     }
     this.entities.add(entity)
     const bodyId = this.physics.addBody({
-      shape: { type: 'box', size: [0.8, 0.8, 0.8] },
+      shape: toShapeDesc(nodeType.bodyShape),
       motion: 'static',
-      pos: opts.pos,
+      pos: vec3(opts.pos.x, opts.pos.y + nodeType.bodyOffsetY, opts.pos.z),
       layer: CollisionLayer.Prop,
       collidesWith: CollisionLayer.Player,
     })
@@ -140,6 +161,7 @@ export class GameWorld {
   despawn(id: EntityId): void {
     const entity = this.entities.remove(id)
     if (!entity) return
+    this.removeWeldsFor(id)
     const bodyId = this.bodyByEntity.get(id)
     if (bodyId !== undefined) {
       this.physics.removeBody(bodyId)
@@ -160,11 +182,90 @@ export class GameWorld {
     if (motion === 'dynamic') this.settled.delete(entity.id)
   }
 
-  /**
-   * Post-physics sync: copy transforms of awake dynamic props back into
-   * entity records, mark persistence-dirty, and detect settle transitions.
-   * Settled props cost nothing here — the sleep system in action.
-   */
+  // ── Welds ──────────────────────────────────────────────────────────
+
+  hasWeld(a: EntityId, b: EntityId): boolean {
+    const set = this.weldsByEntity.get(a)
+    if (!set) return false
+    for (const id of set) {
+      const weld = this.welds.get(id)
+      if (weld && (weld.b === b || weld.a === b)) return true
+    }
+    return false
+  }
+
+  weldCountFor(id: EntityId): number {
+    return this.weldsByEntity.get(id)?.size ?? 0
+  }
+
+  addWeld(a: GameEntity, b: GameEntity, id?: string): WeldRecord | null {
+    const bodyA = this.bodyByEntity.get(a.id)
+    const bodyB = this.bodyByEntity.get(b.id)
+    if (bodyA === undefined || bodyB === undefined) return null
+    const physId = this.physics.addConstraint({ type: 'weld', bodyA, bodyB })
+    const record: WeldRecord = { id: id ?? newUid(), a: a.id, b: b.id, physId }
+    this.welds.set(record.id, record)
+    this.indexWeld(record.a, record.id)
+    this.indexWeld(record.b, record.id)
+    this.weldsDirty.add(record.id)
+    this.settled.delete(a.id)
+    this.settled.delete(b.id)
+    return record
+  }
+
+  /** Removes every weld touching the entity; returns the removed records. */
+  removeWeldsFor(entityId: EntityId): WeldRecord[] {
+    const ids = this.weldsByEntity.get(entityId)
+    if (!ids || ids.size === 0) return []
+    const removed: WeldRecord[] = []
+    for (const id of [...ids]) {
+      const weld = this.welds.get(id)
+      if (!weld) continue
+      this.physics.removeConstraint(weld.physId)
+      this.welds.delete(id)
+      this.weldsByEntity.get(weld.a)?.delete(id)
+      this.weldsByEntity.get(weld.b)?.delete(id)
+      this.weldsDirty.delete(id)
+      this.weldsDeleted.add(id)
+      removed.push(weld)
+    }
+    return removed
+  }
+
+  private indexWeld(entityId: EntityId, weldId: string): void {
+    let set = this.weldsByEntity.get(entityId)
+    if (!set) {
+      set = new Set()
+      this.weldsByEntity.set(entityId, set)
+    }
+    set.add(weldId)
+  }
+
+  allWelds(): IterableIterator<WeldRecord> {
+    return this.welds.values()
+  }
+
+  // ── Resource respawn ───────────────────────────────────────────────
+
+  /** Refills depleted nodes whose respawn time passed. Returns refilled entities. */
+  respawnDueResources(nowMs: number): GameEntity[] {
+    const refilled: GameEntity[] = []
+    for (const entity of this.entities.ofKind('resource')) {
+      const res = entity.resource
+      if (!res || res.remaining > 0 || res.depletedUntil === 0) continue
+      if (nowMs < res.depletedUntil) continue
+      const nodeType = this.content.nodeType(res.nodeTypeId)
+      if (!nodeType) continue
+      res.remaining = nodeType.amount
+      res.depletedUntil = 0
+      entity.dirty = true
+      refilled.push(entity)
+    }
+    return refilled
+  }
+
+  // ── Physics sync (sleep tracking) ──────────────────────────────────
+
   syncFromPhysics(events: {
     onSettle?: (e: GameEntity) => void
     onWake?: (e: GameEntity) => void
@@ -200,14 +301,65 @@ export class GameWorld {
 
   // ── Persistence mapping ────────────────────────────────────────────
 
-  /** First boot: seed initial world content. Afterwards the DB is authoritative. */
   seedOrRestore(store: PersistenceStore): void {
-    if (store.meta.get('world_seeded') === 'yes') {
-      const rows = store.worldEntities.loadAll()
-      for (const row of rows) this.restoreEntity(row)
-      this.log.info('world restored', { entities: rows.length })
+    const world = this.content.world
+    const seeded = store.meta.get('world_seeded') === 'yes'
+    const worldChanged = store.meta.get('world_id') !== world.id
+
+    if (!seeded) {
+      this.seedProps(store)
+      this.seedResources(store)
+      store.meta.set('world_seeded', 'yes')
+      store.meta.set('world_id', world.id)
+      this.flushDirty(store)
+      this.log.info('world seeded', { world: world.id, entities: this.entities.size })
       return
     }
+
+    const rows = store.worldEntities.loadAll()
+    let restored = 0
+    for (const row of rows) {
+      if (row.kind === 'resource' && worldChanged) continue // re-seeded below
+      if (this.restoreEntity(row)) restored++
+    }
+
+    // Constraints restore after entities; dangling records are pruned.
+    const constraintRows = store.constraints.loadAll()
+    const pruned: string[] = []
+    for (const row of constraintRows) {
+      const a = this.entities.get(row.entityA as EntityId)
+      const b = this.entities.get(row.entityB as EntityId)
+      if (a?.prop && b?.prop && this.addWeld(a, b, row.id)) {
+        this.weldsDirty.delete(row.id) // just loaded, not dirty
+      } else {
+        pruned.push(row.id)
+      }
+    }
+    if (pruned.length > 0) store.constraints.deleteMany(pruned)
+
+    if (worldChanged) {
+      // The map definition changed: resource layout follows the new world,
+      // player constructions persist, players go back to spawn.
+      store.worldEntities.deleteByKind('resource')
+      this.seedResources(store)
+      store.players.resetAllPositions(
+        [world.spawnPoint[0], world.spawnPoint[1], world.spawnPoint[2]],
+        world.spawnYaw,
+      )
+      store.meta.set('world_id', world.id)
+      this.flushDirty(store)
+      this.log.info('world definition changed — resources re-seeded, players respawned', {
+        world: world.id,
+      })
+    }
+    this.log.info('world restored', {
+      entities: restored,
+      welds: this.welds.size,
+      prunedWelds: pruned.length,
+    })
+  }
+
+  private seedProps(_store: PersistenceStore): void {
     const world = this.content.world
     for (const prop of world.initialProps) {
       this.spawnProp({
@@ -217,23 +369,28 @@ export class GameWorld {
         motion: 'dynamic',
       })
     }
-    for (const node of world.resourceNodes) {
-      this.spawnResource({
-        itemId: node.item,
-        pos: vec3(node.pos[0], node.pos[1], node.pos[2]),
-        remaining: node.amount,
-        perUse: node.perUse,
-      })
-    }
-    store.meta.set('world_seeded', 'yes')
-    this.flushDirty(store)
-    this.log.info('world seeded', { entities: this.entities.size })
   }
 
-  private restoreEntity(row: WorldEntityDto): void {
+  private seedResources(_store: PersistenceStore): void {
+    const world = this.content.world
+    for (const node of world.resourceNodes) {
+      const nodeType = this.content.nodeTypeOrThrow(node.node)
+      this.spawnResource({
+        nodeTypeId: node.node,
+        pos: vec3(node.pos[0], node.pos[1], node.pos[2]),
+        remaining: nodeType.amount,
+      })
+    }
+  }
+
+  private restoreEntity(row: WorldEntityDto): boolean {
     const pos = vec3(row.pos[0], row.pos[1], row.pos[2])
     const rot = quat(row.rot[0], row.rot[1], row.rot[2], row.rot[3])
     if (row.kind === 'prop') {
+      if (!this.content.item(row.defId)?.world) {
+        this.deletedIds.add(row.id as EntityId)
+        return false
+      }
       const entity = this.spawnProp({
         defId: row.defId,
         pos,
@@ -243,21 +400,26 @@ export class GameWorld {
         ...(row.ownerId ? { owner: row.ownerId as PlayerId } : {}),
       })
       entity.dirty = false
-    } else if (row.kind === 'resource') {
-      const remaining = Number(row.state?.remaining ?? 0)
-      if (remaining <= 0) return
+      return true
+    }
+    if (row.kind === 'resource') {
+      if (!this.content.nodeType(row.defId)) {
+        this.deletedIds.add(row.id as EntityId)
+        return false
+      }
       const entity = this.spawnResource({
-        itemId: asItemDefId(row.defId),
+        nodeTypeId: row.defId,
         pos,
-        remaining,
-        perUse: Number(row.state?.perUse ?? 1),
+        remaining: Number(row.state?.remaining ?? 0),
+        depletedUntil: Number(row.state?.depletedUntil ?? 0),
         id: row.id as EntityId,
       })
       entity.dirty = false
+      return true
     }
+    return false
   }
 
-  /** Batched dirty write-out. Returns number of rows written. */
   flushDirty(store: PersistenceStore): number {
     const dirty: WorldEntityDto[] = []
     const now = Date.now()
@@ -271,6 +433,21 @@ export class GameWorld {
       store.worldEntities.deleteMany([...this.deletedIds])
       this.deletedIds.clear()
     }
+    if (this.weldsDirty.size > 0) {
+      const dtos: ConstraintDto[] = []
+      for (const id of this.weldsDirty) {
+        const weld = this.welds.get(id)
+        if (weld) {
+          dtos.push({ id: weld.id, type: 'weld', entityA: weld.a, entityB: weld.b, updatedAt: now })
+        }
+      }
+      store.constraints.upsertMany(dtos)
+      this.weldsDirty.clear()
+    }
+    if (this.weldsDeleted.size > 0) {
+      store.constraints.deleteMany([...this.weldsDeleted])
+      this.weldsDeleted.clear()
+    }
     return dirty.length
   }
 }
@@ -280,13 +457,13 @@ function entityToDto(entity: GameEntity, now: number): WorldEntityDto {
   return {
     id: entity.id,
     kind: entity.kind === 'resource' ? 'resource' : 'prop',
-    defId: entity.prop?.defId ?? entity.resource?.itemId ?? 'unknown',
+    defId: entity.prop?.defId ?? entity.resource?.nodeTypeId ?? 'unknown',
     ownerId: entity.owner ?? null,
     pos: [pos.x, pos.y, pos.z],
     rot: [rot.x, rot.y, rot.z, rot.w],
     motion: entity.prop?.motion ?? 'static',
     state: entity.resource
-      ? { remaining: entity.resource.remaining, perUse: entity.resource.perUse }
+      ? { remaining: entity.resource.remaining, depletedUntil: entity.resource.depletedUntil }
       : null,
     updatedAt: now,
   }

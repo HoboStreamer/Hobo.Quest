@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { ContentRegistry, ITEMS, RECIPES, TEST_WORLD } from '@hobo/content'
+import { createContent } from '@hobo/content'
 import { Inventory } from './inventory.js'
 
-const content = new ContentRegistry(ITEMS, RECIPES, TEST_WORLD)
+const content = createContent()
 
 function makeInv(size = 12, hotbar = 4): Inventory {
   return new Inventory(size, hotbar, content)

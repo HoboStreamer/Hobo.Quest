@@ -91,6 +91,29 @@ export const ClientPhysgunSchema = z.discriminatedUnion('a', [
   z.object({ t: z.literal('physgun'), a: z.literal('unfreeze'), target: z.string().max(32) }),
 ])
 
+/**
+ * Trust management (prop protection): allow/revoke another player's right
+ * to manipulate my props. One-directional and persistent.
+ */
+export const ClientTrustSchema = z.object({
+  t: z.literal('trust'),
+  player: z.string().max(32),
+  trusted: z.boolean(),
+})
+
+/** Weld two props (constraint tools — no player-facing UX yet). */
+export const ClientWeldSchema = z.object({
+  t: z.literal('weld'),
+  a: z.string().max(32),
+  b: z.string().max(32),
+})
+
+/** Remove all welds touching the target prop. */
+export const ClientUnweldSchema = z.object({
+  t: z.literal('unweld'),
+  target: z.string().max(32),
+})
+
 export const ClientMessageSchema = z.union([
   ClientHelloSchema,
   ClientInputSchema,
@@ -100,6 +123,9 @@ export const ClientMessageSchema = z.union([
   ClientInvMoveSchema,
   ClientHotbarSelectSchema,
   ClientPhysgunSchema,
+  ClientTrustSchema,
+  ClientWeldSchema,
+  ClientUnweldSchema,
 ])
 
 export type ClientHello = z.infer<typeof ClientHelloSchema>
@@ -110,4 +136,7 @@ export type ClientPlace = z.infer<typeof ClientPlaceSchema>
 export type ClientInvMove = z.infer<typeof ClientInvMoveSchema>
 export type ClientHotbarSelect = z.infer<typeof ClientHotbarSelectSchema>
 export type ClientPhysgun = z.infer<typeof ClientPhysgunSchema>
+export type ClientTrust = z.infer<typeof ClientTrustSchema>
+export type ClientWeld = z.infer<typeof ClientWeldSchema>
+export type ClientUnweld = z.infer<typeof ClientUnweldSchema>
 export type ClientMessage = z.infer<typeof ClientMessageSchema>

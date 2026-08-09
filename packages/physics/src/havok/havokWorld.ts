@@ -16,12 +16,16 @@ import {
   PhysicsShapeCylinder,
   PhysicsShapeSphere,
 } from '@babylonjs/core/Physics/v2/physicsShape.js'
+import { PhysicsConstraint } from '@babylonjs/core/Physics/v2/physicsConstraint.js'
+import { PhysicsConstraintType } from '@babylonjs/core/Physics/v2/IPhysicsEnginePlugin.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import '@babylonjs/core/Physics/joinedPhysicsEngineComponent.js'
 import type { Quat, Vec3 } from '@hobo/shared'
 import type {
   BodyDesc,
   BodyId,
+  ConstraintDesc,
+  ConstraintId,
   MotionType,
   PhysicsWorld,
   RayHit,
@@ -58,7 +62,9 @@ const SETTLE_ANG_SQ = 0.15 * 0.15
 
 export class HavokWorld implements PhysicsWorld {
   private nextId: BodyId = 1
+  private nextConstraintId: ConstraintId = 1
   private readonly bodies = new Map<BodyId, BodyRecord>()
+  private readonly constraints = new Map<ConstraintId, PhysicsConstraint>()
   private readonly bodyIds = new WeakMap<PhysicsBody, BodyId>()
   private bodyList: PhysicsBody[] = []
   private bodyListDirty = false
@@ -205,6 +211,48 @@ export class HavokWorld implements PhysicsWorld {
     this.plugin.setActivationControl(rec.body, PhysicsActivationControl.SIMULATION_CONTROLLED)
   }
 
+  addConstraint(desc: ConstraintDesc): ConstraintId {
+    const recA = this.mustGet(desc.bodyA)
+    const recB = this.mustGet(desc.bodyB)
+    const rotA = recA.node.rotationQuaternion ?? Quaternion.Identity()
+    const rotB = recB.node.rotationQuaternion ?? Quaternion.Identity()
+
+    // Anchor frames preserving the CURRENT relative pose:
+    // pivotA = B's origin in A's local space; axes = B's basis in A's space.
+    const invRotA = rotA.conjugate()
+    const relRot = invRotA.multiply(rotB)
+    const pivotA = recB.node.position.subtract(recA.node.position).applyRotationQuaternion(invRotA)
+    const axisA = new Vector3(1, 0, 0).applyRotationQuaternion(relRot)
+    const perpA = new Vector3(0, 1, 0).applyRotationQuaternion(relRot)
+
+    const constraint = new PhysicsConstraint(
+      PhysicsConstraintType.LOCK,
+      {
+        pivotA,
+        pivotB: Vector3.Zero(),
+        axisA,
+        axisB: new Vector3(1, 0, 0),
+        perpAxisA: perpA,
+        perpAxisB: new Vector3(0, 1, 0),
+        collision: false,
+      },
+      this.scene,
+    )
+    recA.body.addConstraint(recB.body, constraint)
+    const id = this.nextConstraintId++
+    this.constraints.set(id, constraint)
+    if (recA.motion === 'dynamic') this.wake(desc.bodyA)
+    if (recB.motion === 'dynamic') this.wake(desc.bodyB)
+    return id
+  }
+
+  removeConstraint(id: ConstraintId): void {
+    const constraint = this.constraints.get(id)
+    if (!constraint) return
+    constraint.dispose()
+    this.constraints.delete(id)
+  }
+
   raycast(from: Vec3, to: Vec3, collidesWith: number): RayHit | null {
     this._v1.set(from.x, from.y, from.z)
     this._v2.set(to.x, to.y, to.z)
@@ -257,6 +305,7 @@ export class HavokWorld implements PhysicsWorld {
   }
 
   dispose(): void {
+    for (const id of [...this.constraints.keys()]) this.removeConstraint(id)
     for (const id of [...this.bodies.keys()]) this.removeBody(id)
     for (const shape of this.sweepShapes.values()) shape.dispose()
     this.sweepShapes.clear()

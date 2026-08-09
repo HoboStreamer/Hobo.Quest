@@ -2,6 +2,10 @@
  * Raw input capture: pointer lock, mouse look, key states, wheel, and
  * edge-triggered action callbacks. Gameplay semantics live elsewhere —
  * this module only reports what the hands are doing.
+ *
+ * Pointer events are bound on `document` (not the canvas): while the
+ * pointer is locked some browsers retarget events inconsistently, and a
+ * document listener sees them regardless.
  */
 export declare class InputTracker {
   private readonly canvas
@@ -29,7 +33,7 @@ export type InputAction =
       kind: 'freeze'
     }
   | {
-      kind: 'unfreeze'
+      kind: 'secondary'
     }
   | {
       kind: 'place'
@@ -39,6 +43,12 @@ export type InputAction =
     }
   | {
       kind: 'toggle_craft'
+    }
+  | {
+      kind: 'toggle_skills'
+    }
+  | {
+      kind: 'toggle_players'
     }
   | {
       kind: 'primary_down'

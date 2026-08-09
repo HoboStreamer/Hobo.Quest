@@ -77,9 +77,42 @@ export interface ServerCraftState {
 /** Result of an explicit player request (craft, place, use...). */
 export interface ServerActionResult {
   t: 'result'
-  action: 'craft' | 'place' | 'use' | 'inv_move' | 'physgun'
+  action: 'craft' | 'place' | 'use' | 'inv_move' | 'physgun' | 'weld' | 'unweld' | 'trust'
   ok: boolean
   error?: string
+}
+
+/** The receiving player's trusted-friends list (welcome + on change). */
+export interface ServerFriends {
+  t: 'friends'
+  friends: { id: string; name: string }[]
+}
+
+export interface WireSkill {
+  id: string
+  level: number
+  xp: number
+  nextXp: number
+}
+
+/** Full skill progression for the receiving player (welcome + on change). */
+export interface ServerSkills {
+  t: 'skills'
+  skills: WireSkill[]
+}
+
+export interface ServerLevelUp {
+  t: 'levelup'
+  skill: string
+  level: number
+}
+
+/** A weld now exists (or was removed) between two props — for client feedback/visuals. */
+export interface ServerWeldState {
+  t: 'weld_state'
+  a: string
+  b: string
+  active: boolean
 }
 
 /** Physgun beam state for rendering (any player's beam). */
@@ -101,3 +134,7 @@ export type ServerMessage =
   | ServerCraftState
   | ServerActionResult
   | ServerPhysgunState
+  | ServerSkills
+  | ServerLevelUp
+  | ServerWeldState
+  | ServerFriends

@@ -1,4 +1,4 @@
-import type { InventoryDto } from '@hobo/gameplay'
+import type { InventoryDto, SkillsDto } from '@hobo/gameplay'
 
 /**
  * Persistence DTOs: the explicit, versionable disk representation of game
@@ -28,5 +28,18 @@ export interface PlayerDto {
   pos: [number, number, number]
   yaw: number
   inventory: InventoryDto
+  /** Total XP per skill id (levels are derived at runtime). */
+  skills: SkillsDto
+  /** Player ids this player trusts with their props (one-directional). */
+  friends: string[]
+  updatedAt: number
+}
+
+/** Persistent constraint between two world entities (weld graphs, later hinges etc.). */
+export interface ConstraintDto {
+  id: string
+  type: 'weld'
+  entityA: string
+  entityB: string
   updatedAt: number
 }

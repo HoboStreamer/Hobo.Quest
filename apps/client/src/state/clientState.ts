@@ -1,4 +1,4 @@
-import type { ServerMessage, WireEntity, WireInventory } from '@hobo/protocol'
+import type { ServerMessage, WireEntity, WireInventory, WireSkill } from '@hobo/protocol'
 import { TypedEmitter } from '@hobo/shared'
 
 /**
@@ -16,6 +16,10 @@ export interface ClientStateEvents {
   craftJobs: { recipe: string; readyTick: number }[]
   actionResult: { action: string; ok: boolean; error?: string }
   physgunBeam: { player: string; target: string | null }
+  skills: WireSkill[]
+  levelUp: { skill: string; level: number }
+  weldState: { a: string; b: string; active: boolean }
+  friendsChanged: { id: string; name: string }[]
   disconnected: undefined
   [key: string]: unknown
 }
@@ -24,6 +28,9 @@ export class ClientState {
   readonly events = new TypedEmitter<ClientStateEvents>()
   readonly entities = new Map<string, WireEntity>()
   myEntityId = ''
+  myPlayerId = ''
+  /** Player ids I trust with my props. */
+  friends: { id: string; name: string }[] = []
   tickRate = 30
   snapshotRate = 15
   serverTick = 0
@@ -31,6 +38,7 @@ export class ClientState {
   inventory: WireInventory | null = null
   activeHotbar = 0
   craftJobs: { recipe: string; readyTick: number }[] = []
+  skills: WireSkill[] = []
   /** entityId -> holder player entityId, for beam/highlight rendering. */
   readonly heldBy = new Map<string, string>()
 
@@ -38,6 +46,7 @@ export class ClientState {
     switch (msg.t) {
       case 'welcome':
         this.myEntityId = msg.entityId
+        this.myPlayerId = msg.playerId
         this.tickRate = msg.tickRate
         this.snapshotRate = msg.snapshotRate
         this.serverTick = msg.tick
@@ -86,6 +95,20 @@ export class ClientState {
           ...(msg.error !== undefined ? { error: msg.error } : {}),
         })
         break
+      case 'skills':
+        this.skills = msg.skills
+        this.events.emit('skills', msg.skills)
+        break
+      case 'levelup':
+        this.events.emit('levelUp', { skill: msg.skill, level: msg.level })
+        break
+      case 'weld_state':
+        this.events.emit('weldState', { a: msg.a, b: msg.b, active: msg.active })
+        break
+      case 'friends':
+        this.friends = msg.friends
+        this.events.emit('friendsChanged', msg.friends)
+        break
       case 'physgun_state': {
         // Clear any previous target held by this player, then set the new one.
         for (const [target, holder] of this.heldBy) {
@@ -105,5 +128,30 @@ export class ClientState {
       if (s.stack.def === defId) total += s.stack.count
     }
     return total
+  }
+
+  /** Item def id in the active hotbar slot, if any. */
+  activeItemDef(): string | null {
+    const slot = this.inventory?.slots.find((s) => s.i === this.activeHotbar)
+    return slot?.stack.def ?? null
+  }
+
+  skillLevel(id: string): number {
+    return this.skills.find((s) => s.id === id)?.level ?? 1
+  }
+
+  isFriend(playerId: string): boolean {
+    return this.friends.some((f) => f.id === playerId)
+  }
+
+  /** Online players (from replicated player entities with identity meta). */
+  onlinePlayers(): { playerId: string; name: string; entityId: string }[] {
+    const players: { playerId: string; name: string; entityId: string }[] = []
+    for (const e of this.entities.values()) {
+      if (e.kind === 'player' && e.player) {
+        players.push({ playerId: e.player, name: e.name ?? 'drifter', entityId: e.id })
+      }
+    }
+    return players
   }
 }

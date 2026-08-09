@@ -46,7 +46,7 @@ Node-safe; the client hands it a rendered scene instead).
 - **Movement** is a kinematic Source/Quake controller (`gameplay/movement`):
   explicit velocity + capsule sweeps + clip-plane sliding + step-up, with
   friction / ground-accelerate / air-accelerate (air-strafing works). The
-  player is *not* a dynamic rigid body; a kinematic Havok capsule mirrors the
+  player is _not_ a dynamic rigid body; a kinematic Havok capsule mirrors the
   player so props collide with them. The controller consumes a
   `CollisionQueries` interface — the Havok adapter provides it on both sides,
   the tests provide analytic worlds.
@@ -68,7 +68,7 @@ Node-safe; the client hands it a rendered scene instead).
 - **Interest management:** per-session known-entity sets built from a radius
   query (the query is one function — the future spatial region index replaces
   its internals, not its callers). Spawn/despawn diffs flow from interest
-  changes; snapshots contain only relevant players + *awake* relevant bodies.
+  changes; snapshots contain only relevant players + _awake_ relevant bodies.
 - **Sleep networking:** when a prop settles, one final `entity` pin is
   broadcast and it drops out of snapshots; on wake it re-enters. Settled
   props also mark themselves dirty exactly once for the persistence flush.
@@ -99,7 +99,7 @@ source of truth.
 ## Zones
 
 Declarative rule volumes (`pvp`, `build`, `physgun`) resolved by position;
-systems ask `rulesAt(pos)` — the protected city is future *content*, not code.
+systems ask `rulesAt(pos)` — the protected city is future _content_, not code.
 
 ## Entities
 

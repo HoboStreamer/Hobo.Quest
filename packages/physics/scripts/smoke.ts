@@ -81,6 +81,40 @@ world.getTransform(box, pos, rot)
 console.log('box after push:', pos, 'settled:', world.isSettled(box))
 if (pos.x < 0.05) throw new Error('kinematic player failed to push prop')
 
+// Weld: two stacked boxes welded together should move as one and keep
+// their relative offset after being shoved.
+const weldA = world.addBody({
+  shape: { type: 'box', size: [0.5, 0.5, 0.5] },
+  motion: 'dynamic',
+  pos: vec3(10, 0.25, 0),
+  massKg: 10,
+  layer: CollisionLayer.Prop,
+  collidesWith: CollisionLayer.Static | CollisionLayer.Prop,
+})
+const weldB = world.addBody({
+  shape: { type: 'box', size: [0.5, 0.5, 0.5] },
+  motion: 'dynamic',
+  pos: vec3(10, 0.78, 0),
+  massKg: 10,
+  layer: CollisionLayer.Prop,
+  collidesWith: CollisionLayer.Static | CollisionLayer.Prop,
+})
+for (let i = 0; i < 30; i++) world.step(dt)
+const weldId = world.addConstraint({ type: 'weld', bodyA: weldA, bodyB: weldB })
+world.setLinearVelocity(weldA, vec3(4, 0, 0))
+for (let i = 0; i < 60; i++) world.step(dt)
+const pa = vec3()
+const pb = vec3()
+world.getTransform(weldA, pa, rot)
+world.getTransform(weldB, pb, rot)
+console.log('weld: A', pa, 'B', pb)
+if (pa.x < 10.3) throw new Error('welded pair did not slide')
+const dy = pb.y - pa.y
+if (Math.abs(pb.x - pa.x) > 0.25 || dy < 0.3 || dy > 0.75) {
+  throw new Error(`weld did not hold relative pose (dx=${pb.x - pa.x}, dy=${dy})`)
+}
+world.removeConstraint(weldId)
+
 world.removeBody(ground)
 world.dispose()
 console.log('PHYSICS SMOKE OK')

@@ -1,22 +1,34 @@
 import { ItemDefSchema, type ItemDef } from './schema/item.js'
 import { RecipeSchema, type Recipe } from './schema/recipe.js'
+import { ResourceNodeTypeSchema, type ResourceNodeType } from './schema/resourceNode.js'
+import { SkillDefSchema, type SkillDef } from './schema/skill.js'
 import { WorldDefSchema, type WorldDef } from './schema/world.js'
+
+export interface ContentDefs {
+  items: ItemDef[]
+  recipes: Recipe[]
+  skills: SkillDef[]
+  nodeTypes: ResourceNodeType[]
+  world: WorldDef
+}
 
 /**
  * Immutable, validated content registry built once at startup on both server
  * and client. Fails fast on invalid definitions, duplicate ids, or dangling
- * cross-references (a recipe naming a nonexistent item, etc.) — a content
- * mistake should kill the dev server, not corrupt a live world.
+ * cross-references — a content mistake should kill the dev server, not
+ * corrupt a live world.
  */
 export class ContentRegistry {
   private readonly items = new Map<string, ItemDef>()
   private readonly recipes = new Map<string, Recipe>()
+  private readonly skills = new Map<string, SkillDef>()
+  private readonly nodeTypes = new Map<string, ResourceNodeType>()
   readonly world: WorldDef
 
-  constructor(items: ItemDef[], recipes: Recipe[], world: WorldDef) {
+  constructor(defs: ContentDefs) {
     const errors: string[] = []
 
-    for (const raw of items) {
+    for (const raw of defs.items) {
       const parsed = ItemDefSchema.safeParse(raw)
       if (!parsed.success) {
         errors.push(`item '${raw.id}': ${parsed.error.message}`)
@@ -26,7 +38,34 @@ export class ContentRegistry {
       this.items.set(parsed.data.id, parsed.data)
     }
 
-    for (const raw of recipes) {
+    for (const raw of defs.skills) {
+      const parsed = SkillDefSchema.safeParse(raw)
+      if (!parsed.success) {
+        errors.push(`skill '${raw.id}': ${parsed.error.message}`)
+        continue
+      }
+      if (this.skills.has(parsed.data.id)) errors.push(`duplicate skill id '${parsed.data.id}'`)
+      this.skills.set(parsed.data.id, parsed.data)
+    }
+
+    for (const raw of defs.nodeTypes) {
+      const parsed = ResourceNodeTypeSchema.safeParse(raw)
+      if (!parsed.success) {
+        errors.push(`node type '${raw.id}': ${parsed.error.message}`)
+        continue
+      }
+      const node = parsed.data
+      if (this.nodeTypes.has(node.id)) errors.push(`duplicate node type id '${node.id}'`)
+      if (!this.items.has(node.item)) {
+        errors.push(`node type '${node.id}' yields unknown item '${node.item}'`)
+      }
+      if (!this.skills.has(node.skill)) {
+        errors.push(`node type '${node.id}' references unknown skill '${node.skill}'`)
+      }
+      this.nodeTypes.set(node.id, node)
+    }
+
+    for (const raw of defs.recipes) {
       const parsed = RecipeSchema.safeParse(raw)
       if (!parsed.success) {
         errors.push(`recipe '${raw.id}': ${parsed.error.message}`)
@@ -39,18 +78,23 @@ export class ContentRegistry {
           errors.push(`recipe '${recipe.id}' references unknown item '${ref.item}'`)
         }
       }
+      if (recipe.requiredSkill && !this.skills.has(recipe.requiredSkill.skill)) {
+        errors.push(
+          `recipe '${recipe.id}' references unknown skill '${recipe.requiredSkill.skill}'`,
+        )
+      }
       this.recipes.set(recipe.id, recipe)
     }
 
-    const parsedWorld = WorldDefSchema.safeParse(world)
+    const parsedWorld = WorldDefSchema.safeParse(defs.world)
     if (!parsedWorld.success) {
-      errors.push(`world '${world.id}': ${parsedWorld.error.message}`)
-      this.world = world
+      errors.push(`world '${defs.world.id}': ${parsedWorld.error.message}`)
+      this.world = defs.world
     } else {
       this.world = parsedWorld.data
       for (const node of this.world.resourceNodes) {
-        if (!this.items.has(node.item)) {
-          errors.push(`world resource node references unknown item '${node.item}'`)
+        if (!this.nodeTypes.has(node.node)) {
+          errors.push(`world places unknown resource node type '${node.node}'`)
         }
       }
       for (const prop of this.world.initialProps) {
@@ -79,11 +123,33 @@ export class ContentRegistry {
     return this.recipes.get(id)
   }
 
+  skill(id: string): SkillDef | undefined {
+    return this.skills.get(id)
+  }
+
+  nodeType(id: string): ResourceNodeType | undefined {
+    return this.nodeTypes.get(id)
+  }
+
+  nodeTypeOrThrow(id: string): ResourceNodeType {
+    const def = this.nodeTypes.get(id)
+    if (!def) throw new Error(`unknown node type '${id}'`)
+    return def
+  }
+
   allItems(): readonly ItemDef[] {
     return [...this.items.values()]
   }
 
   allRecipes(): readonly Recipe[] {
     return [...this.recipes.values()]
+  }
+
+  allSkills(): readonly SkillDef[] {
+    return [...this.skills.values()]
+  }
+
+  allNodeTypes(): readonly ResourceNodeType[] {
+    return [...this.nodeTypes.values()]
   }
 }

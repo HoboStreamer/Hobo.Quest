@@ -47,13 +47,14 @@ const _vel = vec3()
 const _targetRot = quat()
 const _yawQ = quat()
 
-export type PhysgunDeny = 'no_target' | 'not_allowed' | 'zone' | 'already_held'
+export type PhysgunDeny = 'no_target' | 'not_allowed' | 'not_owner' | 'zone' | 'already_held'
 
 export function tryGrab(
   session: PlayerSession,
   world: GameWorld,
   heldByOthers: ReadonlySet<string>,
   eyeOffset: number,
+  canManipulate: (entity: GameEntity) => boolean,
 ): GameEntity | PhysgunDeny {
   eyePosition(session, eyeOffset, _eye)
   viewDirection(session, _dir)
@@ -66,6 +67,7 @@ export function tryGrab(
   if (!def?.world?.physgun) return 'not_allowed'
   if (heldByOthers.has(entity.id)) return 'already_held'
   if (!world.zones.rulesAt(entity.transform.pos).physgun) return 'zone'
+  if (!canManipulate(entity)) return 'not_owner'
 
   const dist = Math.max(hit.fraction * PHYSGUN_MAX_RANGE, PHYSGUN_MIN_DIST)
   // Preserve current orientation relative to the player's view yaw.

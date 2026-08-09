@@ -10,10 +10,12 @@ import type { Inventory } from '../inventory/inventory.js'
 export interface CraftContext {
   /** Workstation kinds within interaction range of the player. */
   nearbyWorkstations: ReadonlySet<string>
+  /** Player skill levels for recipe gates; absent = no gating (tests/tools). */
+  skillLevel?: (skillId: string) => number
 }
 
 export type CraftError =
-  'unknown_recipe' | 'missing_items' | 'missing_workstation' | 'no_output_space'
+  'unknown_recipe' | 'missing_items' | 'missing_workstation' | 'missing_skill' | 'no_output_space'
 
 export function validateCraft(
   content: ContentRegistry,
@@ -25,6 +27,13 @@ export function validateCraft(
   if (!recipe) return err('unknown_recipe')
   if (recipe.workstation && !ctx.nearbyWorkstations.has(recipe.workstation)) {
     return err('missing_workstation')
+  }
+  if (
+    recipe.requiredSkill &&
+    ctx.skillLevel &&
+    ctx.skillLevel(recipe.requiredSkill.skill) < recipe.requiredSkill.level
+  ) {
+    return err('missing_skill')
   }
   if (!inventory.canConsume(recipe.inputs)) return err('missing_items')
   // Space check must account for inputs freeing room: simulate on a copy.

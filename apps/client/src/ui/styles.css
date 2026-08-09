@@ -281,3 +281,80 @@ body {
   color: #8fa0b0;
   font-size: 13px;
 }
+
+#skills-panel {
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 260px;
+}
+
+.skill-row {
+  margin-bottom: 12px;
+}
+
+.skill-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.skill-level {
+  color: #f0b040;
+  font-weight: 700;
+}
+
+.skill-bar {
+  height: 8px;
+  background: #1d242c;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.skill-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2a5a8a, #58a4c4);
+}
+
+.skill-xp {
+  font-size: 11px;
+  color: #8fa0b0;
+  margin-top: 2px;
+}
+
+#players-panel {
+  left: 50%;
+  top: 45%;
+  transform: translate(-50%, -50%);
+  width: 300px;
+}
+
+.hint-line {
+  font-size: 12px;
+  color: #8fa0b0;
+  margin-bottom: 10px;
+}
+
+.player-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #232b33;
+  font-size: 14px;
+}
+
+.trust-btn {
+  background: #2a5a8a;
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.trust-btn.trusted {
+  background: #2d6b45;
+}

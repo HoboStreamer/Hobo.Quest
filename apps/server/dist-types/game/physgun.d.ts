@@ -16,12 +16,13 @@ import { type PlayerSession } from './playerSession.js'
 export declare const PHYSGUN_MAX_RANGE = 8
 export declare const PHYSGUN_MIN_DIST = 1
 export declare const PHYSGUN_MAX_DIST = 10
-export type PhysgunDeny = 'no_target' | 'not_allowed' | 'zone' | 'already_held'
+export type PhysgunDeny = 'no_target' | 'not_allowed' | 'not_owner' | 'zone' | 'already_held'
 export declare function tryGrab(
   session: PlayerSession,
   world: GameWorld,
   heldByOthers: ReadonlySet<string>,
   eyeOffset: number,
+  canManipulate: (entity: GameEntity) => boolean,
 ): GameEntity | PhysgunDeny
 export declare function release(session: PlayerSession): void
 export declare function adjustDistance(session: PlayerSession, delta: number): void

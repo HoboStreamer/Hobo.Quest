@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { ContentRegistry, ITEMS, RECIPES, TEST_WORLD } from '@hobo/content'
+import { createContent } from '@hobo/content'
 import { openSqliteStore } from '@hobo/persistence/sqlite'
 import { createHeadlessHavokWorld } from '@hobo/physics/havok'
 import { createConsoleLogger } from '@hobo/shared'
@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   log.info('starting', { port: config.port, db: config.dbPath })
 
   // Content validates at construction — invalid definitions kill the boot.
-  const content = new ContentRegistry(ITEMS, RECIPES, TEST_WORLD)
+  const content = createContent()
   log.info('content loaded', {
     items: content.allItems().length,
     recipes: content.allRecipes().length,

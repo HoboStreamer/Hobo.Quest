@@ -2,6 +2,10 @@
  * Raw input capture: pointer lock, mouse look, key states, wheel, and
  * edge-triggered action callbacks. Gameplay semantics live elsewhere —
  * this module only reports what the hands are doing.
+ *
+ * Pointer events are bound on `document` (not the canvas): while the
+ * pointer is locked some browsers retarget events inconsistently, and a
+ * document listener sees them regardless.
  */
 export class InputTracker {
   yaw = 0
@@ -19,7 +23,9 @@ export class InputTracker {
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     canvas.addEventListener('click', () => {
-      if (!this.uiCapture && !this.locked) canvas.requestPointerLock()
+      if (!this.uiCapture && !this.locked) {
+        canvas.requestPointerLock()
+      }
     })
     document.addEventListener('pointerlockchange', () => {
       this.locked = document.pointerLockElement === canvas
@@ -44,12 +50,16 @@ export class InputTracker {
       if (e.code === 'KeyR') this.rotateModifier = true
       this.keys.add(e.code)
       const action = KEY_ACTIONS[e.code]
-      if (
-        action &&
-        (!this.uiCapture || action === 'toggle_inventory' || action === 'toggle_craft')
-      ) {
-        e.preventDefault()
-        this.onAction?.({ kind: action })
+      if (action) {
+        const uiToggle =
+          action === 'toggle_inventory' ||
+          action === 'toggle_craft' ||
+          action === 'toggle_skills' ||
+          action === 'toggle_players'
+        if (!this.uiCapture || uiToggle) {
+          e.preventDefault()
+          this.onAction?.({ kind: action })
+        }
       }
       if (e.code === 'Tab') e.preventDefault()
     })
@@ -57,11 +67,11 @@ export class InputTracker {
       if (e.code === 'KeyR') this.rotateModifier = false
       this.keys.delete(e.code)
     })
-    canvas.addEventListener('mousedown', (e) => {
+    document.addEventListener('pointerdown', (e) => {
       if (!this.locked || this.uiCapture) return
       if (e.button === 0) this.onAction?.({ kind: 'primary_down' })
     })
-    canvas.addEventListener('mouseup', (e) => {
+    document.addEventListener('pointerup', (e) => {
       if (e.button === 0) this.onAction?.({ kind: 'primary_up' })
     })
     document.addEventListener(
@@ -90,10 +100,12 @@ export class InputTracker {
 export type InputAction =
   | { kind: 'use' }
   | { kind: 'freeze' }
-  | { kind: 'unfreeze' }
+  | { kind: 'secondary' }
   | { kind: 'place' }
   | { kind: 'toggle_inventory' }
   | { kind: 'toggle_craft' }
+  | { kind: 'toggle_skills' }
+  | { kind: 'toggle_players' }
   | { kind: 'primary_down' }
   | { kind: 'primary_up' }
   | { kind: 'hotbar1' }
@@ -107,10 +119,12 @@ export type InputAction =
 const KEY_ACTIONS: Record<string, Exclude<InputAction, { kind: 'rotate_held' }>['kind']> = {
   KeyE: 'use',
   KeyF: 'freeze',
-  KeyQ: 'unfreeze',
+  KeyQ: 'secondary',
   KeyX: 'place',
   Tab: 'toggle_inventory',
   KeyC: 'toggle_craft',
+  KeyK: 'toggle_skills',
+  KeyP: 'toggle_players',
   Digit1: 'hotbar1',
   Digit2: 'hotbar2',
   Digit3: 'hotbar3',

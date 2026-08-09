@@ -24,6 +24,8 @@ export declare class InteractionController {
   private readonly content
   private readonly connection
   physgunActive: boolean
+  private lastSwingMs
+  private pendingRotate
   constructor(
     physics: PhysicsWorld,
     player: LocalPlayer,
@@ -32,10 +34,15 @@ export declare class InteractionController {
     content: ContentRegistry,
     connection: Connection,
   )
+  equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null
   /** What the crosshair points at right now (client-side, UX only). */
   aim(): AimTarget | null
   handle(action: InputAction): void
+  /** Called once per fixed tick: flush coalesced rotation intent. */
+  flushTick(): void
   onWheel(delta: number): void
+  onHotbarChanged(): void
+  private swing
   private tryPlace
 }
 //# sourceMappingURL=interactionController.d.ts.map

@@ -29,7 +29,7 @@ export type WireEntityKind = 'player' | 'prop' | 'resource'
 export interface WireEntity {
   id: string
   kind: WireEntityKind
-  /** Content definition id (item def for props, resource def for nodes). */
+  /** Content definition id (item def for props, node type for resources). */
   def?: string
   pos: WireVec3
   rot: WireQuat
@@ -37,6 +37,10 @@ export interface WireEntity {
   motion?: 'dynamic' | 'frozen' | 'static'
   /** Player display name, when kind === 'player'. */
   name?: string
+  /** Persistent player id, when kind === 'player' (trust/friends target). */
+  player?: string
+  /** Owning player id, when kind === 'prop' and player-placed (prop protection). */
+  owner?: string
   /** Remaining units, when kind === 'resource'. */
   remaining?: number
 }

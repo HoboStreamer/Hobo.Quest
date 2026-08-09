@@ -20,11 +20,29 @@ Proves every major system cooperates end-to-end (verified by
 - [x] Zone rule system (safe-pad test zone)
 - [x] Structured logs, /metrics, /healthz
 
+## Phase 0.5 — City, skills, tools, protection ✅
+
+- [x] Hoboville world: walled safe city (spawn/plaza/buildings), forest,
+      quarry, scrapyard; city zone forbids PvP/build/physgun
+- [x] Tool system: items carry a `tool` capability; the equipped hotbar item
+      decides primary fire (physgun starter kit, stone axe, stone pickaxe)
+- [x] Gathering professions: typed resource nodes (trees/deposits/piles) with
+      tool gating, hand-gather bootstrap piles, timed respawn (world never
+      runs dry)
+- [x] Skills: woodcutting, mining, scavenging, crafting, construction — XP
+      from gathering/crafting, level-gated recipes, skills UI
+- [x] Building content: walls, floors, beams, metal wall (skill-gated),
+      storage box, campfire — craft, place, physgun-position, freeze
+- [x] Prop protection: placed props are owner-locked; "trust" friends system
+      (persistent, works with offline owners)
+- [x] Physics constraint foundation (weld/lock) — engine + persistence ready,
+      no player-facing tool yet
+
 ## Phase 1 — Sandbox depth
 
-- Constraint system: weld, rope, hinge, slider as data-described constraints
-  between physgun-compatible entities (protocol + persistence for constraint
-  graphs; physics islands sleep as units)
+- Constraint tools: expose weld/rope/hinge/slider on top of the existing
+  constraint layer when a good UX presents itself (physics islands sleep as
+  units)
 - Container entities (crate inventory), item dropping/world pickup
 - Placement ghost preview + surface snapping improvements
 - Prop health/damage; harvesting tools with efficiency

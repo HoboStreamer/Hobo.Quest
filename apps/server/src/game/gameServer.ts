@@ -1,10 +1,12 @@
 import {
   DEFAULT_MOVEMENT,
   Inventory,
+  SkillSet,
   stepMovement,
   type CollisionQueries,
   type GameEntity,
 } from '@hobo/gameplay'
+import { STARTER_ITEMS, recipeSkill, recipeXp } from '@hobo/content'
 import type { PersistenceStore, PlayerDto } from '@hobo/persistence'
 import { CollisionLayer, type BodyId } from '@hobo/physics'
 import {
@@ -30,10 +32,12 @@ import type { ServerConfig } from '../config.js'
 import type { ServerMetrics } from '../observability/metrics.js'
 import type { GameWorld } from './gameWorld.js'
 import {
+  equippedTool,
   handleCraft,
   handleInvMove,
   handlePlace,
   handleUse,
+  handleWeld,
   nearbyWorkstationKinds,
 } from './interactions.js'
 import { adjustDistance, driveHeld, freezeHeld, release, rotateHeld, tryGrab } from './physgun.js'
@@ -58,8 +62,11 @@ const MAX_INPUT_QUEUE = 6
 export class GameServer {
   private readonly sessions = new Map<PlayerId, PlayerSession>()
   private readonly sessionsByConn = new Map<GameConnection, PlayerSession>()
+  private readonly sessionsByEntity = new Map<EntityId, PlayerSession>()
   private readonly playerBodies = new Map<PlayerId, BodyId>()
   private readonly heldEntityIds = new Set<string>()
+  /** Short-lived cache of OFFLINE owners' friend lists (prop protection). */
+  private readonly offlineFriendsCache = new Map<string, { friends: Set<string>; at: number }>()
   private tick = 0
   private readonly moveQueries: CollisionQueries
   private lastFlushTick = 0
@@ -87,6 +94,26 @@ export class GameServer {
     return this.tick
   }
 
+  /**
+   * Prop protection: world props (no owner) are free; otherwise the owner
+   * or anyone the OWNER trusts may manipulate. Works for offline owners via
+   * a TTL-cached repository lookup.
+   */
+  private canManipulate(session: PlayerSession, entity: GameEntity): boolean {
+    if (entity.owner === undefined) return true
+    if (entity.owner === session.playerId) return true
+    const ownerSession = this.sessions.get(entity.owner)
+    if (ownerSession) return ownerSession.friends.has(session.playerId)
+    const cached = this.offlineFriendsCache.get(entity.owner)
+    if (cached && Date.now() - cached.at < 30_000) {
+      return cached.friends.has(session.playerId)
+    }
+    const owner = this.store.players.findById(entity.owner)
+    const friends = new Set(owner?.friends ?? [])
+    this.offlineFriendsCache.set(entity.owner, { friends, at: Date.now() })
+    return friends.has(session.playerId)
+  }
+
   // ── Connection lifecycle ───────────────────────────────────────────
 
   onMessage(conn: GameConnection, msg: ClientMessage): void {
@@ -103,19 +130,61 @@ export class GameServer {
         if (session.inputQueue.length < MAX_INPUT_QUEUE) session.inputQueue.push(msg)
         break
       case 'use': {
-        const { outcome, despawned, targetChanged } = handleUse(session, this.world, msg)
+        // Swing cooldown: silently drop spam faster than ~5 swings/sec.
+        if (this.tick - session.lastUseTick < 6) break
+        const gather = handleUse(session, this.world, msg, Date.now())
+        this.send(session, gather.outcome)
+        if (!gather.outcome.ok) break
+        session.lastUseTick = this.tick
+        this.sendInventory(session)
+        if (gather.xpChanged) this.sendSkills(session)
+        for (const up of gather.levelUps) {
+          this.send(session, { t: 'levelup', skill: up.skill, level: up.level })
+        }
+        if (gather.changed?.resource) {
+          this.broadcastToKnowing(gather.changed.id, {
+            t: 'entity',
+            id: gather.changed.id,
+            remaining: gather.changed.resource.remaining,
+          })
+        }
+        break
+      }
+      case 'trust': {
+        this.handleTrust(session, msg.player, msg.trusted)
+        break
+      }
+      case 'weld': {
+        const { outcome, welded } = handleWeld(session, this.world, msg, (e) =>
+          this.canManipulate(session, e),
+        )
         this.send(session, outcome)
-        if (outcome.ok) this.sendInventory(session)
-        if (despawned) this.broadcastDespawn(msg.target)
-        else if (targetChanged) {
-          const entity = this.world.entities.get(msg.target as EntityId)
-          if (entity?.resource) {
-            this.broadcastToKnowing(entity.id, {
-              t: 'entity',
-              id: entity.id,
-              remaining: entity.resource.remaining,
-            })
-          }
+        if (welded) {
+          this.broadcastAll({ t: 'weld_state', a: welded.a.id, b: welded.b.id, active: true })
+          this.sendSkills(session)
+        }
+        break
+      }
+      case 'unweld': {
+        const tool = equippedTool(session)
+        if (tool?.kind !== 'hammer') {
+          this.send(session, { t: 'result', action: 'unweld', ok: false, error: 'requires_hammer' })
+          break
+        }
+        const target = this.world.entities.get(msg.target as EntityId)
+        if (!target?.prop) {
+          this.send(session, { t: 'result', action: 'unweld', ok: false, error: 'no_target' })
+          break
+        }
+        const removed = this.world.removeWeldsFor(target.id)
+        this.send(session, {
+          t: 'result',
+          action: 'unweld',
+          ok: removed.length > 0,
+          ...(removed.length === 0 ? { error: 'no_welds' } : {}),
+        })
+        for (const weld of removed) {
+          this.broadcastAll({ t: 'weld_state', a: weld.a, b: weld.b, active: false })
         }
         break
       }
@@ -147,7 +216,13 @@ export class GameServer {
         break
       }
       case 'hotbar':
-        if (msg.slot < HOTBAR_SIZE) session.activeHotbar = msg.slot
+        if (msg.slot < HOTBAR_SIZE) {
+          session.activeHotbar = msg.slot
+          // Switching away from the physgun drops anything it was holding.
+          if (session.held && equippedTool(session)?.kind !== 'physgun') {
+            this.releaseHeld(session)
+          }
+        }
         break
       case 'physgun':
         this.handlePhysgun(session, msg)
@@ -160,6 +235,12 @@ export class GameServer {
     if (!session) return
     this.sessionsByConn.delete(conn)
     this.sessions.delete(session.playerId)
+    this.sessionsByEntity.delete(session.entityId)
+    // Keep protection checks fresh once the owner goes offline.
+    this.offlineFriendsCache.set(session.playerId as string, {
+      friends: new Set(session.friends),
+      at: Date.now(),
+    })
     if (session.held) {
       this.heldEntityIds.delete(session.held.entityId)
       session.held = null
@@ -206,6 +287,21 @@ export class GameServer {
     const inventory = existing
       ? Inventory.fromDto(existing.inventory, this.world.content)
       : new Inventory(INVENTORY_SIZE, HOTBAR_SIZE, this.world.content)
+    const skills = existing
+      ? SkillSet.fromDto(existing.skills, this.world.content)
+      : new SkillSet(this.world.content)
+    const friends = new Set(existing?.friends ?? [])
+
+    // Starter kit: every drifter carries a physgun. Also grants it to
+    // players from before the tool system existed.
+    for (const grant of STARTER_ITEMS) {
+      if (inventory.countOf(grant.item) === 0) {
+        const leftover = inventory.add(grant.item, grant.count)
+        if (leftover > 0) {
+          this.log.warn('starter item did not fit', { item: grant.item, playerId })
+        }
+      }
+    }
 
     const session = createSession({
       playerId,
@@ -215,11 +311,16 @@ export class GameServer {
       spawn,
       yaw: existing?.yaw ?? world.spawnYaw,
       inventory,
+      skills,
+      friends,
+      content: this.world.content,
       send: (text) => conn.send(text),
       closeConnection: (code, reason) => conn.close(code, reason),
     })
     this.sessions.set(playerId, session)
     this.sessionsByConn.set(conn, session)
+    this.sessionsByEntity.set(session.entityId, session)
+    this.offlineFriendsCache.delete(playerId as string)
 
     // Player entity (transient — players persist via the player repository).
     const entity: GameEntity = {
@@ -251,6 +352,8 @@ export class GameServer {
       snapshotRate: this.config.tickRate / this.config.snapshotEvery,
     })
     this.sendInventory(session)
+    this.sendSkills(session)
+    this.sendFriends(session)
     this.metrics.sessions = this.sessions.size
     this.log.info('player connected', {
       playerId: playerId as string,
@@ -260,9 +363,21 @@ export class GameServer {
   }
 
   private handlePhysgun(session: PlayerSession, msg: ClientPhysgun): void {
+    // Physgun actions require the physgun in the active hotbar slot.
+    if ((msg.a === 'grab' || msg.a === 'unfreeze') && equippedTool(session)?.kind !== 'physgun') {
+      this.send(session, {
+        t: 'result',
+        action: 'physgun',
+        ok: false,
+        error: 'no_physgun_equipped',
+      })
+      return
+    }
     if (msg.a === 'grab') {
       if (session.held) return
-      const grabbed = tryGrab(session, this.world, this.heldEntityIds, MOVE.eyeOffset)
+      const grabbed = tryGrab(session, this.world, this.heldEntityIds, MOVE.eyeOffset, (e) =>
+        this.canManipulate(session, e),
+      )
       if (typeof grabbed === 'string') {
         this.send(session, { t: 'result', action: 'physgun', ok: false, error: grabbed })
         return
@@ -295,7 +410,18 @@ export class GameServer {
       }
     } else if (msg.a === 'unfreeze') {
       const entity = this.world.entities.get(msg.target as EntityId)
-      if (!entity?.prop || entity.prop.motion !== 'frozen') return
+      if (!entity?.prop || entity.prop.motion !== 'frozen') {
+        this.send(session, { t: 'result', action: 'physgun', ok: false, error: 'no_target' })
+        return
+      }
+      if (!this.world.zones.rulesAt(entity.transform.pos).physgun) {
+        this.send(session, { t: 'result', action: 'physgun', ok: false, error: 'zone' })
+        return
+      }
+      if (!this.canManipulate(session, entity)) {
+        this.send(session, { t: 'result', action: 'physgun', ok: false, error: 'not_owner' })
+        return
+      }
       eyePosition(session, MOVE.eyeOffset, _eyeScratch)
       if (
         Math.hypot(
@@ -304,11 +430,41 @@ export class GameServer {
           entity.transform.pos.z - _eyeScratch.z,
         ) > 10
       ) {
+        this.send(session, { t: 'result', action: 'physgun', ok: false, error: 'out_of_range' })
         return
       }
       this.world.setPropMotion(entity, 'dynamic')
       this.broadcastToKnowing(entity.id, { t: 'entity', id: entity.id, motion: 'dynamic' })
     }
+  }
+
+  private handleTrust(session: PlayerSession, targetId: string, trusted: boolean): void {
+    if (targetId === (session.playerId as string)) {
+      this.send(session, { t: 'result', action: 'trust', ok: false, error: 'self' })
+      return
+    }
+    // Target must be a real player (online or persisted).
+    const online = this.sessions.get(targetId as PlayerId)
+    const known = online ?? this.store.players.findById(targetId)
+    if (!known) {
+      this.send(session, { t: 'result', action: 'trust', ok: false, error: 'unknown_player' })
+      return
+    }
+    if (trusted) session.friends.add(targetId)
+    else session.friends.delete(targetId)
+    session.dirty = true
+    this.send(session, { t: 'result', action: 'trust', ok: true })
+    this.sendFriends(session)
+  }
+
+  private sendFriends(session: PlayerSession): void {
+    const friends: { id: string; name: string }[] = []
+    for (const id of session.friends) {
+      const online = this.sessions.get(id as PlayerId)
+      const name = online?.name ?? this.store.players.findById(id)?.name ?? 'unknown'
+      friends.push({ id, name })
+    }
+    this.send(session, { t: 'friends', friends })
   }
 
   private releaseHeld(session: PlayerSession): void {
@@ -358,22 +514,42 @@ export class GameServer {
     this.metrics.awakeBodies = awake
     this.metrics.settledBodies = settledCount
 
-    // 5. Crafting queues.
+    // 5. Crafting queues (completions grant crafting/construction XP).
     for (const session of this.sessions.values()) {
       const completed = session.craftQueue.update(this.tick, this.world.content, session.inventory)
       if (completed.length > 0) {
         session.dirty = true
         this.sendInventory(session)
         this.sendCraftState(session)
+        for (const recipe of completed) {
+          const ups = session.skills.addXp(recipeSkill(recipe.category), recipeXp(recipe))
+          for (const up of ups) {
+            this.send(session, { t: 'levelup', skill: up.skill, level: up.level })
+          }
+        }
+        this.sendSkills(session)
       }
     }
 
-    // 6. Replication.
+    // 6. Resource respawn sweep (once a second).
+    if (this.tick % this.config.tickRate === 0) {
+      for (const entity of this.world.respawnDueResources(Date.now())) {
+        if (entity.resource) {
+          this.broadcastToKnowing(entity.id, {
+            t: 'entity',
+            id: entity.id,
+            remaining: entity.resource.remaining,
+          })
+        }
+      }
+    }
+
+    // 7. Replication.
     if (this.tick % this.config.snapshotEvery === 0) {
       this.replicate()
     }
 
-    // 7. Periodic persistence flush.
+    // 8. Periodic persistence flush.
     if (this.tick - this.lastFlushTick >= this.config.persistFlushSeconds * this.config.tickRate) {
       this.lastFlushTick = this.tick
       this.flush()
@@ -425,7 +601,15 @@ export class GameServer {
       if (diff.entered.length > 0) {
         this.send(session, {
           t: 'spawn',
-          entities: diff.entered.map((e) => wireEntityFor(this.world, e)),
+          entities: diff.entered.map((e) => {
+            const wire = wireEntityFor(this.world, e)
+            const owner = this.sessionsByEntity.get(e.id)
+            if (owner) {
+              wire.name = owner.name
+              wire.player = owner.playerId as string
+            }
+            return wire
+          }),
         })
       }
       if (diff.left.length > 0) {
@@ -476,6 +660,8 @@ export class GameServer {
       pos: [pos.x, pos.y, pos.z],
       yaw: session.yaw,
       inventory: session.inventory.toDto(),
+      skills: session.skills.toDto(),
+      friends: [...session.friends],
       updatedAt: Date.now(),
     }
   }
@@ -510,6 +696,10 @@ export class GameServer {
       },
       activeHotbar: session.activeHotbar,
     })
+  }
+
+  private sendSkills(session: PlayerSession): void {
+    this.send(session, { t: 'skills', skills: session.skills.all() })
   }
 
   private sendCraftState(session: PlayerSession): void {

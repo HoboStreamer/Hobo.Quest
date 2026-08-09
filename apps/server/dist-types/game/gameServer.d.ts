@@ -18,8 +18,11 @@ export declare class GameServer {
   private readonly log
   private readonly sessions
   private readonly sessionsByConn
+  private readonly sessionsByEntity
   private readonly playerBodies
   private readonly heldEntityIds
+  /** Short-lived cache of OFFLINE owners' friend lists (prop protection). */
+  private readonly offlineFriendsCache
   private tick
   private readonly moveQueries
   private lastFlushTick
@@ -31,10 +34,18 @@ export declare class GameServer {
     log: Logger,
   )
   get currentTick(): number
+  /**
+   * Prop protection: world props (no owner) are free; otherwise the owner
+   * or anyone the OWNER trusts may manipulate. Works for offline owners via
+   * a TTL-cached repository lookup.
+   */
+  private canManipulate
   onMessage(conn: GameConnection, msg: ClientMessage): void
   onDisconnect(conn: GameConnection): void
   private handleHello
   private handlePhysgun
+  private handleTrust
+  private sendFriends
   private releaseHeld
   step(): void
   private stepSessionMovement
@@ -47,6 +58,7 @@ export declare class GameServer {
   private send
   private sendRaw
   private sendInventory
+  private sendSkills
   private sendCraftState
   private broadcastAll
   private broadcastSpawn

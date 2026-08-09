@@ -21,6 +21,10 @@ export declare class Hud {
   private moveSrc
   inventoryOpen: boolean
   craftOpen: boolean
+  skillsOpen: boolean
+  playersOpen: boolean
+  private skillsPanel
+  private playersPanel
   onUiCaptureChange: ((captured: boolean) => void) | null
   constructor(
     root: HTMLElement,
@@ -32,8 +36,13 @@ export declare class Hud {
   private byId
   toggleInventory(): void
   toggleCraft(): void
+  toggleSkills(): void
+  togglePlayers(): void
   closeAll(): void
   private updateCapture
+  /** Online players + persistent trusted list, with trust toggles. */
+  renderPlayers(): void
+  renderSkills(): void
   setPrompt(text: string | null): void
   setStatus(text: string): void
   toast(text: string, isError?: boolean): void

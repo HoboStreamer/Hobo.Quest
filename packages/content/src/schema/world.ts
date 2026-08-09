@@ -19,13 +19,10 @@ export const StaticBodySchema = z.object({
 })
 
 export const ResourceNodeSpawnSchema = z.object({
-  /** Which item gathering yields. */
-  item: z.string(),
+  /** Resource node type id (see ResourceNodeTypeSchema). */
+  node: z.string(),
+  /** Ground position; the node type defines body shape/offset. */
   pos: vec3,
-  /** Total units gatherable before the node despawns. */
-  amount: z.number().int().positive(),
-  /** Units per interaction. */
-  perUse: z.number().int().positive().default(1),
 })
 
 export const PropSpawnSchema = z.object({

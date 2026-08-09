@@ -3,6 +3,8 @@ import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { Quaternion } from '@babylonjs/core/Maths/math.vector.js'
 import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder.js'
 import { CreateCapsule } from '@babylonjs/core/Meshes/Builders/capsuleBuilder.js'
+import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
+import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
@@ -88,17 +90,19 @@ export class EntityView {
         mesh = CreateBox(`prop:${e.id}`, { size: 0.5 }, this.scene)
       }
     } else {
-      // Resource node: a low rubble pile, color hinted by the item it yields.
-      mesh = CreateBox(`res:${e.id}`, { width: 0.9, height: 0.5, depth: 0.9 }, this.scene)
-      const color = e.def === 'wood_plank' ? '#8a6a3a' : '#6a7a85'
-      mesh.material = materialFor(this.scene, color)
+      // Resource node: visual archetype + collision body from the node type.
+      const nodeType = this.content.nodeType(e.def ?? '')
+      mesh = buildNodeVisual(this.scene, e.id, nodeType?.visual ?? 'scrap')
       bodyId = this.physics.addBody({
-        shape: { type: 'box', size: [0.9, 0.5, 0.9] },
+        shape: nodeType
+          ? toPhysicsShape(nodeType.bodyShape)
+          : { type: 'box', size: [0.8, 0.5, 0.8] },
         motion: 'static',
-        pos: vec3(e.pos[0], e.pos[1], e.pos[2]),
+        pos: vec3(e.pos[0], e.pos[1] + (nodeType?.bodyOffsetY ?? 0.4), e.pos[2]),
         layer: CollisionLayer.Prop,
         collidesWith: CollisionLayer.Player,
       })
+      setDepletedLook(mesh, (e.remaining ?? 1) <= 0)
     }
     mesh.position.set(e.pos[0], e.pos[1], e.pos[2])
     mesh.rotationQuaternion = new Quaternion(e.rot[0], e.rot[1], e.rot[2], e.rot[3])
@@ -110,6 +114,7 @@ export class EntityView {
   private remove(id: string): void {
     const v = this.visuals.get(id)
     if (!v) return
+    for (const child of v.mesh.getChildMeshes()) child.dispose()
     v.mesh.dispose()
     if (v.bodyId !== null) {
       this.physics.removeBody(v.bodyId)
@@ -118,10 +123,14 @@ export class EntityView {
     this.visuals.delete(id)
   }
 
-  /** Authoritative transform pin (freeze/settle/unfreeze corrections). */
+  /** Authoritative pin: freeze/settle transforms, resource depletion state. */
   private applyAuthoritative(e: WireEntity): void {
     const v = this.visuals.get(e.id)
     if (!v) return
+    if (e.kind === 'resource') {
+      setDepletedLook(v.mesh, (e.remaining ?? 0) <= 0)
+      return
+    }
     v.buffer.length = 0
     v.mesh.position.set(e.pos[0], e.pos[1], e.pos[2])
     v.mesh.rotationQuaternion?.set(e.rot[0], e.rot[1], e.rot[2], e.rot[3])
@@ -192,6 +201,84 @@ export class EntityView {
 
 const HELD_GLOW = new Color3(0.25, 0.35, 0.5)
 const NO_GLOW = new Color3(0, 0, 0)
+
+/** Placeholder archetype visuals for resource nodes (root mesh at ground pos). */
+function buildNodeVisual(
+  scene: Scene,
+  id: string,
+  visual: 'tree' | 'rock' | 'scrap' | 'branches' | 'stones',
+): Mesh {
+  switch (visual) {
+    case 'tree': {
+      const trunk = CreateCylinder(`res:${id}`, { diameter: 0.6, height: 3.2 }, scene)
+      trunk.position.y = 1.6
+      trunk.material = materialFor(scene, '#6d4c2a')
+      const canopy = CreateSphere(`res:${id}:canopy`, { diameter: 2.8, segments: 8 }, scene)
+      canopy.material = materialFor(scene, '#3e6b34')
+      canopy.parent = trunk
+      canopy.position.y = 1.9
+      // Root wrapper so entity position = ground point.
+      const root = CreateBox(`res:${id}:root`, { size: 0.01 }, scene)
+      root.isVisible = false
+      trunk.parent = root
+      return root
+    }
+    case 'rock': {
+      const rock = CreateBox(`res:${id}`, { width: 1.4, height: 1.1, depth: 1.4 }, scene)
+      rock.position.y = 0.55
+      rock.rotation.y = hashAngle(id)
+      rock.material = materialFor(scene, '#7b7f83')
+      const root = CreateBox(`res:${id}:root`, { size: 0.01 }, scene)
+      root.isVisible = false
+      rock.parent = root
+      return root
+    }
+    case 'scrap': {
+      const pile = CreateBox(`res:${id}`, { width: 0.9, height: 0.5, depth: 0.9 }, scene)
+      pile.position.y = 0.25
+      pile.rotation.y = hashAngle(id)
+      pile.material = materialFor(scene, '#5e6a70')
+      const root = CreateBox(`res:${id}:root`, { size: 0.01 }, scene)
+      root.isVisible = false
+      pile.parent = root
+      return root
+    }
+    case 'branches': {
+      const pile = CreateBox(`res:${id}`, { width: 0.85, height: 0.3, depth: 0.85 }, scene)
+      pile.position.y = 0.15
+      pile.rotation.y = hashAngle(id)
+      pile.material = materialFor(scene, '#7a5a34')
+      const root = CreateBox(`res:${id}:root`, { size: 0.01 }, scene)
+      root.isVisible = false
+      pile.parent = root
+      return root
+    }
+    case 'stones': {
+      const pile = CreateBox(`res:${id}`, { width: 0.7, height: 0.28, depth: 0.7 }, scene)
+      pile.position.y = 0.14
+      pile.rotation.y = hashAngle(id)
+      pile.material = materialFor(scene, '#8a8d90')
+      const root = CreateBox(`res:${id}:root`, { size: 0.01 }, scene)
+      root.isVisible = false
+      pile.parent = root
+      return root
+    }
+  }
+}
+
+/** Deterministic pseudo-random yaw so identical piles don't look cloned. */
+function hashAngle(id: string): number {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
+  return (h % 628) / 100
+}
+
+function setDepletedLook(root: Mesh, depleted: boolean): void {
+  const value = depleted ? 0.3 : 1
+  for (const child of root.getChildMeshes()) {
+    ;(child as Mesh).visibility = value
+  }
+}
 
 function pushSample(buffer: InterpSample[], sample: InterpSample): void {
   buffer.push(sample)

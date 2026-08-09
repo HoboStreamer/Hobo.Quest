@@ -8,12 +8,20 @@ import type { InputAction } from '../input/inputTracker.js'
 import type { LocalPlayer } from './localPlayer.js'
 
 /**
- * Turns raw input actions into protocol intents, using client-side rays
- * only for UX (what is under the crosshair) — every action is re-validated
- * by the server against its own authoritative state.
+ * Turns raw input into protocol intents based on the EQUIPPED TOOL — the
+ * client-side half of the tool system. Client rays exist only for UX
+ * (prompts, target picking); the server re-validates everything.
+ *
+ * Primary fire by equipped tool:
+ *   physgun — hold to grab, wheel push/pull, R+mouse rotate, F freeze
+ *   axe/pickaxe — swing at the aimed resource node
+ *   bare hands — gather hand-gatherable nodes (same as E)
+ *
+ * Building = craft pieces, place them, position with the physgun, freeze.
  */
 
 const AIM_RANGE = 8
+const SWING_COOLDOWN_MS = 350
 const _eye = vec3()
 const _dir = vec3()
 const _to = vec3()
@@ -28,6 +36,8 @@ export interface AimTarget {
 
 export class InteractionController {
   physgunActive = false
+  private lastSwingMs = 0
+  private pendingRotate = { dyaw: 0, dpitch: 0 }
 
   constructor(
     private readonly physics: PhysicsWorld,
@@ -37,6 +47,12 @@ export class InteractionController {
     private readonly content: ContentRegistry,
     private readonly connection: Connection,
   ) {}
+
+  equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null {
+    const defId = this.state.activeItemDef()
+    if (!defId) return null
+    return this.content.item(defId)?.tool?.kind ?? null
+  }
 
   /** What the crosshair points at right now (client-side, UX only). */
   aim(): AimTarget | null {
@@ -61,6 +77,7 @@ export class InteractionController {
   }
 
   handle(action: InputAction): void {
+    const tool = this.equippedToolKind()
     switch (action.kind) {
       case 'use': {
         const target = this.aim()
@@ -70,8 +87,12 @@ export class InteractionController {
         break
       }
       case 'primary_down': {
-        this.connection.send({ t: 'physgun', a: 'grab' })
-        this.physgunActive = true
+        if (tool === 'physgun') {
+          this.connection.send({ t: 'physgun', a: 'grab' })
+          this.physgunActive = true
+        } else {
+          this.swing()
+        }
         break
       }
       case 'primary_up': {
@@ -82,23 +103,26 @@ export class InteractionController {
         break
       }
       case 'freeze':
-        this.connection.send({ t: 'physgun', a: 'freeze' })
-        this.physgunActive = false
+        if (tool === 'physgun' && this.physgunActive) {
+          this.connection.send({ t: 'physgun', a: 'freeze' })
+          this.physgunActive = false
+        }
         break
-      case 'unfreeze': {
-        const target = this.aim()
-        if (target?.kind === 'prop' && target.frozen) {
-          this.connection.send({ t: 'physgun', a: 'unfreeze', target: target.entityId })
+      case 'secondary': {
+        // Q: unfreeze the aimed frozen prop (physgun equipped).
+        if (tool === 'physgun') {
+          const target = this.aim()
+          if (target?.kind === 'prop' && target.frozen) {
+            this.connection.send({ t: 'physgun', a: 'unfreeze', target: target.entityId })
+          }
         }
         break
       }
       case 'rotate_held':
-        this.connection.send({
-          t: 'physgun',
-          a: 'rotate',
-          dyaw: clampRot(action.dyaw),
-          dpitch: clampRot(action.dpitch),
-        })
+        // Coalesced: high-frequency mouse deltas must not become one wire
+        // message each (rate limiter would kill the connection).
+        this.pendingRotate.dyaw += action.dyaw
+        this.pendingRotate.dpitch += action.dpitch
         break
       case 'place':
         this.tryPlace()
@@ -108,10 +132,40 @@ export class InteractionController {
     }
   }
 
+  /** Called once per fixed tick: flush coalesced rotation intent. */
+  flushTick(): void {
+    const { dyaw, dpitch } = this.pendingRotate
+    if (this.physgunActive && (dyaw !== 0 || dpitch !== 0)) {
+      this.connection.send({
+        t: 'physgun',
+        a: 'rotate',
+        dyaw: clampRot(dyaw),
+        dpitch: clampRot(dpitch),
+      })
+    }
+    this.pendingRotate.dyaw = 0
+    this.pendingRotate.dpitch = 0
+  }
+
   onWheel(delta: number): void {
     if (this.physgunActive) {
       this.connection.send({ t: 'physgun', a: 'adjust', dist: -delta * 0.5 })
     }
+  }
+
+  onHotbarChanged(): void {
+    if (this.physgunActive && this.equippedToolKind() !== 'physgun') {
+      this.physgunActive = false
+    }
+  }
+
+  private swing(): void {
+    const now = performance.now()
+    if (now - this.lastSwingMs < SWING_COOLDOWN_MS) return
+    const target = this.aim()
+    if (target?.kind !== 'resource') return
+    this.lastSwingMs = now
+    this.connection.send({ t: 'use', target: target.entityId })
   }
 
   private tryPlace(): void {

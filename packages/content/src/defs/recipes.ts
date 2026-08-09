@@ -1,6 +1,117 @@
 import type { Recipe } from '../schema/recipe.js'
 
 export const RECIPES: Recipe[] = [
+  // ── Processing ─────────────────────────────────────────────────────
+  {
+    id: 'craft_planks',
+    name: 'Wood Planks',
+    category: 'processing',
+    inputs: [{ item: 'wood_log', count: 1 }],
+    outputs: [{ item: 'wood_plank', count: 4 }],
+    craftSeconds: 1,
+  },
+  {
+    id: 'craft_rope',
+    name: 'Rope',
+    category: 'processing',
+    inputs: [{ item: 'scrap_metal', count: 1 }],
+    outputs: [{ item: 'rope', count: 2 }],
+    craftSeconds: 1,
+  },
+  {
+    id: 'craft_sheet_metal',
+    name: 'Sheet Metal',
+    category: 'processing',
+    inputs: [{ item: 'scrap_metal', count: 3 }],
+    outputs: [{ item: 'sheet_metal', count: 1 }],
+    craftSeconds: 2,
+    workstation: 'workbench',
+  },
+
+  // ── Tools ──────────────────────────────────────────────────────────
+  {
+    id: 'craft_stone_axe',
+    name: 'Stone Axe',
+    category: 'tools',
+    inputs: [
+      { item: 'wood_plank', count: 2 },
+      { item: 'stone', count: 2 },
+    ],
+    outputs: [{ item: 'stone_axe', count: 1 }],
+    craftSeconds: 3,
+  },
+  {
+    id: 'craft_stone_pickaxe',
+    name: 'Stone Pickaxe',
+    category: 'tools',
+    inputs: [
+      { item: 'wood_plank', count: 2 },
+      { item: 'stone', count: 3 },
+    ],
+    outputs: [{ item: 'stone_pickaxe', count: 1 }],
+    craftSeconds: 3,
+  },
+
+  // ── Construction ───────────────────────────────────────────────────
+  {
+    id: 'craft_wooden_wall',
+    name: 'Wooden Wall',
+    category: 'construction',
+    inputs: [{ item: 'wood_plank', count: 6 }],
+    outputs: [{ item: 'wooden_wall', count: 1 }],
+    craftSeconds: 3,
+  },
+  {
+    id: 'craft_wooden_floor',
+    name: 'Wooden Floor',
+    category: 'construction',
+    inputs: [{ item: 'wood_plank', count: 5 }],
+    outputs: [{ item: 'wooden_floor', count: 1 }],
+    craftSeconds: 3,
+  },
+  {
+    id: 'craft_wooden_beam',
+    name: 'Wooden Beam',
+    category: 'construction',
+    inputs: [{ item: 'wood_plank', count: 2 }],
+    outputs: [{ item: 'wooden_beam', count: 1 }],
+    craftSeconds: 1,
+  },
+  {
+    id: 'craft_metal_wall',
+    name: 'Metal Wall',
+    category: 'construction',
+    inputs: [
+      { item: 'sheet_metal', count: 4 },
+      { item: 'wooden_beam', count: 2 },
+    ],
+    outputs: [{ item: 'metal_wall', count: 1 }],
+    craftSeconds: 5,
+    workstation: 'workbench',
+    requiredSkill: { skill: 'construction', level: 3 },
+  },
+  {
+    id: 'craft_storage_box',
+    name: 'Storage Box',
+    category: 'construction',
+    inputs: [
+      { item: 'wood_plank', count: 8 },
+      { item: 'rope', count: 1 },
+    ],
+    outputs: [{ item: 'storage_box', count: 1 }],
+    craftSeconds: 4,
+  },
+  {
+    id: 'craft_campfire',
+    name: 'Campfire',
+    category: 'construction',
+    inputs: [
+      { item: 'wood_log', count: 3 },
+      { item: 'stone', count: 4 },
+    ],
+    outputs: [{ item: 'campfire', count: 1 }],
+    craftSeconds: 2,
+  },
   {
     id: 'craft_wooden_crate',
     name: 'Wooden Crate',
@@ -11,14 +122,6 @@ export const RECIPES: Recipe[] = [
     ],
     outputs: [{ item: 'wooden_crate', count: 1 }],
     craftSeconds: 2,
-  },
-  {
-    id: 'craft_rope',
-    name: 'Rope',
-    category: 'processing',
-    inputs: [{ item: 'scrap_metal', count: 1 }],
-    outputs: [{ item: 'rope', count: 2 }],
-    craftSeconds: 1,
   },
   {
     id: 'craft_workbench',
@@ -42,3 +145,12 @@ export const RECIPES: Recipe[] = [
     workstation: 'workbench',
   },
 ]
+
+/** Skill credited for crafting a recipe (XP scales with craft time). */
+export function recipeSkill(category: Recipe['category']): string {
+  return category === 'construction' ? 'construction' : 'crafting'
+}
+
+export function recipeXp(recipe: Recipe): number {
+  return 5 + Math.round(recipe.craftSeconds * 4)
+}

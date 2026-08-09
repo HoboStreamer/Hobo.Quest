@@ -36,6 +36,7 @@ export const ItemDefSchema = z.object({
     'resource',
     'tool',
     'placeable',
+    'building',
     'food',
     'seed',
     'component',
@@ -72,6 +73,22 @@ export const ItemDefSchema = z.object({
       /** Recipes may require one of these station kinds. */
       kind: z.string().regex(/^[a-z0-9_]+$/),
       range: z.number().positive().default(3),
+    })
+    .optional(),
+
+  /**
+   * Present iff the item is a usable hand tool. The equipped hotbar item's
+   * tool capability decides what primary fire does (physgun beam, harvest
+   * swing, weld). Combat weapons will be a sibling capability, not a
+   * special case of this one.
+   */
+  tool: z
+    .object({
+      kind: z.enum(['physgun', 'axe', 'pickaxe', 'hammer']),
+      /** Harvest units per swing (multiplies node perUse). */
+      power: z.number().int().positive().default(1),
+      /** Use range in meters. */
+      range: z.number().positive().default(4),
     })
     .optional(),
 })
