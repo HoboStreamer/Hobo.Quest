@@ -37,9 +37,9 @@ import { eyePosition, viewDirection, type PlayerSession } from './playerSession.
 export const PHYSGUN_MAX_RANGE = 25
 export const PHYSGUN_MIN_DIST = 1
 export const PHYSGUN_MAX_DIST = 25
-const LINEAR_GAIN = 12
-const ANGULAR_GAIN = 8
-const MAX_DRIVE_SPEED = 25
+const LINEAR_GAIN = 22
+const ANGULAR_GAIN = 12
+const MAX_DRIVE_SPEED = 45
 const DEFAULT_SNAP_STEP = Math.PI / 12 // 15°
 
 const _eye = vec3()

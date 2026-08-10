@@ -251,6 +251,20 @@ class TestClient {
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
 
+/** YXZ euler decomposition matching @hobo/shared qtoEulerYXZ. */
+function quatToEulerYXZ(q: [number, number, number, number]): {
+  pitch: number
+  yaw: number
+  roll: number
+} {
+  const [x, y, z, w] = q
+  return {
+    pitch: Math.asin(Math.max(-1, Math.min(1, 2 * (w * x - y * z)))),
+    yaw: Math.atan2(2 * (x * z + w * y), 1 - 2 * (x * x + y * y)),
+    roll: Math.atan2(2 * (x * y + w * z), 1 - 2 * (x * x + z * z)),
+  }
+}
+
 function assert(cond: unknown, label: string): asserts cond {
   if (!cond) throw new Error(`ASSERT FAILED: ${label}`)
   console.log(`  ok: ${label}`)
@@ -401,6 +415,38 @@ async function main(): Promise<void> {
     while (a.heldTarget !== crate.id && Date.now() - start < 5000) await sleep(60)
   }
   assert(a.heldTarget === crate.id, 'sweeping the beam onto a prop picks it up')
+  console.log('phase: Shift+E world-angle rotation snap')
+  // Still holding the crate from the sweep phase: send snapped rotates and
+  // verify the replicated orientation lands on the angle grid.
+  {
+    // Lift the crate off the ground first — ground friction fights the
+    // final degrees of rotation and masks the snap.
+    const meNow = a.me as WirePlayerState
+    const crateNow = a.entities.get(crate.id) as WireEntity
+    const liftYaw = Math.atan2(crateNow.pos[0] - meNow.pos[0], crateNow.pos[2] - meNow.pos[2])
+    for (let i = 0; i < 15; i++) {
+      a.input(0, 0, liftYaw, 0, 0.55)
+      await sleep(33)
+    }
+    const step = Math.PI / 6 // 30 deg
+    for (let i = 0; i < 12; i++) {
+      a.send({ t: 'physgun', a: 'rotate', dyaw: 0.09, dpitch: 0.05, snap: true, snapStep: step })
+      await sleep(40)
+    }
+    await sleep(900) // let the drive converge on the snapped target
+    const rot = a.entities.get(crate.id)?.rot
+    assert(rot, 'held crate still replicated')
+    const angles = quatToEulerYXZ(rot)
+    const offGrid = (angle: number) => {
+      const k = angle / step
+      return Math.abs(k - Math.round(k))
+    }
+    const worst = Math.max(offGrid(angles.yaw), offGrid(angles.pitch), offGrid(angles.roll))
+    assert(
+      worst < 0.12,
+      `snapped rotation sits on the 30-degree grid (worst offset ${(worst * 30).toFixed(1)} deg)`,
+    )
+  }
   a.send({ t: 'physgun', a: 'release' })
   await sleep(200)
 

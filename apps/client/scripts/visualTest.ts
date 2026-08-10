@@ -229,6 +229,77 @@ async function main(): Promise<void> {
   await page.mouse.up()
   await page.waitForTimeout(400)
 
+  // Shift+E snap: re-grab the frozen crate (unfreezes), hold Shift+E and
+  // drag — the FULL client input path must land the prop on the 15° grid.
+  await page.mouse.down()
+  await page.waitForTimeout(600)
+  // Lift the crate off the ground (friction fights the last few degrees).
+  await page.evaluate(() => {
+    ;(window as unknown as { __hobo: { input: { pitch: number } } }).__hobo.input.pitch = 0.45
+  })
+  await page.waitForTimeout(800)
+  await page.keyboard.down('KeyE')
+  await page.keyboard.down('ShiftLeft')
+  for (let i = 0; i < 10; i++) {
+    await page.evaluate(() => {
+      document.dispatchEvent(
+        new PointerEvent('pointermove', { movementX: 25, movementY: 12, buttons: 1 }),
+      )
+    })
+    await page.waitForTimeout(50)
+  }
+  await page.waitForTimeout(900)
+  const snapCheck = await page.evaluate(() => {
+    const w = (
+      window as unknown as {
+        __hobo: {
+          state: {
+            heldBy: Map<string, string>
+            entities: Map<string, { rot: [number, number, number, number] }>
+          }
+        }
+      }
+    ).__hobo
+    const target = [...w.state.heldBy.keys()][0]
+    const rot = target ? w.state.entities.get(target)?.rot : undefined
+    if (!rot) return { held: w.state.heldBy.size, worst: -1 }
+    const [x, y, z, qw] = rot
+    const step = Math.PI / 12 // 15° default snap
+    const angles = [
+      Math.asin(Math.max(-1, Math.min(1, 2 * (qw * x - y * z)))),
+      Math.atan2(2 * (x * z + qw * y), 1 - 2 * (x * x + y * y)),
+      Math.atan2(2 * (x * y + qw * z), 1 - 2 * (x * x + z * z)),
+    ]
+    const worst = Math.max(...angles.map((a) => Math.abs(a / step - Math.round(a / step))))
+    return { held: w.state.heldBy.size, worst }
+  })
+  console.log(
+    `  Shift+E snap: held=${snapCheck.held} worst grid offset=${(snapCheck.worst * 15).toFixed(2)} deg`,
+  )
+  if (snapCheck.held !== 1 || snapCheck.worst < 0 || snapCheck.worst > 0.15) {
+    throw new Error(`Shift+E snap failed: ${JSON.stringify(snapCheck)}`)
+  }
+  await page.keyboard.up('ShiftLeft')
+  await page.keyboard.up('KeyE')
+  await page.mouse.up()
+  await page.waitForTimeout(300)
+
+  // Equipment tab: physgun settings panel must render for the equipped tool.
+  await page.keyboard.press('Tab')
+  await page.waitForTimeout(300)
+  await page.click('text=Equipment')
+  await page.waitForTimeout(300)
+  const equipText = await page.evaluate(
+    () => document.querySelector('.menu-body')?.textContent ?? '',
+  )
+  await shot(page, '08c-menu-equipment')
+  if (!equipText.includes('Grid size') || !equipText.includes('Rotation snap')) {
+    throw new Error(`Equipment tab missing physgun panel: "${equipText.slice(0, 120)}"`)
+  }
+  console.log('  Equipment tab renders physgun settings')
+  await page.keyboard.press('Tab')
+  await page.waitForTimeout(300)
+
   // Beam fires even at nothing: aim at the sky, hold LMB, expect the dim
   // searching ray from the muzzle (GMod always-on beam).
   await page.evaluate(() => {
