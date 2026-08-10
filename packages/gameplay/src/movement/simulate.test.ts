@@ -243,3 +243,40 @@ describe('stances', () => {
     expect(hullHeightFor(s.stance)).toBe(1.2)
   })
 })
+
+describe('noclip', () => {
+  const fly = (input: Partial<MoveInput>, ticks = 60) => {
+    const state = createMoveState(vec3(0, 5, 0))
+    state.noclip = true
+    const world = makeWorld()
+    const full: MoveInput = { moveX: 0, moveZ: 0, yaw: 0, pitch: 0, buttons: 0, ...input }
+    for (let i = 0; i < ticks; i++) stepMovement(state, full, P, world, DT)
+    return state
+  }
+
+  it('flies where you look: pitch UP + forward gains height', () => {
+    const s = fly({ moveZ: 1, pitch: 0.8 })
+    expect(s.pos.y).toBeGreaterThan(6)
+    expect(s.pos.z).toBeGreaterThan(1)
+  })
+
+  it('flies where you look: pitch DOWN + forward loses height', () => {
+    const s = fly({ moveZ: 1, pitch: -0.8 })
+    expect(s.pos.y).toBeLessThan(4)
+  })
+
+  it('jump rises, crouch sinks, no gravity when idle', () => {
+    expect(fly({ buttons: Buttons.Jump }).pos.y).toBeGreaterThan(6)
+    expect(fly({ buttons: Buttons.Crouch }).pos.y).toBeLessThan(4)
+    expect(Math.abs(fly({}).pos.y - 5)).toBeLessThan(0.01)
+  })
+
+  it('passes through walls', () => {
+    const state = createMoveState(vec3(0, 1, 0))
+    state.noclip = true
+    const world = makeWorld(2) // wall at x=2
+    for (let i = 0; i < 90; i++)
+      stepMovement(state, { moveX: 1, moveZ: 0, yaw: 0, pitch: 0, buttons: 0 }, P, world, DT)
+    expect(state.pos.x).toBeGreaterThan(3)
+  })
+})

@@ -10,7 +10,7 @@
  * Run: tsx apps/server/scripts/sliceTest.ts
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import WebSocket from 'ws'
@@ -27,6 +27,7 @@ import {
   type WirePlayerState,
   type WireSkill,
 } from '@hobo/protocol'
+import { encodeHeights } from '@hobo/content'
 
 const PORT = 18123
 const URL = `ws://127.0.0.1:${PORT}/ws`
@@ -36,9 +37,43 @@ const dbPath = join(dir, 'world.db')
 let server: ChildProcess | null = null
 
 function startServer(): Promise<void> {
+  // The world ships blank (map-editor era) — the slice provides a fixture
+  // map with the resource nodes its gameplay phases depend on.
+  const FIX_SUB = 32
+  const flat = new Float32Array((FIX_SUB + 1) * (FIX_SUB + 1))
+  const fixtureMap = {
+    v: 1,
+    halfExtent: 64,
+    sub: FIX_SUB,
+    heights: encodeHeights(flat),
+    statics: [],
+    nodes: [
+      { node: 'oak_tree', pos: [24, 0, 24] },
+      { node: 'branch_pile', pos: [-24, 0, 2] },
+      { node: 'loose_stones', pos: [-24, 0, -2] },
+      { node: 'scrap_pile', pos: [-28, 0, 4] },
+      { node: 'berry_bush', pos: [22, 0, 18] },
+    ],
+    props: [
+      { item: 'merchant_stall', pos: [12, 0.6, 12.8], yaw: 3.14 },
+      { item: 'wooden_crate', pos: [2, 1.0, 25], yaw: 0.3 },
+      { item: 'wooden_crate', pos: [2.2, 1.8, 25.1], yaw: 0.9 },
+      { item: 'wooden_crate', pos: [-2, 1.0, 27], yaw: 0.1 },
+      { item: 'metal_barrel', pos: [-1, 1.0, 24], yaw: 0 },
+      { item: 'metal_barrel', pos: [-4, 1.0, 29], yaw: 0 },
+    ],
+  }
+  const mapPath = join(tmpdir(), `hq-slice-map-${Date.now()}.json`)
+  writeFileSync(mapPath, JSON.stringify(fixtureMap))
   return new Promise((resolvePromise, reject) => {
     server = spawn(process.execPath, ['--import', 'tsx', 'apps/server/src/main.ts'], {
-      env: { ...process.env, PORT: String(PORT), DB_PATH: dbPath, GUEST_IP_BINDING: 'off' },
+      env: {
+        ...process.env,
+        PORT: String(PORT),
+        DB_PATH: dbPath,
+        GUEST_IP_BINDING: 'off',
+        MAP_PATH: mapPath,
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const timer = setTimeout(() => reject(new Error('server did not start')), 30000)
@@ -305,6 +340,12 @@ function assert(cond: unknown, label: string): asserts cond {
 /** Sprint toward a target position by sending real inputs. */
 async function walkTo(c: TestClient, x: number, z: number, maxMs = 40000): Promise<void> {
   const start = Date.now()
+  // Obstacle shimmy: props litter the flat map now — when distance stops
+  // improving, strafe + hop for a moment to slide around whatever we hit.
+  let bestDist = Infinity
+  let bestAt = Date.now()
+  let shimmyUntil = 0
+  let shimmyDir = 1
   while (Date.now() - start < maxMs) {
     const me = c.me
     if (!me) {
@@ -313,9 +354,19 @@ async function walkTo(c: TestClient, x: number, z: number, maxMs = 40000): Promi
     }
     const dx = x - me.pos[0]
     const dz = z - me.pos[2]
-    if (Math.hypot(dx, dz) < 1.4) return
+    const dist = Math.hypot(dx, dz)
+    if (dist < 1.4) return
+    if (dist < bestDist - 0.2) {
+      bestDist = dist
+      bestAt = Date.now()
+    } else if (Date.now() - bestAt > 2500 && Date.now() > shimmyUntil) {
+      shimmyUntil = Date.now() + 800
+      shimmyDir = -shimmyDir
+      bestAt = Date.now()
+    }
     const yaw = Math.atan2(dx, dz)
-    c.input(0, 1, yaw, SPRINT)
+    if (Date.now() < shimmyUntil) c.input(shimmyDir, 0.4, yaw, SPRINT | 1)
+    else c.input(0, 1, yaw, SPRINT)
     if (Date.now() - start > 8000 && Math.floor((Date.now() - start) / 1000) % 3 === 0) {
       console.log('  walkTo stuck?', JSON.stringify(me.pos), 'vel', JSON.stringify(me.vel))
     }
@@ -751,9 +802,10 @@ async function main(): Promise<void> {
   a.send({ t: 'trade', trade: 'sell_stone' })
   await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
   assert(a.results.at(-1)?.ok === true, `sold stone to the merchant`)
-  await a.waitFor((m) => m.t === 'inventory' && a.count('coin') >= 2, 5000)
+  if (a.count('coin') < 2) await a.waitFor((m) => m.t === 'inventory' && a.count('coin') >= 2, 5000)
   a.send({ t: 'trade', trade: 'buy_seeds' })
-  await a.waitFor((m) => m.t === 'inventory' && a.count('berry_seeds') >= 3, 5000)
+  if (a.count('berry_seeds') < 3)
+    await a.waitFor((m) => m.t === 'inventory' && a.count('berry_seeds') >= 3, 5000)
   assert(a.count('berry_seeds') >= 3, 'bought seeds with coins')
 
   await craftAndWait(a, 'craft_planks', 'wood_plank')
@@ -843,7 +895,7 @@ async function main(): Promise<void> {
   a.send({ t: 'trust', player: bobEntry.player as string, trusted: true })
   await a.waitFor((m) => m.t === 'result' && m.action === 'trust')
   assert(a.results.at(-1)?.ok === true, 'trust accepted')
-  await a.waitFor((m) => m.t === 'friends')
+  if (!a.friends.some((f) => f.name === 'Bob')) await a.waitFor((m) => m.t === 'friends')
   assert(
     a.friends.some((f) => f.name === 'Bob'),
     'friends list updated with Bob',

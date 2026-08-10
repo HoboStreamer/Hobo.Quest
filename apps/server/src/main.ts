@@ -8,6 +8,7 @@ import { loadConfig } from './config.js'
 import { GameServer } from './game/gameServer.js'
 import { GameWorld } from './game/gameWorld.js'
 import { loadHavok } from './havokLoader.js'
+import { attachEditorWs } from './net/editorWs.js'
 import { createHttpServer } from './net/httpServer.js'
 import { resolveHoboToolsUser } from './net/hoboToolsAuth.js'
 import { attachWebSocket } from './net/wsTransport.js'
@@ -79,7 +80,9 @@ async function main(): Promise<void> {
         if (raw && raw.v === 1) {
           setMapOverride(mapFileToOverride(raw))
           world.rebuildTerrain()
+          world.reconcileMapNodes()
           game.broadcastMapReload()
+          editors.broadcastSaved()
           log.info('map applied live', { sub: raw.sub })
         }
       } catch (err) {
@@ -102,7 +105,23 @@ async function main(): Promise<void> {
     },
     config.oauth,
   )
-  attachWebSocket(http, game, log.child({ system: 'ws' }))
+  world.reconcileMapNodes()
+  const gameWss = attachWebSocket(http, game, log.child({ system: 'ws' }))
+  const editors = attachEditorWs(
+    http,
+    { key: config.editorKey, hoboToolsUrl: config.hoboToolsAuthUrl },
+    log.child({ system: 'editor-ws' }),
+  )
+  http.on('upgrade', (req, socket, head) => {
+    const path = (req.url ?? '').split('?')[0]
+    if (path === '/ws') {
+      gameWss.handleUpgrade(req, socket, head, (ws) => gameWss.emit('connection', ws, req))
+    } else if (path === '/editor-ws') {
+      editors.wss.handleUpgrade(req, socket, head, (ws) => editors.wss.emit('connection', ws, req))
+    } else {
+      socket.destroy()
+    }
+  })
   http.listen(config.port, config.host, () => {
     log.info('listening', { host: config.host, port: config.port })
   })

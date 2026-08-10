@@ -58,6 +58,8 @@ export const WorldDefSchema = z.object({
   groundHalfExtent: z.number().positive(),
   spawnPoint: vec3,
   spawnYaw: z.number().default(0),
+  /** Blank-slate world: terrain is a flat floor (map editor builds the rest). */
+  flatTerrain: z.boolean().default(false),
   statics: z.array(StaticBodySchema),
   resourceNodes: z.array(ResourceNodeSpawnSchema),
   initialProps: z.array(PropSpawnSchema),

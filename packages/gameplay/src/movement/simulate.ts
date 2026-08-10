@@ -118,8 +118,9 @@ function noclipMove(
   const cp = Math.cos(input.pitch)
   const mx = clamp(input.moveX, -1, 1)
   const mz = clamp(input.moveZ, -1, 1)
+  // input.pitch is positive looking UP (client viewDir.y = +sin(pitch)).
   _wishdir.x = cy * mx + sy * mz * cp
-  _wishdir.y = -sp * mz
+  _wishdir.y = sp * mz
   _wishdir.z = -sy * mx + cy * mz * cp
   if ((input.buttons & Buttons.Jump) !== 0) _wishdir.y += 1
   if ((input.buttons & Buttons.Crouch) !== 0) _wishdir.y -= 1

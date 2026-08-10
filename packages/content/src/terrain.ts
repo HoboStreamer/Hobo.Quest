@@ -102,7 +102,23 @@ function padsFor(world: WorldDef): Pad[] {
 // replaces the procedural noise everywhere — server physics, client
 // prediction and rendering all sample the same grid.
 
+export interface MapNodeSpawn {
+  node: string
+  pos: [number, number, number]
+}
+
+export interface MapPropSpawn {
+  item: string
+  pos: [number, number, number]
+  yaw?: number
+}
+
 export interface MapOverride {
+  /** Editor-placed resource nodes (trees, deposits…) merged into seeding. */
+  nodes?: MapNodeSpawn[]
+  /** Editor-placed initial props merged into fresh-world seeding. */
+  props?: MapPropSpawn[]
+
   halfExtent: number
   /** Grid points per side (sub+1 columns). */
   sub: number
@@ -139,6 +155,7 @@ function sampleOverride(map: MapOverride, x: number, z: number): number {
 /** Terrain elevation at world (x, z). */
 export function terrainHeight(world: WorldDef, x: number, z: number): number {
   if (mapOverride) return sampleOverride(mapOverride, x, z)
+  if (world.flatTerrain) return 0
   let mask = 1
   for (const pad of padsFor(world)) {
     const m = padMask(x, z, pad.cx, pad.cz, pad.hx, pad.hz, pad.ramp)

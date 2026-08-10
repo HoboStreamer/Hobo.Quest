@@ -14,7 +14,10 @@ const MAX_MESSAGE_BYTES = 4096
 const MAX_MESSAGES_PER_SECOND = 120
 
 export function attachWebSocket(http: Server, game: GameServer, log: Logger): WebSocketServer {
-  const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: MAX_MESSAGE_BYTES })
+  // noServer: upgrades are routed by path in main (two WSS instances bound
+  // to one http server both complete the handshake and corrupt frames).
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES })
+  void http
 
   wss.on('connection', (ws: WebSocket, req) => {
     // Real client IP: Cloudflare/nginx headers first (we sit behind both in

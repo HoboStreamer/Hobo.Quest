@@ -23,7 +23,9 @@
         position: fixed;
         top: 12px;
         left: 12px;
-        width: 240px;
+        width: 250px;
+        max-height: calc(100vh - 24px);
+        overflow-y: auto;
         color: #dde3ea;
         background: rgba(16, 20, 26, 0.94);
         border: 1px solid #2a3340;
@@ -51,13 +53,20 @@
         flex: 1;
       }
       #panel input[type='password'],
+      #panel input[type='number'],
       #panel select {
-        width: 100%;
         background: #1c232c;
         color: #dde3ea;
         border: 1px solid #2a3340;
         border-radius: 6px;
         padding: 5px;
+      }
+      #panel input[type='password'],
+      #panel select {
+        width: 100%;
+      }
+      #panel input[type='number'] {
+        width: 64px;
       }
       .tools {
         display: grid;
@@ -89,6 +98,73 @@
       .hint {
         font-size: 11px;
         color: #78828e;
+        line-height: 1.5;
+      }
+      #peers {
+        font-size: 11px;
+        color: #7fd0ff;
+      }
+      .val {
+        font-size: 11px;
+        color: #9aa4b0;
+        width: 32px;
+        text-align: right;
+      }
+      /* Selected-object properties popover */
+      #props {
+        position: fixed;
+        display: none;
+        width: 230px;
+        color: #dde3ea;
+        background: rgba(16, 20, 26, 0.96);
+        border: 1px solid #4a7fbf;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 12px;
+        z-index: 20;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #props h2 {
+        font-size: 13px;
+        margin: 0;
+        color: #7fd0ff;
+      }
+      #props .row {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+      }
+      #props .row span {
+        width: 34px;
+        color: #78828e;
+      }
+      #props input[type='number'] {
+        width: 56px;
+        background: #1c232c;
+        color: #dde3ea;
+        border: 1px solid #2a3340;
+        border-radius: 4px;
+        padding: 3px;
+        font-size: 11px;
+      }
+      #props select,
+      #props input[type='color'] {
+        flex: 1;
+        background: #1c232c;
+        color: #dde3ea;
+        border: 1px solid #2a3340;
+        border-radius: 4px;
+        padding: 3px;
+      }
+      #props .row button {
+        flex: 1;
+        background: #1c232c;
+        color: #dde3ea;
+        border: 1px solid #2a3340;
+        border-radius: 4px;
+        padding: 4px;
+        cursor: pointer;
       }
     </style>
   </head>
@@ -96,12 +172,34 @@
     <canvas id="game" tabindex="0"></canvas>
     <div id="panel">
       <h1>MAP EDITOR</h1>
+      <div id="peers"></div>
       <div class="tools" id="tools"></div>
-      <label>Radius <input id="radius" type="range" min="1" max="20" step="0.5" value="6" /></label>
       <label
-        >Strength <input id="strength" type="range" min="0.05" max="1.5" step="0.05" value="0.4"
-      /></label>
-      <label id="paint-row"
+        >Radius <input id="radius" type="range" min="1" max="30" step="0.5" value="6" /><span
+          class="val"
+          id="radius-val"
+          >6</span
+        ></label
+      >
+      <label
+        >Strength
+        <input id="strength" type="range" min="0.01" max="1.5" step="0.01" value="0.35" /><span
+          class="val"
+          id="strength-val"
+          >.35</span
+        ></label
+      >
+      <label
+        >Feather <input id="feather" type="range" min="0.2" max="4" step="0.1" value="1" /><span
+          class="val"
+          id="feather-val"
+          >1</span
+        ></label
+      >
+      <label id="snap-row"
+        >Snap <input id="snap" type="number" min="0" max="8" step="0.25" value="0.5" /> m</label
+      >
+      <label id="paint-row" style="display: none"
         >Paint
         <select id="paint">
           <option value="#ff0000">Grass</option>
@@ -109,15 +207,62 @@
           <option value="#0000ff">Dirt / path</option>
         </select></label
       >
-      <label id="place-row"
+      <label id="place-row" style="display: none"
         >Place
         <select id="place"></select
       ></label>
       <input id="key" type="password" placeholder="hobo.tools admin token / editor key" />
-      <button id="save">💾 Save map (server restart applies physics)</button>
+      <button id="save">💾 Save map (applies live)</button>
       <div id="status"></div>
       <div class="hint">
-        WASD+RMB-drag fly · LMB use tool · Ctrl inverts sculpt · Del removes a placed static
+        <b>Z</b> free-look · WASD+QE fly · <b>LMB</b> raise / <b>RMB</b> lower · <b>[ ]</b> radius ·
+        <b>Shift+[ ]</b> strength · wheel rotates placement · <b>Shift</b> = no snap ·
+        <b>Ctrl+Z / Ctrl+Shift+Z</b> undo/redo · click a placed object with <b>Select</b> for gizmos
+        + properties · <b>Del</b> removes selection
+      </div>
+    </div>
+    <div id="props">
+      <h2 id="props-title">Object</h2>
+      <div class="row">
+        <span>pos</span><input id="p-x" type="number" step="0.25" /><input
+          id="p-y"
+          type="number"
+          step="0.25"
+        /><input id="p-z" type="number" step="0.25" />
+      </div>
+      <div class="row">
+        <span>rot°</span><input id="r-x" type="number" step="5" /><input
+          id="r-y"
+          type="number"
+          step="5"
+        /><input id="r-z" type="number" step="5" />
+      </div>
+      <div class="row" id="dims-box">
+        <span>size</span><input id="d-x" type="number" step="0.25" min="0.1" /><input
+          id="d-y"
+          type="number"
+          step="0.25"
+          min="0.1"
+        /><input id="d-z" type="number" step="0.25" min="0.1" />
+      </div>
+      <div class="row" id="dims-cyl">
+        <span>r/h</span><input id="d-r" type="number" step="0.1" min="0.1" /><input
+          id="d-h"
+          type="number"
+          step="0.25"
+          min="0.1"
+        />
+      </div>
+      <div class="row" id="dims-sph">
+        <span>r</span><input id="d-sr" type="number" step="0.1" min="0.1" />
+      </div>
+      <div class="row"><span>color</span><input id="p-color" type="color" /></div>
+      <div class="row">
+        <span>tex</span
+        ><select id="p-tex"></select>
+      </div>
+      <div class="row">
+        <button id="p-dup">⧉ Duplicate</button><button id="p-del">🗑 Delete</button>
       </div>
     </div>
     <script type="module" src="/src/editor/main.ts"></script>

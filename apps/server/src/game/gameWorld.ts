@@ -1,4 +1,4 @@
-import { buildTerrainGrid, terrainHeight } from '@hobo/content'
+import { buildTerrainGrid, getMapOverride, terrainHeight } from '@hobo/content'
 import type { ContentRegistry, WorldShape } from '@hobo/content'
 import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
 import type { ConstraintDto, PersistenceStore, WorldEntityDto } from '@hobo/persistence'
@@ -463,7 +463,7 @@ export class GameWorld {
 
   private seedProps(_store: PersistenceStore): void {
     const world = this.content.world
-    for (const prop of world.initialProps) {
+    for (const prop of [...world.initialProps, ...(getMapOverride()?.props ?? [])]) {
       this.spawnProp({
         defId: prop.item,
         pos: vec3(
@@ -471,16 +471,46 @@ export class GameWorld {
           prop.pos[1] + terrainHeight(this.content.world, prop.pos[0], prop.pos[2]),
           prop.pos[2],
         ),
-        rot: qfromYaw(quat(), prop.yaw),
+        rot: qfromYaw(quat(), prop.yaw ?? 0),
         // Fixtures (shops) are part of the town; everything else tumbles in.
         motion: this.content.item(prop.item)?.shop ? 'static' : 'dynamic',
       })
     }
   }
 
+  /**
+   * Called after boot-restore and after every live map save: any editor-
+   * placed resource node with no matching live resource nearby spawns.
+   * (Removal is by harvesting in game — reconcile never deletes.)
+   */
+  reconcileMapNodes(): void {
+    const world = this.content.world
+    for (const node of getMapOverride()?.nodes ?? []) {
+      const y = node.pos[1] + terrainHeight(world, node.pos[0], node.pos[2])
+      let exists = false
+      for (const e of this.entities.ofKind('resource')) {
+        if (e.resource?.nodeTypeId !== node.node) continue
+        const dx = e.transform.pos.x - node.pos[0]
+        const dz = e.transform.pos.z - node.pos[2]
+        if (dx * dx + dz * dz < 1) {
+          exists = true
+          break
+        }
+      }
+      if (exists) continue
+      const nodeType = this.content.nodeTypeOrThrow(node.node)
+      this.spawnResource({
+        nodeTypeId: node.node,
+        pos: vec3(node.pos[0], y, node.pos[2]),
+        remaining: nodeType.amount,
+      })
+      this.log.info('map node spawned', { node: node.node, x: node.pos[0], z: node.pos[2] })
+    }
+  }
+
   private seedResources(_store: PersistenceStore): void {
     const world = this.content.world
-    for (const node of world.resourceNodes) {
+    for (const node of [...world.resourceNodes, ...(getMapOverride()?.nodes ?? [])]) {
       const nodeType = this.content.nodeTypeOrThrow(node.node)
       this.spawnResource({
         nodeTypeId: node.node,

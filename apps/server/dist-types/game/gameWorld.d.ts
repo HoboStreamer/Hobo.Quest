@@ -82,6 +82,12 @@ export declare class GameWorld {
   isSettledEntity(id: EntityId): boolean
   seedOrRestore(store: PersistenceStore): void
   private seedProps
+  /**
+   * Called after boot-restore and after every live map save: any editor-
+   * placed resource node with no matching live resource nearby spawns.
+   * (Removal is by harvesting in game — reconcile never deletes.)
+   */
+  reconcileMapNodes(): void
   private seedResources
   private restoreEntity
   flushDirty(store: PersistenceStore): number

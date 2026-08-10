@@ -1,5 +1,5 @@
 import type { StaticBody } from './schema/world.js'
-import type { MapOverride } from './terrain.js'
+import type { MapNodeSpawn, MapOverride, MapPropSpawn } from './terrain.js'
 
 /**
  * The edited-map artifact produced by the /editor tool and consumed by the
@@ -18,6 +18,10 @@ export interface MapFile {
   mix?: string
   /** Editor-placed statics appended to the world def. */
   statics: StaticBody[]
+  /** Editor-placed resource nodes (trees, deposits, piles…). */
+  nodes?: MapNodeSpawn[]
+  /** Props seeded into FRESH worlds (crates, barrels, merchant stalls). */
+  props?: MapPropSpawn[]
 }
 
 export function decodeHeights(b64: string): Float32Array {
@@ -35,5 +39,11 @@ export function encodeHeights(heights: Float32Array): string {
 }
 
 export function mapFileToOverride(map: MapFile): MapOverride {
-  return { halfExtent: map.halfExtent, sub: map.sub, heights: decodeHeights(map.heights) }
+  return {
+    halfExtent: map.halfExtent,
+    sub: map.sub,
+    heights: decodeHeights(map.heights),
+    nodes: map.nodes ?? [],
+    props: map.props ?? [],
+  }
 }
