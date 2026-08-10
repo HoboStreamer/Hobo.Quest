@@ -59,57 +59,61 @@ export class Viewmodel {
    */
   private hands: TransformNode | null = null
 
-  /** Builds one first-person arm: outfit sleeve + cuff + skin fist with
-   * knuckles and a thumb — matches the player's customized look. */
-  private buildArm(name: string, appearance: Appearance): TransformNode {
+  /**
+   * One first-person arm: outfit sleeve + skin wrist + chunky fist with a
+   * knuckle ridge and thumb. `m` mirrors offsets/rotations for the left arm
+   * (never negative scaling — that flips winding and culls the mesh).
+   * NOTE: the rig is yawed PI, so local +x renders on the LEFT of screen
+   * and local -z is world-forward.
+   */
+  private buildArm(name: string, appearance: Appearance, m: 1 | -1): TransformNode {
     const skin = skinTone(appearance.skin)
     const sleeve = outfitColor(appearance.top)
     const arm = new TransformNode(name, this.scene)
     const forearm = createTaperedBox(
       `${name}:sleeve`,
       {
-        topWidth: 0.1,
-        topDepth: 0.1,
-        bottomWidth: 0.115,
-        bottomDepth: 0.115,
-        height: 0.34,
+        topWidth: 0.11,
+        topDepth: 0.11,
+        bottomWidth: 0.125,
+        bottomDepth: 0.125,
+        height: 0.3,
         anchor: 'top',
       },
       this.scene,
     )
     forearm.material = materialFor(this.scene, sleeve)
     forearm.parent = arm
-    forearm.position.set(0, -0.16, -0.1)
-    forearm.rotation.set(-1.05, -0.15, 0.1)
+    forearm.position.set(-0.01 * m, -0.17, 0.12)
+    forearm.rotation.set(1.15, 0.12 * m, -0.08 * m)
     const wrist = createTaperedBox(
       `${name}:wrist`,
       {
-        topWidth: 0.082,
-        topDepth: 0.082,
-        bottomWidth: 0.088,
-        bottomDepth: 0.088,
-        height: 0.09,
+        topWidth: 0.085,
+        topDepth: 0.085,
+        bottomWidth: 0.09,
+        bottomDepth: 0.09,
+        height: 0.08,
         anchor: 'top',
       },
       this.scene,
     )
     wrist.material = materialFor(this.scene, skin)
     wrist.parent = arm
-    wrist.position.set(0.005, -0.075, -0.045)
-    wrist.rotation.set(-1.05, -0.15, 0.1)
-    // Fist: palm block + knuckle ridge + thumb along the side.
+    wrist.position.set(-0.005 * m, -0.085, 0.055)
+    wrist.rotation.set(1.15, 0.12 * m, -0.08 * m)
+    // Fist: knuckles face world-forward (local -z under the PI-yaw rig).
     const fist = new TransformNode(`${name}:fist`, this.scene)
     fist.parent = arm
-    fist.position.set(0.012, -0.02, -0.005)
-    fist.rotation.set(-0.65, -0.1, 0.05)
+    fist.rotation.set(0.5, -0.32 * m, 0.08 * m)
     const palm = createTaperedBox(
       `${name}:palm`,
       {
-        topWidth: 0.085,
-        topDepth: 0.095,
-        bottomWidth: 0.08,
+        topWidth: 0.084,
+        topDepth: 0.098,
+        bottomWidth: 0.078,
         bottomDepth: 0.09,
-        height: 0.075,
+        height: 0.082,
         anchor: 'top',
       },
       this.scene,
@@ -119,54 +123,77 @@ export class Viewmodel {
     const knuckles = createTaperedBox(
       `${name}:knuckles`,
       {
-        topWidth: 0.082,
-        topDepth: 0.05,
-        bottomWidth: 0.078,
-        bottomDepth: 0.048,
-        height: 0.05,
+        topWidth: 0.09,
+        topDepth: 0.055,
+        bottomWidth: 0.085,
+        bottomDepth: 0.05,
+        height: 0.055,
         anchor: 'top',
       },
       this.scene,
     )
-    knuckles.material = materialFor(this.scene, skinTone(appearance.skin))
+    knuckles.material = materialFor(this.scene, skin)
     knuckles.parent = fist
-    knuckles.position.set(0, -0.005, -0.062)
-    knuckles.rotation.x = -0.35
+    knuckles.position.set(0, 0.01, -0.07)
+    knuckles.rotation.x = 0.3
     const thumb = createTaperedBox(
       `${name}:thumb`,
       {
-        topWidth: 0.028,
-        topDepth: 0.028,
-        bottomWidth: 0.024,
-        bottomDepth: 0.024,
-        height: 0.07,
+        topWidth: 0.032,
+        topDepth: 0.032,
+        bottomWidth: 0.027,
+        bottomDepth: 0.027,
+        height: 0.075,
         anchor: 'top',
       },
       this.scene,
     )
     thumb.material = materialFor(this.scene, skin)
     thumb.parent = fist
-    thumb.position.set(-0.048, -0.01, -0.03)
-    thumb.rotation.set(-0.4, 0, 0.9)
+    // Thumb on the INNER side of each fist (toward screen center).
+    thumb.position.set(-0.055 * m, 0.005, -0.02)
+    thumb.rotation.set(-0.5, 0, -0.85 * m)
     return arm
   }
 
   private leftFist: TransformNode | null = null
+  private rightArm: TransformNode | null = null
+  /** Alternating punch: which fist jabs next, and the live thrust node. */
+  private punchLeft = false
+  private punchingFist: TransformNode | null = null
 
   private buildHands(appearance: Appearance): void {
     const hands = new TransformNode('vm-hands', this.scene)
     hands.parent = this.rig
-    const right = this.buildArm('vm-arm-r', appearance)
+    // Local +x renders LEFT on screen (PI-yaw rig): right arm at -x.
+    const right = this.buildArm('vm-arm-r', appearance, 1)
     right.parent = hands
-    right.position.set(0.02, -0.06, -0.04)
-    // Left fist shows only when unarmed — raised guard, boxer style.
-    const left = this.buildArm('vm-arm-l', appearance)
-    left.parent = this.rig
-    left.position.set(-0.52, -0.02, -0.1)
-    left.rotation.y = 0.25
-    left.scaling.x = -1
+    const left = this.buildArm('vm-arm-l', appearance, -1)
+    left.parent = hands
+    this.rightArm = right
     this.leftFist = left
     this.hands = hands
+    this.layoutHands(null)
+  }
+
+  /** Armed: one support hand under the tool. Unarmed: boxer guard. */
+  private layoutHands(itemDef: string | null): void {
+    if (!this.hands || !this.rightArm || !this.leftFist) return
+    if (itemDef === null) {
+      // Center the guard on screen (cancel the rig's +0.26 offset; local x
+      // is mirrored, so PLUS moves left... i.e. toward screen center).
+      this.hands.position.set(0.26, 0.06, 0.1)
+      this.rightArm.position.set(-0.26, 0, 0)
+      this.rightArm.rotation.set(0.1, -0.3, 0)
+      this.leftFist.position.set(0.26, 0, 0)
+      this.leftFist.rotation.set(0.1, 0.3, 0)
+      this.leftFist.setEnabled(true)
+    } else {
+      this.hands.position.set(0.02, -0.06, -0.04)
+      this.rightArm.position.set(0, 0, 0)
+      this.rightArm.rotation.set(0, 0, 0)
+      this.leftFist.setEnabled(false)
+    }
   }
 
   private async loadPhysgun(): Promise<void> {
@@ -225,6 +252,12 @@ export class Viewmodel {
 
   triggerSwing(): void {
     this.swingT = 0.32
+    if (this.currentItem === null) {
+      this.punchLeft = !this.punchLeft
+      this.punchingFist = this.punchLeft ? this.leftFist : this.rightArm
+    } else {
+      this.punchingFist = null
+    }
   }
 
   /** Per-frame update. mouseDx/Dy are this frame's look deltas (radians). */
@@ -246,6 +279,22 @@ export class Viewmodel {
     const equipDip = (1 - this.equipT) * -0.25
     const swing = this.swingT > 0 ? Math.sin((this.swingT / 0.32) * Math.PI) : 0
 
+    // Unarmed jab: the active fist snaps straight out (local -z = forward)
+    // and recoils; the layout pose is restored as the thrust decays.
+    if (this.punchingFist) {
+      const thrust = this.currentItem === null ? swing : 0
+      this.punchingFist.position.z = -thrust * 0.45
+      this.punchingFist.position.y = thrust * 0.04
+      this.punchingFist.rotation.x = -thrust * 0.5
+      if (this.swingT <= 0) {
+        this.punchingFist.position.z = 0
+        this.punchingFist.position.y = 0
+        this.punchingFist.rotation.x = 0
+        this.punchingFist = null
+        this.layoutHands(this.currentItem)
+      }
+    }
+
     this.rig.position.set(
       0.26 + bobX - this.swayYaw * 0.15,
       -0.26 + bobY + equipDip - swing * 0.1,
@@ -266,7 +315,7 @@ export class Viewmodel {
     // Hands always show — empty hands are FISTS (you can punch, Minecraft-
     // style). The left guard fist appears only when unarmed.
     if (this.hands) this.hands.setEnabled(true)
-    this.leftFist?.setEnabled(itemDef === null)
+    this.layoutHands(itemDef)
 
     this.toolProp?.dispose()
     this.toolProp = null
