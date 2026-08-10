@@ -18,7 +18,7 @@ import { customizeScreen } from './ui/customizeScreen.js'
 import { Hud } from './ui/hud.js'
 import { IconFactory } from './ui/iconFactory.js'
 import { registerPhysgunModule } from './weapons/physgunModule.js'
-import { WeaponSettings } from './weapons/registry.js'
+import { WeaponSettings, weaponModuleFor } from './weapons/registry.js'
 
 /**
  * Client bootstrap: engine/scene -> character customization (live preview)
@@ -192,20 +192,25 @@ async function start(): Promise<void> {
     viewmodel.setItem(state.activeItemDef())
     viewmodel.update(elapsed, speed, player.move.grounded, look.dx, look.dy)
 
-    // Beams: mine fires whenever the trigger is held (dim searching ray →
-    // bright latched beam); other players' render only while they hold props.
+    // Beams (modular: any weapon whose module declares firesBeam gets this
+    // muzzle-anchored beam pipeline). Mine fires whenever the trigger is
+    // held (dim searching ray → bright latched beam anchored to the exact
+    // grab point); other players' render only while they hold props.
     const activeBeams = new Map<string, BeamState>()
     for (const [target, holder] of state.heldBy) {
       if (holder === state.myEntityId) continue
-      const to = view.positionOf(target)
+      const to = view.grabPointOf(target, state.heldGrab.get(holder))
       const from = view.avatarFor(holder)?.beamOrigin()
       if (from && to) activeBeams.set(holder, { from, to, latched: true })
     }
-    if (interact.physgunActive) {
+    const activeModule = weaponModuleFor(interact.equippedToolKind())
+    if (activeModule?.firesBeam && interact.physgunActive) {
       const heldTarget = [...state.heldBy.entries()].find(
         ([, holder]) => holder === state.myEntityId,
       )?.[0]
-      const heldPos = heldTarget ? view.positionOf(heldTarget) : null
+      const heldPos = heldTarget
+        ? view.grabPointOf(heldTarget, state.heldGrab.get(state.myEntityId))
+        : null
       if (heldPos) {
         activeBeams.set(state.myEntityId, {
           from: viewmodel.beamOrigin(),

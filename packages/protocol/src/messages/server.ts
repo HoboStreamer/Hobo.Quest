@@ -121,6 +121,9 @@ export interface ServerPhysgunState {
   player: string
   /** Held entity id, or null when the beam turned off. */
   target: string | null
+  /** Grab point in the held body's LOCAL space — beams attach to the spot
+   * the beam first touched, not the prop's center. */
+  grab?: [number, number, number]
 }
 
 export type ServerMessage =

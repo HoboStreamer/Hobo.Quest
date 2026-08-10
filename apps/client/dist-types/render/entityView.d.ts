@@ -1,4 +1,5 @@
-import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import '@babylonjs/core/Rendering/outlineRenderer.js'
+import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { ContentRegistry } from '@hobo/content'
 import { type BodyId, type PhysicsWorld } from '@hobo/physics'
@@ -28,6 +29,11 @@ export declare class EntityView {
   onSnapshot(snap: ServerSnapshot, localTime: number): void
   /** Per-frame: interpolate meshes/avatars toward buffered samples. */
   update(localTime: number): void
+  /**
+   * World position of a grab point given in an entity's local space (beam
+   * endpoints stick to the touched spot, not the prop center).
+   */
+  grabPointOf(id: string, local: [number, number, number] | undefined): Vector3 | null
   positionOf(id: string): Vector3 | null
 }
 //# sourceMappingURL=entityView.d.ts.map

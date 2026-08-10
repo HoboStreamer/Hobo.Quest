@@ -61,5 +61,6 @@ export function registerPhysgunModule(): void {
     kind: 'physgun',
     title: 'Physgun',
     buildPanel: buildPhysgunPanel,
+    firesBeam: true,
   })
 }

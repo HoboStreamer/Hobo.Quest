@@ -22,6 +22,10 @@ export declare class InputTracker {
   captureLook: (() => boolean) | null
   private lookDx
   private lookDy
+  /** Last seen mouse `buttons` bitmask (chorded press/release detection). */
+  private buttonsState
+  /** Emits press/release actions from `buttons` bitmask transitions. */
+  private diffButtons
   constructor(canvas: HTMLCanvasElement)
   /** Accumulated look deltas since the last call (viewmodel sway). */
   consumeLookDelta(): {

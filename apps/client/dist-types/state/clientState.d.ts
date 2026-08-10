@@ -72,6 +72,8 @@ export declare class ClientState {
   skills: WireSkill[]
   /** entityId -> holder player entityId, for beam/highlight rendering. */
   readonly heldBy: Map<string, string>
+  /** Holder entity id -> grab point in the held body's local space. */
+  readonly heldGrab: Map<string, [number, number, number]>
   apply(msg: ServerMessage): void
   countOf(defId: string): number
   /** Item def id in the active hotbar slot (null when holstered). */

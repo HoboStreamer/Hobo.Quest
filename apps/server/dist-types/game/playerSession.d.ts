@@ -13,13 +13,14 @@ export interface HeldProp {
   /** Grab point in the body's local space — the prop hangs from where you
    * actually grabbed it, GMod-style, not from its center. */
   localOffset: Vec3
-  /** Player-applied rotation offsets (radians), after optional snapping. */
+  /** Player-applied rotation offsets (radians), always unsnapped. */
   yawOffset: number
   pitchOffset: number
-  /** Unsnapped rotate accumulators — snapping quantizes FROM these, so small
-   * mouse deltas still add up instead of being rounded away each message. */
-  rawYaw: number
-  rawPitch: number
+  /** Angle snap (Shift+E): quantizes the FULL world orientation each drive
+   * tick — quantizing just the offsets is invisible on an arbitrary grab
+   * pose, which is why offset-snapping never visibly worked. */
+  snap: boolean
+  snapStep: number
   /** Full body orientation at grab time, relative to the player's view yaw:
    * the prop keeps its exact pose (incl. tilt/roll) and turns with the view. */
   grabRot: Quat

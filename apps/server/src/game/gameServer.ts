@@ -511,12 +511,22 @@ export class GameServer {
     // Grabbing a frozen prop unfreezes it — tell clients about the motion
     // change (physics resumes; frozen visuals must clear).
     this.broadcastToKnowing(grabbed.id, { t: 'entity', id: grabbed.id, motion: 'dynamic' })
-    this.broadcastAll({ t: 'physgun_state', player: session.entityId, target: grabbed.id })
+    const grab = session.held?.localOffset
+    this.broadcastAll({
+      t: 'physgun_state',
+      player: session.entityId,
+      target: grabbed.id,
+      ...(grab ? { grab: [grab.x, grab.y, grab.z] as [number, number, number] } : {}),
+    })
     return null
   }
 
   private releaseHeld(session: PlayerSession): void {
     if (!session.held) return
+    // Wake the released body: if it was driven into a sleeping neighbor,
+    // the depenetration solver needs it active to push them apart.
+    const bodyId = this.world.bodyOf(session.held.entityId)
+    if (bodyId !== undefined) this.world.physics.wake(bodyId)
     this.heldEntityIds.delete(session.held.entityId)
     release(session)
     this.broadcastAll({ t: 'physgun_state', player: session.entityId, target: null })

@@ -46,6 +46,7 @@ export class Viewmodel {
     this.rig.parent = camera
     this.rig.position.set(0.28, -0.32, 0.72)
     this.buildHands(appearance)
+    this.applyRenderGroup()
     // The imported OBJ is kept behind a debug flag while its orientation and
     // material are tuned; the procedural physgun matches the art style.
     if (new URLSearchParams(location.search).has('vmobj')) void this.loadPhysgun()
@@ -140,6 +141,7 @@ export class Viewmodel {
       holder.rotation.y = (vmrot * Math.PI) / 180
       this.physgunLoaded = true
       this.setPhysgunVisible(this.currentItem === 'physgun')
+      this.applyRenderGroup()
     } catch (err) {
       console.warn('physgun viewmodel failed to load, using fallback', err)
       this.physgunLoaded = false
@@ -218,11 +220,37 @@ export class Viewmodel {
         }
       }
     }
+    this.applyRenderGroup()
   }
 
-  /** World-space beam origin (approximate muzzle). */
+  /**
+   * The whole viewmodel renders in group 1: drawn AFTER world geometry and
+   * beams (group 0), so the gun never clips into walls and beams never
+   * overlap the gun — they visually emerge from behind its tip.
+   */
+  private applyRenderGroup(): void {
+    for (const m of this.physgunMeshes) m.renderingGroupId = VIEWMODEL_RENDER_GROUP
+    if (this.toolProp) {
+      for (const child of this.toolProp.root.getChildMeshes()) {
+        child.renderingGroupId = VIEWMODEL_RENDER_GROUP
+      }
+    }
+    if (this.hands) {
+      for (const child of this.hands.getChildMeshes()) {
+        child.renderingGroupId = VIEWMODEL_RENDER_GROUP
+      }
+    }
+  }
+
+  /** World-space beam origin (the tool's muzzle tip). */
   beamOrigin(): Vector3 {
     const node = this.toolProp?.muzzle ?? this.rig
+    // The rig hangs off the camera and moves every frame; without a forced
+    // world-matrix refresh the cached absolute position lags a frame and the
+    // beam visibly detaches from the muzzle.
+    node.computeWorldMatrix(true)
     return node.getAbsolutePosition()
   }
 }
+
+const VIEWMODEL_RENDER_GROUP = 1

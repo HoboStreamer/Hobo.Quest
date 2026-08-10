@@ -157,7 +157,11 @@ async function main(): Promise<void> {
     // Synthetic CDP moves carry no movementX; dispatch real MouseEvents so
     // the look pipeline (which reads movement deltas) is actually exercised.
     await page.evaluate(() => {
-      document.dispatchEvent(new PointerEvent('pointermove', { movementX: 30, movementY: 0 }))
+      // buttons: 1 — LMB is genuinely held here; omitting it (default 0)
+      // reads as a chorded LMB release to the buttons-diff input tracker.
+      document.dispatchEvent(
+        new PointerEvent('pointermove', { movementX: 30, movementY: 0, buttons: 1 }),
+      )
     })
     await page.waitForTimeout(60)
   }
@@ -179,6 +183,49 @@ async function main(): Promise<void> {
   })
   console.log(`  beams active (heldBy size): ${held}`)
   await shot(page, '06-physgun-grab')
+
+  // RMB while holding = freeze: held target goes 'frozen' and the beam drops.
+  const heldId = await page.evaluate(() => {
+    const w = (window as unknown as { __hobo: { state: { heldBy: Map<string, string> } } }).__hobo
+    return [...w.state.heldBy.keys()][0] ?? null
+  })
+  await page.evaluate(() => {
+    interface W {
+      __hobo: { input: { onAction: ((a: { kind: string }) => void) | null } }
+      __actions: string[]
+    }
+    const w = window as unknown as W
+    w.__actions = []
+    const prev = w.__hobo.input.onAction
+    w.__hobo.input.onAction = (a) => {
+      w.__actions.push(a.kind)
+      prev?.(a)
+    }
+  })
+  await page.mouse.down({ button: 'right' })
+  await page.waitForTimeout(500)
+  await page.mouse.up({ button: 'right' })
+  console.log(
+    '  actions during RMB:',
+    await page.evaluate(() => (window as unknown as { __actions: string[] }).__actions.join(',')),
+  )
+  const frozen = await page.evaluate((id) => {
+    const w = (
+      window as unknown as {
+        __hobo: {
+          state: { heldBy: Map<string, string>; entities: Map<string, { motion?: string }> }
+        }
+      }
+    ).__hobo
+    return {
+      beamOff: w.state.heldBy.size === 0,
+      motion: id ? (w.state.entities.get(id)?.motion ?? 'missing') : 'no-held-id',
+    }
+  }, heldId)
+  console.log(`  RMB freeze: beamOff=${frozen.beamOff} motion=${frozen.motion}`)
+  if (!frozen.beamOff || frozen.motion !== 'frozen') {
+    throw new Error(`RMB freeze failed: ${JSON.stringify(frozen)}`)
+  }
   await page.mouse.up()
   await page.waitForTimeout(400)
 

@@ -22,6 +22,22 @@ export class InputTracker {
   captureLook: (() => boolean) | null = null
   private lookDx = 0
   private lookDy = 0
+  /** Last seen mouse `buttons` bitmask (chorded press/release detection). */
+  private buttonsState = 0
+
+  /** Emits press/release actions from `buttons` bitmask transitions. */
+  private diffButtons(e: MouseEvent): void {
+    const now = e.buttons
+    const pressed = now & ~this.buttonsState
+    const released = this.buttonsState & ~now
+    this.buttonsState = now
+    // Releases always fire — a grab must never stick because pointer lock
+    // or the menu state changed mid-hold. New presses are gameplay-gated.
+    if (released & 1) this.onAction?.({ kind: 'primary_up' })
+    if (this.uiCapture || !this.locked) return
+    if (pressed & 1) this.onAction?.({ kind: 'primary_down' })
+    if (pressed & 2) this.onAction?.({ kind: 'rmb_down' })
+  }
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     // Lock on button DOWN, not on click: click only fires on RELEASE, so a
@@ -36,13 +52,20 @@ export class InputTracker {
       this.locked = document.pointerLockElement === canvas
     })
     document.addEventListener('contextmenu', (e) => {
-      if (this.locked) e.preventDefault()
+      // RMB is a game action (physgun freeze) — never show a context menu
+      // outside UI, even if pointer lock was momentarily dropped.
+      if (!this.uiCapture) e.preventDefault()
     })
     // pointermove, NOT mousemove: canceling pointerdown (which we must do to
     // stop native drag/selection) suppresses ALL compatibility mouse events
     // for the rest of that press — including mousemove. Holding a button
     // would freeze the view. Pointer events keep flowing regardless.
     document.addEventListener('pointermove', (e) => {
+      // A mouse is ONE pointer: pressing a second button while another is
+      // held fires NO pointerdown — the chorded press arrives as a
+      // pointermove with an updated `buttons` bitmask (this is how RMB-
+      // freeze-while-carrying reaches us at all).
+      this.diffButtons(e)
       if (!this.locked || this.uiCapture) return
       if (this.captureLook?.()) {
         this.onAction?.({
@@ -84,13 +107,15 @@ export class InputTracker {
       }
     })
     document.addEventListener('pointerdown', (e) => {
-      if (!this.locked || this.uiCapture) return
+      if (!this.locked || this.uiCapture) {
+        this.buttonsState = e.buttons
+        return
+      }
       // Without this, holding a button and moving starts a native browser
       // drag/selection, which SWALLOWS all mousemove events until release —
       // the game appears frozen while the physgun button is held.
       e.preventDefault()
-      if (e.button === 0) this.onAction?.({ kind: 'primary_down' })
-      if (e.button === 2) this.onAction?.({ kind: 'rmb_down' })
+      this.diffButtons(e)
     })
     document.addEventListener('dragstart', (e) => {
       // Native drags are only ever wanted for inventory slots in the menu.
@@ -100,7 +125,7 @@ export class InputTracker {
       if (!this.uiCapture) e.preventDefault()
     })
     document.addEventListener('pointerup', (e) => {
-      if (e.button === 0) this.onAction?.({ kind: 'primary_up' })
+      this.diffButtons(e)
     })
     document.addEventListener(
       'wheel',

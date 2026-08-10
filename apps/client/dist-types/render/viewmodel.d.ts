@@ -43,7 +43,13 @@ export declare class Viewmodel {
   update(dt: number, speed: number, grounded: boolean, mouseDx: number, mouseDy: number): void
   /** Switch displayed tool when the equipped item changes. */
   setItem(itemDef: string | null): void
-  /** World-space beam origin (approximate muzzle). */
+  /**
+   * The whole viewmodel renders in group 1: drawn AFTER world geometry and
+   * beams (group 0), so the gun never clips into walls and beams never
+   * overlap the gun — they visually emerge from behind its tip.
+   */
+  private applyRenderGroup
+  /** World-space beam origin (the tool's muzzle tip). */
   beamOrigin(): Vector3
 }
 //# sourceMappingURL=viewmodel.d.ts.map

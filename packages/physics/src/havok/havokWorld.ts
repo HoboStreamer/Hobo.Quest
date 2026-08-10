@@ -104,11 +104,18 @@ export class HavokWorld implements PhysicsWorld {
     const shape = this.makeShape(desc.shape)
     shape.filterMembershipMask = desc.layer
     shape.filterCollideMask = desc.collidesWith
+    // Grippy, dead-on-impact surfaces: Source props bite the ground instead
+    // of gliding (Havok defaults are ice-like) and barely bounce.
+    shape.material = { friction: 0.75, staticFriction: 0.85, restitution: 0.05 }
 
     const body = new PhysicsBody(node, MOTION_MAP[desc.motion], false, this.scene)
     body.shape = shape
     if (desc.motion === 'dynamic') {
       body.setMassProperties({ mass: desc.massKg ?? 10 })
+      // Light linear + strong angular damping kill the floaty drift and
+      // endless micro-rolling that read as "low gravity".
+      body.setLinearDamping(0.05)
+      body.setAngularDamping(0.6)
     }
 
     this.bodies.set(id, { body, node, shape, motion: desc.motion })
@@ -384,7 +391,9 @@ export class HavokWorld implements PhysicsWorld {
 
 function setupWorld(scene: Scene, havok: unknown, ownsScene: boolean): HavokWorld {
   const plugin = new HavokPlugin(false, havok)
-  scene.enablePhysics(new Vector3(0, -9.81, 0), plugin)
+  // Source-engine gravity (sv_gravity 600 ≈ 15.24 m/s²) — real-world 9.81
+  // reads floaty at game scale.
+  scene.enablePhysics(new Vector3(0, -15.24, 0), plugin)
   // All stepping goes through HavokWorld.step(); never the render loop.
   scene.physicsEnabled = false
   return new HavokWorld(scene, plugin, ownsScene)

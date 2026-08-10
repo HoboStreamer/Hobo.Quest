@@ -2,11 +2,13 @@ import type { GameEntity } from '@hobo/gameplay'
 import { CollisionLayer } from '@hobo/physics'
 import {
   clamp,
+  qfromEuler,
   qfromYaw,
   qmul,
   qnormalize,
   qrotateVec,
   qrotateVecInv,
+  qtoEulerYXZ,
   quat,
   v3addScaled,
   v3dist,
@@ -51,6 +53,7 @@ const _targetRot = quat()
 const _yawQ = quat()
 const _grabVec = vec3()
 const _grabWorld = vec3()
+const _euler = { pitch: 0, yaw: 0, roll: 0 }
 
 export type PhysgunDeny = 'no_target' | 'not_allowed' | 'not_owner' | 'zone' | 'already_held'
 
@@ -95,8 +98,8 @@ export function tryGrab(
     localOffset,
     yawOffset: 0,
     pitchOffset: 0,
-    rawYaw: 0,
-    rawPitch: 0,
+    snap: false,
+    snapStep: DEFAULT_SNAP_STEP,
     grabRot,
     grid: false,
     gridSize: 0.25,
@@ -122,19 +125,12 @@ export function rotateHeld(
 ): void {
   const held = session.held
   if (!held) return
-  // Accumulate UNSNAPPED, quantize on output: snapping the accumulator
-  // itself rounds small per-message deltas back to zero and the prop
-  // never turns (the old Shift+E bug).
-  held.rawYaw = wrapAngle(held.rawYaw + dyaw)
-  held.rawPitch = clamp(held.rawPitch + dpitch, -Math.PI, Math.PI)
-  if (snap) {
-    const step = clamp(snapStep ?? DEFAULT_SNAP_STEP, 0.02, 1.6)
-    held.yawOffset = Math.round(held.rawYaw / step) * step
-    held.pitchOffset = Math.round(held.rawPitch / step) * step
-  } else {
-    held.yawOffset = held.rawYaw
-    held.pitchOffset = held.rawPitch
-  }
+  held.yawOffset = wrapAngle(held.yawOffset + dyaw)
+  held.pitchOffset = clamp(held.pitchOffset + dpitch, -Math.PI, Math.PI)
+  // Snap state is applied to the FULL orientation in driveHeld — offsets
+  // always accumulate unsnapped so small mouse deltas never round away.
+  held.snap = snap
+  held.snapStep = clamp(snapStep ?? DEFAULT_SNAP_STEP, 0.02, 1.6)
 }
 
 /** Freezes the held prop in place (motion -> static) and releases the beam. */
@@ -209,6 +205,18 @@ export function driveHeld(session: PlayerSession, world: GameWorld): void {
   }
   qmul(_targetRot, _targetRot, held.grabRot)
   qnormalize(_targetRot, _targetRot)
+  if (held.snap) {
+    // Shift+E: snap the WHOLE world orientation to the angle grid — the prop
+    // visibly clicks to 0°/15°/30°... regardless of how it was grabbed.
+    const s = held.snapStep
+    qtoEulerYXZ(_targetRot, _euler)
+    qfromEuler(
+      _targetRot,
+      Math.round(_euler.pitch / s) * s,
+      Math.round(_euler.yaw / s) * s,
+      Math.round(_euler.roll / s) * s,
+    )
+  }
   const angVel = angularVelocityToward(_bodyRot, _targetRot, ANGULAR_GAIN)
   world.physics.setAngularVelocity(bodyId, angVel)
 }

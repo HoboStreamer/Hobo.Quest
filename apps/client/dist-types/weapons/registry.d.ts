@@ -19,6 +19,13 @@ export interface WeaponModule {
   title: string
   /** Renders the settings/info panel into `el`. */
   buildPanel(el: HTMLElement, settings: WeaponSettings): void
+  /**
+   * Weapon emits a muzzle-anchored beam/tracer while its trigger is held.
+   * The shared pipeline (viewmodel muzzle origin -> crosshair raycast end,
+   * bright + flare when latched) renders it — future beam/projectile
+   * weapons opt in here instead of adding bespoke render code.
+   */
+  firesBeam?: boolean
 }
 export declare function registerWeaponModule(module: WeaponModule): void
 export declare function weaponModuleFor(kind: string | null): WeaponModule | undefined

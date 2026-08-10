@@ -71,12 +71,16 @@ export class BeamRenderer {
         meshes = { beam, flare }
         this.beams.set(key, meshes)
       }
-      const { from, to, latched } = state
+      const { from: muzzle, to, latched } = state
+      // Start slightly ahead of the muzzle so the beam emerges from the tip
+      // instead of overlapping the gun body.
+      const dir = to.subtract(muzzle)
+      const total = Math.max(dir.length(), 0.01)
+      const from = muzzle.add(dir.scale(Math.min(0.07 / total, 0.5)))
       const mid = from.add(to).scale(0.5)
-      const dir = to.subtract(from)
-      const len = Math.max(dir.length(), 0.01)
+      const len = Math.max(to.subtract(from).length(), 0.01)
       const pulse = 1 + Math.sin(this.time * 14) * 0.25
-      const girth = latched ? 0.034 : 0.014
+      const girth = latched ? 0.026 : 0.011
       meshes.beam.material = latched ? this.strongMat : this.idleMat
       meshes.beam.position.copyFrom(mid)
       meshes.beam.scaling.set(girth * pulse, girth * pulse, len)

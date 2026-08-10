@@ -62,6 +62,18 @@ export function qfromEuler(out: Quat, pitchX: number, yawY: number, rollZ: numbe
   return out
 }
 
+/**
+ * Decomposes a unit quaternion into yaw (Y), pitch (X), roll (Z) matching
+ * qfromEuler's composition order (R = Ry * Rx * Rz). Used for world-angle
+ * snapping (physgun Shift+E).
+ */
+export function qtoEulerYXZ(q: Quat, out: { pitch: number; yaw: number; roll: number }): void {
+  const sinPitch = 2 * (q.w * q.x - q.y * q.z)
+  out.pitch = Math.asin(Math.max(-1, Math.min(1, sinPitch)))
+  out.yaw = Math.atan2(2 * (q.x * q.z + q.w * q.y), 1 - 2 * (q.x * q.x + q.y * q.y))
+  out.roll = Math.atan2(2 * (q.x * q.y + q.w * q.z), 1 - 2 * (q.x * q.x + q.z * q.z))
+}
+
 export function qmul(out: Quat, a: Quat, b: Quat): Quat {
   const ax = a.x,
     ay = a.y,

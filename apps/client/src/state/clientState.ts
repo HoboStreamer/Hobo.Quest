@@ -43,6 +43,8 @@ export class ClientState {
   skills: WireSkill[] = []
   /** entityId -> holder player entityId, for beam/highlight rendering. */
   readonly heldBy = new Map<string, string>()
+  /** Holder entity id -> grab point in the held body's local space. */
+  readonly heldGrab = new Map<string, [number, number, number]>()
 
   apply(msg: ServerMessage): void {
     switch (msg.t) {
@@ -116,7 +118,11 @@ export class ClientState {
         for (const [target, holder] of this.heldBy) {
           if (holder === msg.player) this.heldBy.delete(target)
         }
-        if (msg.target) this.heldBy.set(msg.target, msg.player)
+        this.heldGrab.delete(msg.player)
+        if (msg.target) {
+          this.heldBy.set(msg.target, msg.player)
+          if (msg.grab) this.heldGrab.set(msg.player, msg.grab)
+        }
         this.events.emit('physgunBeam', { player: msg.player, target: msg.target })
         break
       }

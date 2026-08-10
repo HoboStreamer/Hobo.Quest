@@ -1,12 +1,11 @@
+import '@babylonjs/core/Rendering/outlineRenderer.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
-import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
-import { Quaternion } from '@babylonjs/core/Maths/math.vector.js'
+import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder.js'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { Scene } from '@babylonjs/core/scene.js'
-import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import type { ContentRegistry, WorldShape } from '@hobo/content'
 import { DEFAULT_MOVEMENT, hullHeightFor } from '@hobo/gameplay'
 import { CollisionLayer, type BodyId, type PhysicsWorld, type ShapeDesc } from '@hobo/physics'
@@ -283,13 +282,30 @@ export class EntityView {
       // authoritative pose), NOT here — prediction must compare against the
       // freshest server state, not the ~130ms-delayed visual interpolation.
       // Interpolated mirrors made standing on props mispredict every tick.
-      // Held props glow so every player can see what's being moved.
-      const mat = v.mesh.material as StandardMaterial | null
-      if (mat && 'emissiveColor' in mat) {
-        const held = this.state.heldBy.has(v.entity.id)
-        mat.emissiveColor = held ? HELD_GLOW : NO_GLOW
+      // Held highlight is PER-MESH overlay: materials are shared per color,
+      // so touching material emissive lit up every same-colored prop on the
+      // map.
+      const held = this.state.heldBy.has(v.entity.id)
+      if (v.mesh.renderOverlay !== held) {
+        v.mesh.renderOverlay = held
+        v.mesh.overlayColor = HELD_OVERLAY
+        v.mesh.overlayAlpha = 0.32
       }
     }
+  }
+
+  /**
+   * World position of a grab point given in an entity's local space (beam
+   * endpoints stick to the touched spot, not the prop center).
+   */
+  grabPointOf(id: string, local: [number, number, number] | undefined): Vector3 | null {
+    const v = this.visuals.get(id)
+    if (!v?.mesh) return this.positionOf(id)
+    if (!local) return v.mesh.position
+    _grabLocal.set(local[0], local[1], local[2])
+    const rot = v.mesh.rotationQuaternion ?? Quaternion.Identity()
+    _grabLocal.rotateByQuaternionToRef(rot, _grabWorld)
+    return _grabWorld.addInPlace(v.mesh.position)
   }
 
   positionOf(id: string): Vector3 | null {
@@ -301,8 +317,9 @@ export class EntityView {
   }
 }
 
-const HELD_GLOW = new Color3(0.14, 0.24, 0.38)
-const NO_GLOW = new Color3(0, 0, 0)
+const HELD_OVERLAY = new Color3(0.35, 0.65, 1)
+const _grabLocal = new Vector3()
+const _grabWorld = new Vector3()
 
 function pushSample(buffer: InterpSample[], sample: InterpSample): void {
   buffer.push(sample)
