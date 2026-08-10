@@ -403,6 +403,9 @@ export class GameServer {
         return
       }
       this.heldEntityIds.add(grabbed.id)
+      // Grabbing a frozen prop unfreezes it — tell clients about the motion
+      // change (physics resumes; frozen visuals must clear).
+      this.broadcastToKnowing(grabbed.id, { t: 'entity', id: grabbed.id, motion: 'dynamic' })
       this.broadcastAll({ t: 'physgun_state', player: session.entityId, target: grabbed.id })
     } else if (msg.a === 'release') {
       this.releaseHeld(session)

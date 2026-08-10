@@ -360,19 +360,20 @@ async function main(): Promise<void> {
   const grabbed = await grabResult(a)
   assert(grabbed.ok && grabbed.target === crate.id, 'grab with physgun equipped works')
 
-  console.log('phase: drag into city, freeze, city zone forbids re-grab')
+  console.log('phase: drag into city, freeze, re-grab unfreezes (GMod behavior)')
   await walkTo(a, 0, 14) // back through the gate, crate follows the beam
   await sleep(400)
   a.send({ t: 'physgun', a: 'freeze' })
   await a.waitFor((m) => m.t === 'entity' && m.id === crate.id && m.motion === 'frozen')
   assert((a.entities.get(crate.id)?.pos[2] ?? 99) < 20.5, 'crate was dragged inside the city')
+  // The city allows physgun use (prop protection guards ownership instead);
+  // grabbing a frozen prop unfreezes it and picks it up in one motion.
   await aimAt(a, a.entities.get(crate.id) as WireEntity)
   const cityGrab = await grabResult(a)
-  assert(cityGrab.error === 'zone', 'city zone forbids physgun grabs')
-  a.results.length = 0
-  a.send({ t: 'physgun', a: 'unfreeze', target: crate.id })
-  await a.waitFor((m) => m.t === 'result' && m.action === 'physgun')
-  assert(a.results.at(-1)?.error === 'zone', 'city zone forbids unfreeze too')
+  assert(cityGrab.ok && cityGrab.target === crate.id, 'grabbing a frozen prop unfreezes + grabs')
+  assert(a.entities.get(crate.id)?.motion === 'dynamic', 'frozen prop went dynamic on grab')
+  a.send({ t: 'physgun', a: 'release' })
+  await sleep(200)
 
   console.log('phase: hand-gather bootstrap (west gate piles) + skill XP')
   const byType = (t: string) =>
