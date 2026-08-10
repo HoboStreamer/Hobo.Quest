@@ -92,10 +92,10 @@ export function meshForShape(scene: Scene, name: string, shape: WorldShape, colo
 }
 
 /** Builds render meshes for the static level (mirrors the server's physics statics). */
-export function buildStaticWorld(scene: Scene, content: ContentRegistry): void {
+export function buildStaticWorld(scene: Scene, content: ContentRegistry, mapMix?: string): void {
   const world = content.world
   const water = new Water(scene)
-  const groundMeshes = buildTerrainMesh(scene, content)
+  const groundMeshes = buildTerrainMesh(scene, content, mapMix)
   for (const m of groundMeshes) water.addToRenderList(m)
 
   for (const [i, s] of world.statics.entries()) {
@@ -264,7 +264,7 @@ function dropletTexture(): string {
  * quarry + trails, mud in the scrapyard and inside the city walls. The mix
  * map is painted procedurally from world-space regions.
  */
-function buildTerrainMesh(scene: Scene, content: ContentRegistry): Mesh[] {
+function buildTerrainMesh(scene: Scene, content: ContentRegistry, mapMix?: string): Mesh[] {
   const world = content.world
   const grid = buildTerrainGrid(world)
   const mesh = new Mesh('terrain', scene)
@@ -280,7 +280,8 @@ function buildTerrainMesh(scene: Scene, content: ContentRegistry): Mesh[] {
   mesh.receiveShadows = true
 
   const mat = new TerrainMaterial('terrain', scene)
-  mat.mixTexture = paintMixMap(scene, world.groundHalfExtent)
+  // Hand-painted splat from the map editor wins over the procedural paint.
+  mat.mixTexture = mapMix ? new Texture(mapMix, scene) : paintMixMap(scene, world.groundHalfExtent)
   mat.diffuseTexture1 = tiled(scene, 'leafy_grass', 70) // R
   mat.diffuseTexture2 = tiled(scene, 'gray_rocks', 55) // G
   mat.diffuseTexture3 = tiled(scene, 'brown_mud_dry', 60) // B

@@ -1,6 +1,6 @@
 import HavokPhysics from '@babylonjs/havok'
 import havokWasmUrl from '@babylonjs/havok/lib/esm/HavokPhysics.wasm?url'
-import { createContent } from '@hobo/content'
+import { createContent, mapFileToOverride, setMapOverride, type MapFile } from '@hobo/content'
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
@@ -35,9 +35,21 @@ async function start(): Promise<void> {
 
   const identity = getIdentity()
   const content = createContent()
+  // Edited map (must match the server's copy for prediction parity).
+  let mapMix: string | undefined
+  try {
+    const map = (await (await fetch('/map.json')).json()) as MapFile | null
+    if (map && map.v === 1) {
+      setMapOverride(mapFileToOverride(map))
+      content.world.statics.push(...map.statics)
+      mapMix = map.mix
+    }
+  } catch {
+    // no edited map — procedural terrain
+  }
   const engine = await createEngine(canvas)
   const scene = createScene(engine)
-  buildStaticWorld(scene, content)
+  buildStaticWorld(scene, content, mapMix)
 
   // Havok loads while the player customizes their character.
   const havokPromise = HavokPhysics({ locateFile: () => havokWasmUrl })

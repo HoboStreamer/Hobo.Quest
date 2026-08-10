@@ -9,6 +9,12 @@ export default defineConfig({
     },
   },
   build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        editor: 'editor.html',
+      },
+    },
     outDir: 'dist',
     target: 'es2022',
     chunkSizeWarningLimit: 6000,

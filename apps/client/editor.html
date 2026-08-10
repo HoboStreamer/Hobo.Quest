@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hobo.Quest Map Editor</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #10141a;
+        font-family: system-ui, sans-serif;
+      }
+      #game {
+        width: 100%;
+        height: 100%;
+        display: block;
+        outline: none;
+      }
+      #panel {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        width: 240px;
+        color: #dde3ea;
+        background: rgba(16, 20, 26, 0.94);
+        border: 1px solid #2a3340;
+        border-radius: 10px;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        font-size: 13px;
+        z-index: 10;
+      }
+      #panel h1 {
+        font-size: 15px;
+        margin: 0;
+        color: #e8b54a;
+        letter-spacing: 0.05em;
+      }
+      #panel label {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      #panel input[type='range'] {
+        flex: 1;
+      }
+      #panel input[type='password'],
+      #panel select {
+        width: 100%;
+        background: #1c232c;
+        color: #dde3ea;
+        border: 1px solid #2a3340;
+        border-radius: 6px;
+        padding: 5px;
+      }
+      .tools {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+      .tools button,
+      #save {
+        background: #1c232c;
+        color: #dde3ea;
+        border: 1px solid #2a3340;
+        border-radius: 6px;
+        padding: 7px;
+        cursor: pointer;
+      }
+      .tools button.active {
+        background: #2c507a;
+        border-color: #4a7fbf;
+      }
+      #save {
+        background: #2c6a3f;
+        font-weight: 600;
+      }
+      #status {
+        font-size: 12px;
+        color: #9aa4b0;
+        min-height: 16px;
+      }
+      .hint {
+        font-size: 11px;
+        color: #78828e;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="game" tabindex="0"></canvas>
+    <div id="panel">
+      <h1>MAP EDITOR</h1>
+      <div class="tools" id="tools"></div>
+      <label>Radius <input id="radius" type="range" min="1" max="20" step="0.5" value="6" /></label>
+      <label
+        >Strength <input id="strength" type="range" min="0.05" max="1.5" step="0.05" value="0.4"
+      /></label>
+      <label id="paint-row"
+        >Paint
+        <select id="paint">
+          <option value="#ff0000">Grass</option>
+          <option value="#00ff00">Rock</option>
+          <option value="#0000ff">Dirt / path</option>
+        </select></label
+      >
+      <label id="place-row"
+        >Place
+        <select id="place"></select
+      ></label>
+      <input id="key" type="password" placeholder="hobo.tools admin token / editor key" />
+      <button id="save">💾 Save map (server restart applies physics)</button>
+      <div id="status"></div>
+      <div class="hint">
+        WASD+RMB-drag fly · LMB use tool · Ctrl inverts sculpt · Del removes a placed static
+      </div>
+    </div>
+    <script type="module" src="/src/editor/main.ts"></script>
+  </body>
+</html>

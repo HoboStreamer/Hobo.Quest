@@ -1,6 +1,6 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { createContent } from '@hobo/content'
+import { createContent, mapFileToOverride, setMapOverride } from '@hobo/content'
 import { openSqliteStore } from '@hobo/persistence/sqlite'
 import { createHeadlessHavokWorld } from '@hobo/physics/havok'
 import { createConsoleLogger } from '@hobo/shared'
@@ -27,6 +27,22 @@ async function main(): Promise<void> {
 
   // Content validates at construction — invalid definitions kill the boot.
   const content = createContent()
+  // Edited map (from /editor): heightfield + extra statics replace the
+  // procedural terrain for EVERYTHING (physics, spawns, clients fetch the
+  // same file over /map.json).
+  if (existsSync(config.mapPath)) {
+    try {
+      const raw = JSON.parse(readFileSync(config.mapPath, 'utf8')) as
+        import('@hobo/content').MapFile | null
+      if (raw && raw.v === 1) {
+        setMapOverride(mapFileToOverride(raw))
+        content.world.statics.push(...raw.statics)
+        log.info('edited map loaded', { statics: raw.statics.length, sub: raw.sub })
+      }
+    } catch (err) {
+      log.warn('edited map unreadable — using procedural terrain', { error: String(err) })
+    }
+  }
   log.info('content loaded', {
     items: content.allItems().length,
     recipes: content.allRecipes().length,
@@ -45,7 +61,16 @@ async function main(): Promise<void> {
 
   const game = new GameServer(config, world, store, metrics, log.child({ system: 'game' }))
 
-  const http = createHttpServer(config.staticDir, metrics, log.child({ system: 'http' }))
+  const http = createHttpServer(
+    config.staticDir,
+    metrics,
+    log.child({ system: 'http' }),
+    config.mapPath,
+    {
+      key: config.editorKey,
+      hoboToolsUrl: config.hoboToolsAuthUrl,
+    },
+  )
   attachWebSocket(http, game, log.child({ system: 'ws' }))
   http.listen(config.port, config.host, () => {
     log.info('listening', { host: config.host, port: config.port })

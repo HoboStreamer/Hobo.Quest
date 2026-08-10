@@ -1,6 +1,6 @@
-import { createReadStream, existsSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { extname, join, normalize, resolve } from 'node:path'
+import { dirname, extname, join, normalize, resolve } from 'node:path'
 import type { Logger } from '@hobo/shared'
 import type { ServerMetrics } from '../observability/metrics.js'
 
@@ -23,14 +23,88 @@ const MIME: Record<string, string> = {
   '.map': 'application/json',
 }
 
+export interface EditorAuth {
+  /** Shared-secret fallback. */
+  key: string | null
+  /** hobo.tools session endpoint; token validated there when configured. */
+  hoboToolsUrl: string | null
+}
+
+/**
+ * Validates a map-editor token: against hobo.tools when configured (the
+ * endpoint must answer a JSON body with an admin-ish rank for the given
+ * bearer token), else against the EDITOR_KEY shared secret.
+ */
+async function editorAuthorized(auth: EditorAuth, token: string | undefined): Promise<boolean> {
+  if (!token) return false
+  if (auth.hoboToolsUrl) {
+    try {
+      const resp = await fetch(auth.hoboToolsUrl, {
+        headers: { authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) return false
+      const body = (await resp.json()) as { rank?: string; role?: string; admin?: boolean }
+      return body.admin === true || body.rank === 'admin' || body.role === 'admin'
+    } catch {
+      return false
+    }
+  }
+  return auth.key !== null && token === auth.key
+}
+
 export function createHttpServer(
   staticDir: string | null,
   metrics: ServerMetrics,
   log: Logger,
+  mapPath?: string,
+  editorAuth?: EditorAuth,
 ): Server {
   const root = staticDir ? resolve(staticDir) : null
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = (req.url ?? '/').split('?')[0] ?? '/'
+    if (url === '/map.json' && mapPath) {
+      if (existsSync(mapPath)) {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' })
+        createReadStream(mapPath).pipe(res)
+      } else {
+        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' })
+        res.end('null')
+      }
+      return
+    }
+    if (url === '/api/map' && req.method === 'POST' && mapPath && editorAuth) {
+      const token = (req.headers['x-editor-key'] as string | undefined) ?? undefined
+      void editorAuthorized(editorAuth, token).then((ok) => {
+        if (!ok) {
+          log.warn('editor save rejected', {})
+          res.writeHead(403, { 'content-type': 'application/json' })
+          res.end('{"error":"forbidden"}')
+          return
+        }
+        const chunks: Buffer[] = []
+        let size = 0
+        req.on('data', (c: Buffer) => {
+          size += c.length
+          if (size > 64 * 1024 * 1024) req.destroy()
+          else chunks.push(c)
+        })
+        req.on('end', () => {
+          try {
+            const body = Buffer.concat(chunks).toString('utf8')
+            JSON.parse(body) // must at least be JSON
+            mkdirSync(dirname(mapPath), { recursive: true })
+            writeFileSync(mapPath, body)
+            log.info('map saved by editor', { bytes: body.length })
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end('{"ok":true,"note":"restart the server to apply the map to physics"}')
+          } catch {
+            res.writeHead(400, { 'content-type': 'application/json' })
+            res.end('{"error":"bad_map"}')
+          }
+        })
+      })
+      return
+    }
     if (url === '/healthz') {
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ ok: true, tick: metrics.tick }))

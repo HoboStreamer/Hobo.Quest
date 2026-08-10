@@ -97,8 +97,48 @@ function padsFor(world: WorldDef): Pad[] {
   return pads
 }
 
+// ── Edited-map override ──────────────────────────────────────────────
+// When a hand-edited map (from the /editor tool) is loaded, its heightfield
+// replaces the procedural noise everywhere — server physics, client
+// prediction and rendering all sample the same grid.
+
+export interface MapOverride {
+  halfExtent: number
+  /** Grid points per side (sub+1 columns). */
+  sub: number
+  /** Row-major heights, (sub+1)^2 entries, row 0 at -z. */
+  heights: Float32Array
+}
+
+let mapOverride: MapOverride | null = null
+
+export function setMapOverride(map: MapOverride | null): void {
+  mapOverride = map
+}
+
+export function getMapOverride(): MapOverride | null {
+  return mapOverride
+}
+
+function sampleOverride(map: MapOverride, x: number, z: number): number {
+  const cell = (map.halfExtent * 2) / map.sub
+  const fx = Math.min(Math.max((x + map.halfExtent) / cell, 0), map.sub - 1e-6)
+  const fz = Math.min(Math.max((z + map.halfExtent) / cell, 0), map.sub - 1e-6)
+  const ix = Math.floor(fx)
+  const iz = Math.floor(fz)
+  const tx = fx - ix
+  const tz = fz - iz
+  const w = map.sub + 1
+  const h00 = map.heights[iz * w + ix] ?? 0
+  const h10 = map.heights[iz * w + ix + 1] ?? 0
+  const h01 = map.heights[(iz + 1) * w + ix] ?? 0
+  const h11 = map.heights[(iz + 1) * w + ix + 1] ?? 0
+  return h00 * (1 - tx) * (1 - tz) + h10 * tx * (1 - tz) + h01 * (1 - tx) * tz + h11 * tx * tz
+}
+
 /** Terrain elevation at world (x, z). */
 export function terrainHeight(world: WorldDef, x: number, z: number): number {
+  if (mapOverride) return sampleOverride(mapOverride, x, z)
   let mask = 1
   for (const pad of padsFor(world)) {
     const m = padMask(x, z, pad.cx, pad.cz, pad.hx, pad.hz, pad.ramp)
@@ -116,6 +156,25 @@ export interface TerrainGrid {
   sub: number
   /** Half extent in meters. */
   halfExtent: number
+}
+
+/** The procedural heights as a flat grid (editor starting point). */
+export function defaultHeights(world: WorldDef, sub: number): Float32Array {
+  const half = world.groundHalfExtent
+  const heights = new Float32Array((sub + 1) * (sub + 1))
+  const saved = mapOverride
+  mapOverride = null
+  for (let j = 0; j <= sub; j++) {
+    for (let i = 0; i <= sub; i++) {
+      heights[j * (sub + 1) + i] = terrainHeight(
+        world,
+        -half + (i * half * 2) / sub,
+        -half + (j * half * 2) / sub,
+      )
+    }
+  }
+  mapOverride = saved
+  return heights
 }
 
 /** Full displaced grid (positions/indices/uvs) for physics + rendering. */

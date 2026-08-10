@@ -4,6 +4,9 @@ export interface ServerConfig {
   dbPath: string
   /** Directory of built client assets to serve, or null for API/WS only. */
   staticDir: string | null
+  mapPath: string
+  editorKey: string | null
+  hoboToolsAuthUrl: string | null
   tickRate: number
   /** Send a snapshot every N ticks. */
   snapshotEvery: number
@@ -20,6 +23,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
     host: env.HOST ?? '0.0.0.0',
     dbPath: env.DB_PATH ?? 'data/world.db',
     staticDir: env.STATIC_DIR ?? null,
+    mapPath: env.MAP_PATH ?? 'data/map.json',
+    /** Fallback admin secret for the map editor (until hobo.tools SSO). */
+    editorKey: env.EDITOR_KEY ?? null,
+    /** hobo.tools auth endpoint; when set, editor tokens validate there. */
+    hoboToolsAuthUrl: env.HOBO_TOOLS_AUTH_URL ?? null,
     tickRate: 30,
     snapshotEvery: 2,
     interestRadius: intEnv(env, 'INTEREST_RADIUS', 80),

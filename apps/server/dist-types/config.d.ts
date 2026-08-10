@@ -4,6 +4,9 @@ export interface ServerConfig {
   dbPath: string
   /** Directory of built client assets to serve, or null for API/WS only. */
   staticDir: string | null
+  mapPath: string
+  editorKey: string | null
+  hoboToolsAuthUrl: string | null
   tickRate: number
   /** Send a snapshot every N ticks. */
   snapshotEvery: number

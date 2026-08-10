@@ -18,5 +18,9 @@ export declare function meshForShape(
   color: string,
 ): Mesh
 /** Builds render meshes for the static level (mirrors the server's physics statics). */
-export declare function buildStaticWorld(scene: Scene, content: ContentRegistry): void
+export declare function buildStaticWorld(
+  scene: Scene,
+  content: ContentRegistry,
+  mapMix?: string,
+): void
 //# sourceMappingURL=sceneSetup.d.ts.map
