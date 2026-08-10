@@ -214,6 +214,7 @@ async function start(): Promise<void> {
       hud.flashHitmarker()
     }
   })
+  let rejected = false
   connection.onMessage = (msg) => {
     state.apply(msg)
     if (msg.t === 'map_reload') {
@@ -235,7 +236,21 @@ async function start(): Promise<void> {
       player.onSnapshot(msg)
       view.onSnapshot(msg, performance.now() / 1000)
     } else if (msg.t === 'reject') {
-      if (msg.reason === 'guest_one_character') {
+      rejected = true
+      if (msg.reason === 'protocol_mismatch') {
+        // A stale cached bundle is talking to a newer server. A reload
+        // revalidates the page and pulls the new client. Guard against a
+        // reload loop if something still pins the old version.
+        const last = Number(localStorage.getItem('hq_reload_ts') ?? '0')
+        if (Date.now() - last > 60_000) {
+          localStorage.setItem('hq_reload_ts', String(Date.now()))
+          hud.setStatus('game updated — loading the new version…')
+          hud.toast('Game updated! Reloading…', false)
+          setTimeout(() => location.reload(), 1200)
+        } else {
+          hud.setStatus('version mismatch — hard-refresh (Ctrl+Shift+R) to update')
+        }
+      } else if (msg.reason === 'guest_one_character') {
         hud.setStatus('guests get one character — sign in with hobo.tools for 3 slots')
       } else if (msg.reason === 'auth_failed') {
         localStorage.removeItem('hq_sso')
@@ -246,8 +261,21 @@ async function start(): Promise<void> {
     }
   }
   connection.onClose = () => {
-    hud.setStatus('disconnected — refresh to reconnect')
-    hud.toast('Disconnected from server', true)
+    if (rejected) return
+    // Deploys restart the server; come back on our own instead of
+    // freezing on a dead socket. Reload = full clean resync.
+    hud.setStatus('connection lost — reconnecting automatically…')
+    hud.toast('Disconnected — reconnecting…', true)
+    const poll = setInterval(() => {
+      fetch('/healthz')
+        .then((r) => {
+          if (r.ok) {
+            clearInterval(poll)
+            location.reload()
+          }
+        })
+        .catch(() => {})
+    }, 2000)
   }
 
   hud.setStatus('connecting…')

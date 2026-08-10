@@ -226,7 +226,14 @@ location.href = '/play.html';
     const type = MIME[extname(filePath)] ?? 'application/octet-stream'
     res.writeHead(200, {
       'content-type': type,
-      'cache-control': filePath.endsWith('index.html') ? 'no-cache' : 'public, max-age=3600',
+      // HTML must always revalidate (a stale page pins an old protocol
+      // version and can't join). Vite content-hashes /assets/, so those
+      // are immutable; everything else gets a modest TTL.
+      'cache-control': filePath.endsWith('.html')
+        ? 'no-cache'
+        : filePath.includes('/assets/')
+          ? 'public, max-age=31536000, immutable'
+          : 'public, max-age=3600',
     })
     createReadStream(filePath)
       .on('error', (err) => {
