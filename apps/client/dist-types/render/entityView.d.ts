@@ -19,6 +19,8 @@ export declare class EntityView {
   entityIdForBody(bodyId: BodyId): string | undefined
   avatarFor(entityId: string): Avatar | null
   private add
+  /** Static capsule matching the server's player body (short + lifted). */
+  private addPlayerBody
   private remove
   /** Authoritative pin: freeze/settle transforms, resource depletion state. */
   private applyAuthoritative

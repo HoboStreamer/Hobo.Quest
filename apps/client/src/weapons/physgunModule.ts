@@ -48,7 +48,8 @@ function buildPhysgunPanel(el: HTMLElement, settings: WeaponSettings): void {
     },
   )
   infoLines(el, [
-    'Hold LMB — grab from the point you aim at (frozen props unfreeze)',
+    'Hold LMB — fire the beam; it grabs a prop from the exact point it touches',
+    'Frozen props unfreeze when grabbed · props keep their angle when picked up',
     'RMB — freeze in place · wheel — push / pull',
     'Hold E — rotate like a globe · Shift+E — snap rotation',
     'Hold Shift — grid-lock position while carrying',

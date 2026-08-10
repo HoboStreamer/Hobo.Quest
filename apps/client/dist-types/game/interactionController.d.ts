@@ -47,6 +47,12 @@ export declare class InteractionController {
   equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null
   /** What the crosshair points at right now (client-side, UX only). */
   aim(): AimTarget | null
+  /**
+   * Where the beam visually ends right now: first surface (world or prop)
+   * under the crosshair, else max range. The beam always fires — hitting
+   * nothing is not an error, it just shines (GMod).
+   */
+  beamTarget(out: { x: number; y: number; z: number }): void
   handle(action: InputAction): void
   private endCarry
   /** Called once per fixed tick: flush coalesced rotate + grid-lock state. */

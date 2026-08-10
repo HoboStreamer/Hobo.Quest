@@ -32,9 +32,9 @@ import { eyePosition, viewDirection, type PlayerSession } from './playerSession.
  * not extensions of a Physgun class.
  */
 
-export const PHYSGUN_MAX_RANGE = 8
+export const PHYSGUN_MAX_RANGE = 25
 export const PHYSGUN_MIN_DIST = 1
-export const PHYSGUN_MAX_DIST = 10
+export const PHYSGUN_MAX_DIST = 25
 const LINEAR_GAIN = 12
 const ANGULAR_GAIN = 8
 const MAX_DRIVE_SPEED = 25
@@ -72,7 +72,6 @@ export function tryGrab(
   if (!world.zones.rulesAt(entity.transform.pos).physgun) return 'zone'
   if (!canManipulate(entity)) return 'not_owner'
 
-  // Preserve current orientation relative to the player's view yaw.
   const bodyId = world.bodyOf(entity.id)
   if (bodyId === undefined) return 'no_target'
   if (entity.prop.motion === 'frozen') {
@@ -84,13 +83,21 @@ export function tryGrab(
   v3sub(_grabVec, hit.point, _bodyPos)
   const localOffset = vec3()
   qrotateVecInv(localOffset, _bodyRot, _grabVec)
+  // Full orientation relative to view yaw: grabRot = yaw(-viewYaw) * bodyRot.
+  // The prop keeps its EXACT pose at grab time (no straightening) and turns
+  // with the player's view, like GMod.
+  const grabRot = qfromYaw(quat(), -session.yaw)
+  qmul(grabRot, grabRot, _bodyRot)
+  qnormalize(grabRot, grabRot)
   session.held = {
     entityId: entity.id,
     dist: Math.max(v3dist(_eye, hit.point), PHYSGUN_MIN_DIST),
     localOffset,
     yawOffset: 0,
     pitchOffset: 0,
-    grabYawDelta: extractYaw(_bodyRot) - session.yaw,
+    rawYaw: 0,
+    rawPitch: 0,
+    grabRot,
     grid: false,
     gridSize: 0.25,
   }
@@ -115,12 +122,18 @@ export function rotateHeld(
 ): void {
   const held = session.held
   if (!held) return
-  held.yawOffset = wrapAngle(held.yawOffset + dyaw)
-  held.pitchOffset = clamp(held.pitchOffset + dpitch, -Math.PI / 2, Math.PI / 2)
+  // Accumulate UNSNAPPED, quantize on output: snapping the accumulator
+  // itself rounds small per-message deltas back to zero and the prop
+  // never turns (the old Shift+E bug).
+  held.rawYaw = wrapAngle(held.rawYaw + dyaw)
+  held.rawPitch = clamp(held.rawPitch + dpitch, -Math.PI, Math.PI)
   if (snap) {
     const step = clamp(snapStep ?? DEFAULT_SNAP_STEP, 0.02, 1.6)
-    held.yawOffset = Math.round(held.yawOffset / step) * step
-    held.pitchOffset = Math.round(held.pitchOffset / step) * step
+    held.yawOffset = Math.round(held.rawYaw / step) * step
+    held.pitchOffset = Math.round(held.rawPitch / step) * step
+  } else {
+    held.yawOffset = held.rawYaw
+    held.pitchOffset = held.rawPitch
   }
 }
 
@@ -187,21 +200,17 @@ export function driveHeld(session: PlayerSession, world: GameWorld): void {
   world.physics.wake(bodyId)
   world.physics.setLinearVelocity(bodyId, _vel)
 
-  // Orientation: follow player yaw + accumulated offsets.
-  const targetYaw = session.yaw + held.grabYawDelta + held.yawOffset
-  qfromYaw(_targetRot, targetYaw)
+  // Orientation: view yaw + player rotate offsets, on top of the EXACT
+  // orientation the prop had at grab time (grabRot).
+  qfromYaw(_targetRot, session.yaw + held.yawOffset)
   if (held.pitchOffset !== 0) {
     const half = held.pitchOffset * 0.5
     qmul(_targetRot, _targetRot, quat(Math.sin(half), 0, 0, Math.cos(half)))
   }
+  qmul(_targetRot, _targetRot, held.grabRot)
   qnormalize(_targetRot, _targetRot)
   const angVel = angularVelocityToward(_bodyRot, _targetRot, ANGULAR_GAIN)
   world.physics.setAngularVelocity(bodyId, angVel)
-}
-
-function extractYaw(q: Quat): number {
-  // Yaw from quaternion (Y-up).
-  return Math.atan2(2 * (q.w * q.y + q.x * q.z), 1 - 2 * (q.y * q.y + q.x * q.x))
 }
 
 const _errQ = quat()

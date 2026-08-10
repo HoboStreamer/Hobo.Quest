@@ -180,6 +180,18 @@ async function main(): Promise<void> {
   console.log(`  beams active (heldBy size): ${held}`)
   await shot(page, '06-physgun-grab')
   await page.mouse.up()
+  await page.waitForTimeout(400)
+
+  // Beam fires even at nothing: aim at the sky, hold LMB, expect the dim
+  // searching ray from the muzzle (GMod always-on beam).
+  await page.evaluate(() => {
+    ;(window as unknown as { __hobo: { input: { pitch: number } } }).__hobo.input.pitch = 0.5
+  })
+  await page.waitForTimeout(200)
+  await page.mouse.down()
+  await page.waitForTimeout(500)
+  await shot(page, '06b-beam-sky')
+  await page.mouse.up()
   void dbg
 
   await page.evaluate(() => {

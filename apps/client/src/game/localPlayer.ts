@@ -66,9 +66,18 @@ export class LocalPlayer {
     // We drive the camera entirely from simulation + mouse; Babylon's own
     // camera inputs stay detached.
     this.camera.inputs.clear()
+    // Player layer included: remote players have static mirror capsules, so
+    // prediction blocks on them just like the server does. No self-exclude
+    // needed — the local player has no mirror body client-side.
     this.queries = {
       sweepCapsule: (from, to, radius, height) =>
-        physics.sweepCapsule(from, to, radius, height, CollisionLayer.Static | CollisionLayer.Prop),
+        physics.sweepCapsule(
+          from,
+          to,
+          radius,
+          height,
+          CollisionLayer.Static | CollisionLayer.Prop | CollisionLayer.Player,
+        ),
     }
     this.prevPos.set(spawn.x, spawn.y, spawn.z)
     this.currPos.set(spawn.x, spawn.y, spawn.z)

@@ -24,6 +24,8 @@ import type { WeaponSettings } from '../weapons/registry.js'
  */
 
 const AIM_RANGE = 8
+/** Physgun beam reach (matches server PHYSGUN_MAX_RANGE). */
+const BEAM_RANGE = 25
 const SWING_COOLDOWN_MS = 350
 const _eye = vec3()
 const _dir = vec3()
@@ -89,6 +91,24 @@ export class InteractionController {
     }
   }
 
+  /**
+   * Where the beam visually ends right now: first surface (world or prop)
+   * under the crosshair, else max range. The beam always fires — hitting
+   * nothing is not an error, it just shines (GMod).
+   */
+  beamTarget(out: { x: number; y: number; z: number }): void {
+    _eye.x = this.player.eye.x
+    _eye.y = this.player.eye.y
+    _eye.z = this.player.eye.z
+    this.player.viewDir(_dir)
+    v3addScaled(_to, _eye, _dir, BEAM_RANGE)
+    const hit = this.physics.raycast(_eye, _to, CollisionLayer.Static | CollisionLayer.Prop)
+    const p = hit ? hit.point : _to
+    out.x = p.x
+    out.y = p.y
+    out.z = p.z
+  }
+
   handle(action: InputAction): void {
     const tool = this.equippedToolKind()
     switch (action.kind) {
@@ -135,9 +155,11 @@ export class InteractionController {
       }
       case 'rotate_held':
         // Coalesced: high-frequency mouse deltas must not become one wire
-        // message each (rate limiter would kill the connection).
-        this.pendingRotate.dyaw += action.dyaw
-        this.pendingRotate.dpitch += action.dpitch
+        // message each (rate limiter would kill the connection). Negated:
+        // the prop rolls like a globe under the cursor (drag right = prop
+        // turns left toward you), which is how GMod's rotate feels.
+        this.pendingRotate.dyaw -= action.dyaw
+        this.pendingRotate.dpitch -= action.dpitch
         break
       default:
         break

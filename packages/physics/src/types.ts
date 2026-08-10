@@ -104,6 +104,7 @@ export interface PhysicsWorld {
     radius: number,
     height: number,
     collidesWith: number,
+    exclude?: BodyId,
   ): SweepHit | null
 
   dispose(): void

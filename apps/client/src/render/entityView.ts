@@ -8,7 +8,7 @@ import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import type { ContentRegistry, WorldShape } from '@hobo/content'
-import { hullHeightFor } from '@hobo/gameplay'
+import { DEFAULT_MOVEMENT, hullHeightFor } from '@hobo/gameplay'
 import { CollisionLayer, type BodyId, type PhysicsWorld, type ShapeDesc } from '@hobo/physics'
 import type { ServerSnapshot, WireEntity } from '@hobo/protocol'
 import { quat, vec3, wrapAngle } from '@hobo/shared'
@@ -43,6 +43,8 @@ interface EntityVisual {
   avatar: Avatar | null
   bodyId: BodyId | null
   buffer: InterpSample[]
+  /** Stance the player mirror capsule was last built for (players only). */
+  bodyStance: number
 }
 
 const INTERP_DELAY = 0.13
@@ -90,6 +92,9 @@ export class EntityView {
         Avatar.appearanceOrDefault(e.appearance),
         `player:${e.id}`,
       )
+      // Collision mirror so local prediction blocks on other players the
+      // same way the server does (players collide with players).
+      bodyId = this.addPlayerBody(vec3(e.pos[0], e.pos[1], e.pos[2]), 0)
     } else if (e.kind === 'prop' && e.def) {
       const def = this.content.item(e.def)
       if (def?.world) {
@@ -126,7 +131,23 @@ export class EntityView {
       mesh.rotationQuaternion = new Quaternion(e.rot[0], e.rot[1], e.rot[2], e.rot[3])
     }
     if (bodyId !== null) this.entityByBody.set(bodyId, e.id)
-    this.visuals.set(e.id, { entity: e, mesh, avatar, bodyId, buffer: [] })
+    this.visuals.set(e.id, { entity: e, mesh, avatar, bodyId, buffer: [], bodyStance: 0 })
+  }
+
+  /** Static capsule matching the server's player body (short + lifted). */
+  private addPlayerBody(pos: { x: number; y: number; z: number }, stance: number): BodyId {
+    const hull = hullHeightFor(stance as 0 | 1 | 2)
+    return this.physics.addBody({
+      shape: {
+        type: 'capsule',
+        radius: DEFAULT_MOVEMENT.capsuleRadius,
+        height: Math.max(hull - 0.3, 0.4),
+      },
+      motion: 'static',
+      pos: vec3(pos.x, pos.y + 0.15, pos.z),
+      layer: CollisionLayer.Player,
+      collidesWith: CollisionLayer.Player,
+    })
   }
 
   private remove(id: string): void {
@@ -222,6 +243,20 @@ export class EntityView {
       if (v.avatar) {
         const yaw = lerpAngle(a.yaw ?? 0, b.yaw ?? a.yaw ?? 0, alpha)
         const latest = v.buffer[v.buffer.length - 1] as InterpSample
+        // Keep the player collision mirror on the smooth pose; swap the hull
+        // when their stance changes so crouched players are shorter to walk on.
+        if (v.bodyId !== null) {
+          const stance = latest.stance ?? 0
+          if (stance !== v.bodyStance) {
+            this.entityByBody.delete(v.bodyId)
+            this.physics.removeBody(v.bodyId)
+            v.bodyId = this.addPlayerBody(_pos, stance)
+            v.bodyStance = stance
+            this.entityByBody.set(v.bodyId, v.entity.id)
+          } else {
+            this.physics.setTransform(v.bodyId, vec3(_pos.x, _pos.y + 0.15, _pos.z))
+          }
+        }
         const beamActive = [...this.state.heldBy.values()].includes(v.entity.id)
         v.avatar.update({
           dt,
@@ -244,16 +279,11 @@ export class EntityView {
       nlerpQuat(a.rot, b.rot, alpha, _rot)
       v.mesh.position.set(_pos.x, _pos.y, _pos.z)
       v.mesh.rotationQuaternion?.set(_rot.x, _rot.y, _rot.z, _rot.w)
-      // Keep the prediction-collision mirror on the smooth interpolated pose
-      // so standing on a moving prop doesn't fight 15Hz snapshot steps.
-      if (v.bodyId !== null) {
-        this.physics.setTransform(
-          v.bodyId,
-          vec3(_pos.x, _pos.y, _pos.z),
-          quat(_rot.x, _rot.y, _rot.z, _rot.w),
-        )
-      }
-      // Held props glow subtly so every player can see what's being moved.
+      // NOTE: the prop's collision mirror is synced at snapshot time (latest
+      // authoritative pose), NOT here — prediction must compare against the
+      // freshest server state, not the ~130ms-delayed visual interpolation.
+      // Interpolated mirrors made standing on props mispredict every tick.
+      // Held props glow so every player can see what's being moved.
       const mat = v.mesh.material as StandardMaterial | null
       if (mat && 'emissiveColor' in mat) {
         const held = this.state.heldBy.has(v.entity.id)
@@ -271,7 +301,7 @@ export class EntityView {
   }
 }
 
-const HELD_GLOW = new Color3(0.06, 0.1, 0.16)
+const HELD_GLOW = new Color3(0.14, 0.24, 0.38)
 const NO_GLOW = new Color3(0, 0, 0)
 
 function pushSample(buffer: InterpSample[], sample: InterpSample): void {

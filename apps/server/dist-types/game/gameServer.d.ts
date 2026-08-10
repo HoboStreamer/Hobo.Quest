@@ -25,6 +25,8 @@ export declare class GameServer {
   private readonly offlineFriendsCache
   private tick
   private readonly moveQueries
+  /** Body excluded from the current movement sweep (the moving player's own). */
+  private sweepSelf
   private lastFlushTick
   constructor(
     config: ServerConfig,
@@ -46,6 +48,8 @@ export declare class GameServer {
   private handlePhysgun
   private handleTrust
   private sendFriends
+  /** One grab attempt down the view ray; latches + broadcasts on success. */
+  private attemptGrab
   private releaseHeld
   step(): void
   private stepSessionMovement

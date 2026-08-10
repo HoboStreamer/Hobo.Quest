@@ -70,6 +70,8 @@ export class GameServer {
   private readonly offlineFriendsCache = new Map<string, { friends: Set<string>; at: number }>()
   private tick = 0
   private readonly moveQueries: CollisionQueries
+  /** Body excluded from the current movement sweep (the moving player's own). */
+  private sweepSelf: BodyId | undefined
   private lastFlushTick = 0
 
   constructor(
@@ -79,6 +81,8 @@ export class GameServer {
     private readonly metrics: ServerMetrics,
     private readonly log: Logger,
   ) {
+    // Players block players: sweeps include the Player layer, minus the
+    // mover's own kinematic body.
     this.moveQueries = {
       sweepCapsule: (from, to, radius, height) =>
         world.physics.sweepCapsule(
@@ -86,7 +90,8 @@ export class GameServer {
           to,
           radius,
           height,
-          CollisionLayer.Static | CollisionLayer.Prop,
+          CollisionLayer.Static | CollisionLayer.Prop | CollisionLayer.Player,
+          this.sweepSelf,
         ),
     }
   }
@@ -231,9 +236,10 @@ export class GameServer {
             session.activeHotbar = msg.slot
             session.holstered = false
           }
-          // Switching away from the physgun drops anything it was holding.
-          if (session.held && equippedTool(session)?.kind !== 'physgun') {
-            this.releaseHeld(session)
+          // Switching away from the physgun drops beam and anything held.
+          if (equippedTool(session)?.kind !== 'physgun') {
+            session.grabbing = false
+            if (session.held) this.releaseHeld(session)
           }
         }
         break
@@ -358,7 +364,7 @@ export class GameServer {
       motion: 'kinematic',
       pos: vec3(session.move.pos.x, session.move.pos.y + 0.15, session.move.pos.z),
       layer: CollisionLayer.Player,
-      collidesWith: CollisionLayer.Static | CollisionLayer.Prop,
+      collidesWith: CollisionLayer.Static | CollisionLayer.Prop | CollisionLayer.Player,
     })
     this.playerBodies.set(playerId, bodyId)
 
@@ -395,19 +401,16 @@ export class GameServer {
     }
     if (msg.a === 'grab') {
       if (session.held) return
-      const grabbed = tryGrab(session, this.world, this.heldEntityIds, (e) =>
-        this.canManipulate(session, e),
-      )
-      if (typeof grabbed === 'string') {
-        this.send(session, { t: 'result', action: 'physgun', ok: false, error: grabbed })
-        return
+      // Beam on: even with nothing under the crosshair, keep trying each
+      // tick — sweeping the beam onto a prop picks it up (GMod behavior).
+      session.grabbing = true
+      const denied = this.attemptGrab(session)
+      // Only meaningful denials are surfaced; an empty beam is not an error.
+      if (denied && denied !== 'no_target') {
+        this.send(session, { t: 'result', action: 'physgun', ok: false, error: denied })
       }
-      this.heldEntityIds.add(grabbed.id)
-      // Grabbing a frozen prop unfreezes it — tell clients about the motion
-      // change (physics resumes; frozen visuals must clear).
-      this.broadcastToKnowing(grabbed.id, { t: 'entity', id: grabbed.id, motion: 'dynamic' })
-      this.broadcastAll({ t: 'physgun_state', player: session.entityId, target: grabbed.id })
     } else if (msg.a === 'release') {
+      session.grabbing = false
       this.releaseHeld(session)
     } else if (msg.a === 'adjust') {
       adjustDistance(session, msg.dist)
@@ -419,6 +422,9 @@ export class GameServer {
         if (msg.size !== undefined) session.held.gridSize = msg.size
       }
     } else if (msg.a === 'freeze') {
+      // Freezing ends the beam — otherwise the sweep-to-grab retry would
+      // immediately unfreeze what was just frozen.
+      session.grabbing = false
       const frozen = freezeHeld(session, this.world)
       if (frozen) {
         this.heldEntityIds.delete(frozen.id)
@@ -495,6 +501,20 @@ export class GameServer {
     this.send(session, { t: 'friends', friends })
   }
 
+  /** One grab attempt down the view ray; latches + broadcasts on success. */
+  private attemptGrab(session: PlayerSession): string | null {
+    const grabbed = tryGrab(session, this.world, this.heldEntityIds, (e) =>
+      this.canManipulate(session, e),
+    )
+    if (typeof grabbed === 'string') return grabbed
+    this.heldEntityIds.add(grabbed.id)
+    // Grabbing a frozen prop unfreezes it — tell clients about the motion
+    // change (physics resumes; frozen visuals must clear).
+    this.broadcastToKnowing(grabbed.id, { t: 'entity', id: grabbed.id, motion: 'dynamic' })
+    this.broadcastAll({ t: 'physgun_state', player: session.entityId, target: grabbed.id })
+    return null
+  }
+
   private releaseHeld(session: PlayerSession): void {
     if (!session.held) return
     this.heldEntityIds.delete(session.held.entityId)
@@ -513,8 +533,11 @@ export class GameServer {
       this.stepSessionMovement(session)
     }
 
-    // 2. Physgun drives held bodies via velocity control.
+    // 2. Physgun: retry unlatched beams (sweep-to-grab), drive held bodies.
     for (const session of this.sessions.values()) {
+      if (session.grabbing && !session.held && equippedTool(session)?.kind === 'physgun') {
+        this.attemptGrab(session)
+      }
       if (session.held) driveHeld(session, this.world)
     }
 
@@ -589,6 +612,7 @@ export class GameServer {
   }
 
   private stepSessionMovement(session: PlayerSession): void {
+    this.sweepSelf = this.playerBodies.get(session.playerId)
     // Process at most 2 queued inputs per tick (catch-up), else repeat the
     // last input — the queue bound caps client-driven speedup.
     const budget = session.inputQueue.length > 2 ? 2 : 1
@@ -629,7 +653,7 @@ export class GameServer {
         motion: 'kinematic',
         pos: vec3(session.move.pos.x, session.move.pos.y + 0.15, session.move.pos.z),
         layer: CollisionLayer.Player,
-        collidesWith: CollisionLayer.Static | CollisionLayer.Prop,
+        collidesWith: CollisionLayer.Static | CollisionLayer.Prop | CollisionLayer.Player,
       })
       this.playerBodies.set(session.playerId, bodyId)
       session.bodyStance = session.move.stance

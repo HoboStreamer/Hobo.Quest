@@ -3,12 +3,12 @@ import havokWasmUrl from '@babylonjs/havok/lib/esm/HavokPhysics.wasm?url'
 import { createContent } from '@hobo/content'
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
-import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { InteractionController } from './game/interactionController.js'
 import { LocalPlayer } from './game/localPlayer.js'
 import { InputTracker } from './input/inputTracker.js'
 import { Connection, gameSocketUrl, getIdentity, saveName } from './net/connection.js'
-import { BeamRenderer } from './render/beams.js'
+import { BeamRenderer, type BeamState } from './render/beams.js'
 import { EntityView } from './render/entityView.js'
 import { FirstPersonBody } from './render/firstPersonBody.js'
 import { buildStaticWorld, createEngine, createScene } from './render/sceneSetup.js'
@@ -192,13 +192,35 @@ async function start(): Promise<void> {
     viewmodel.setItem(state.activeItemDef())
     viewmodel.update(elapsed, speed, player.move.grounded, look.dx, look.dy)
 
-    const activeBeams = new Map<string, [Vector3, Vector3]>()
+    // Beams: mine fires whenever the trigger is held (dim searching ray →
+    // bright latched beam); other players' render only while they hold props.
+    const activeBeams = new Map<string, BeamState>()
     for (const [target, holder] of state.heldBy) {
+      if (holder === state.myEntityId) continue
       const to = view.positionOf(target)
-      if (!to) continue
-      const from =
-        holder === state.myEntityId ? viewmodel.beamOrigin() : view.avatarFor(holder)?.beamOrigin()
-      if (from) activeBeams.set(holder, [from, to])
+      const from = view.avatarFor(holder)?.beamOrigin()
+      if (from && to) activeBeams.set(holder, { from, to, latched: true })
+    }
+    if (interact.physgunActive) {
+      const heldTarget = [...state.heldBy.entries()].find(
+        ([, holder]) => holder === state.myEntityId,
+      )?.[0]
+      const heldPos = heldTarget ? view.positionOf(heldTarget) : null
+      if (heldPos) {
+        activeBeams.set(state.myEntityId, {
+          from: viewmodel.beamOrigin(),
+          to: heldPos,
+          latched: true,
+        })
+      } else {
+        interact.beamTarget(_beamEnd)
+        _beamEndV.set(_beamEnd.x, _beamEnd.y, _beamEnd.z)
+        activeBeams.set(state.myEntityId, {
+          from: viewmodel.beamOrigin(),
+          to: _beamEndV,
+          latched: false,
+        })
+      }
     }
     beams.update(elapsed, activeBeams)
 
@@ -208,6 +230,9 @@ async function start(): Promise<void> {
     )
   }
 }
+
+const _beamEnd = { x: 0, y: 0, z: 0 }
+const _beamEndV = new Vector3()
 
 /** Context-sensitive crosshair prompt based on aim target + equipped tool. */
 function promptFor(

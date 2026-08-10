@@ -82,6 +82,8 @@ class TestClient {
   entities = new Map<string, WireEntity>()
   results: { action: string; ok: boolean; error?: string }[] = []
   weldEvents: { a: string; b: string; active: boolean }[] = []
+  /** What MY beam currently holds (from physgun_state broadcasts). */
+  heldTarget: string | null = null
   private waiters: { pred: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] =
     []
 
@@ -152,6 +154,9 @@ class TestClient {
         break
       case 'weld_state':
         this.weldEvents.push({ a: msg.a, b: msg.b, active: msg.active })
+        break
+      case 'physgun_state':
+        if (msg.player === this.entityId) this.heldTarget = msg.target ?? null
         break
       case 'result':
         this.results.push({
@@ -375,6 +380,30 @@ async function main(): Promise<void> {
   a.send({ t: 'physgun', a: 'release' })
   await sleep(200)
 
+  console.log('phase: sweep-to-grab (beam fires at nothing, latches on touch)')
+  // Aim at the sky and pull the trigger: no result, no latch — the beam just
+  // fires. Then sweep down onto the crate: the retry loop latches it.
+  await settle(a)
+  a.input(0, 0, 0, 0, 1.2) // look up at the sky
+  await sleep(150)
+  a.results.length = 0
+  a.send({ t: 'physgun', a: 'grab' })
+  await sleep(400)
+  assert(
+    !a.results.some((r) => r.action === 'physgun') && !a.heldTarget,
+    'empty beam is silent (no error, nothing latched)',
+  )
+  await aimAt(a, a.entities.get(crate.id) as WireEntity) // sweep onto the crate
+  {
+    // The latch can land while aimAt is still settling — poll the tracked
+    // beam state instead of racing a message waiter.
+    const start = Date.now()
+    while (a.heldTarget !== crate.id && Date.now() - start < 5000) await sleep(60)
+  }
+  assert(a.heldTarget === crate.id, 'sweeping the beam onto a prop picks it up')
+  a.send({ t: 'physgun', a: 'release' })
+  await sleep(200)
+
   console.log('phase: hand-gather bootstrap (west gate piles) + skill XP')
   const byType = (t: string) =>
     [...a.entities.values()].filter((e) => e.kind === 'resource' && e.def === t)
@@ -533,6 +562,9 @@ async function main(): Promise<void> {
   await aimAt(b, bobsCrate)
   const bobGrab = await grabResult(b)
   assert(bobGrab.error === 'not_owner', 'prop protection blocks strangers')
+  // The beam keeps retrying while held (sweep-to-grab) — drop it so Bob
+  // doesn't auto-latch the crate the instant Alice trusts him below.
+  b.send({ t: 'physgun', a: 'release' })
 
   // Alice trusts Bob (found via replicated player identity).
   const bobEntry = [...a.entities.values()].find((e) => e.kind === 'player' && e.name === 'Bob')
@@ -579,6 +611,27 @@ async function main(): Promise<void> {
   await aimAt(b, b.entities.get(crate2.id) as WireEntity)
   const bobGrab3 = await grabResult(b)
   assert(bobGrab3.error === 'not_owner', 'revoking trust restores protection')
+  b.send({ t: 'physgun', a: 'release' })
+
+  console.log('phase: players collide (blocking bodies)')
+  await settle(a)
+  await settle(b)
+  {
+    const alice = (a.me as WirePlayerState).pos
+    // Bob runs straight at (and through) Alice for 2 seconds.
+    const start = Date.now()
+    while (Date.now() - start < 2000) {
+      const bob = (b.me as WirePlayerState).pos
+      const yaw = Math.atan2(alice[0] - bob[0], alice[2] - bob[2])
+      b.input(0, 1, yaw, SPRINT)
+      await sleep(1000 / 30)
+    }
+    const bob = (b.me as WirePlayerState).pos
+    const gap = Math.hypot(alice[0] - bob[0], alice[2] - bob[2])
+    // Capsule radius 0.4 each: blocked bodies can't get closer than ~0.8.
+    assert(gap > 0.55, `player body blocks player movement (gap ${gap.toFixed(2)}m)`)
+    await settle(b)
+  }
 
   // Re-trust for the persistence check.
   a.send({ t: 'trust', player: bobEntry.player as string, trusted: true })

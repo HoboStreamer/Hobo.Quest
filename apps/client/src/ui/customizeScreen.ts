@@ -1,6 +1,12 @@
 import type { Scene } from '@babylonjs/core/scene.js'
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera.js'
+import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
+import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
+import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
+import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
+import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { ContentRegistry } from '@hobo/content'
 import {
   AppearanceSchema,
@@ -27,14 +33,64 @@ export function customizeScreen(
   return new Promise((resolve) => {
     let appearance = loadAppearance()
 
-    // Preview stage: avatar on the plaza, camera facing it.
-    const previewPos = { x: 2.5, z: 6.5 }
-    const camera = new FreeCamera(
-      'customize-cam',
-      new Vector3(previewPos.x, 1.2, previewPos.z + 3.1),
+    // Preview stage: a floating platform in the clouds high above the city —
+    // clean sky backdrop, nothing to clutter the silhouette.
+    const STAGE = { x: 0, y: 60, z: 0 }
+    const stageNodes: { dispose(): void }[] = []
+
+    const platform = CreateCylinder(
+      'cust-platform',
+      { diameter: 4.6, height: 0.35, tessellation: 40 },
       scene,
     )
-    camera.setTarget(new Vector3(previewPos.x, 0.85, previewPos.z))
+    platform.position.set(STAGE.x, STAGE.y - 0.175, STAGE.z)
+    const platMat = new StandardMaterial('cust-platform-mat', scene)
+    platMat.diffuseColor = Color3.FromHexString('#b8c4d4')
+    platMat.emissiveColor = new Color3(0.1, 0.13, 0.18)
+    platform.material = platMat
+    stageNodes.push(platform, platMat)
+
+    // Soft cloud puffs drifting around the platform.
+    const clouds: { mesh: Mesh; phase: number; base: Vector3 }[] = []
+    const cloudMat = new StandardMaterial('cust-cloud-mat', scene)
+    cloudMat.diffuseColor = new Color3(1, 1, 1)
+    cloudMat.emissiveColor = new Color3(0.55, 0.58, 0.64)
+    cloudMat.alpha = 0.88
+    stageNodes.push(cloudMat)
+    const cloudSpots: [number, number, number, number][] = [
+      [-2.6, -0.7, 1.4, 1.9],
+      [2.8, -0.9, 0.6, 2.4],
+      [-1.8, -0.4, -2.2, 1.5],
+      [2.1, -0.5, -1.8, 1.7],
+      [0.2, -1.1, 2.8, 2.1],
+      [-3.2, 0.6, -0.8, 1.2],
+    ]
+    cloudSpots.forEach(([cx, cy, cz, s], i) => {
+      const puff = CreateSphere(`cust-cloud-${i}`, { diameter: 1, segments: 8 }, scene)
+      puff.material = cloudMat
+      puff.scaling.set(s, s * 0.45, s * 0.8)
+      const base = new Vector3(STAGE.x + cx, STAGE.y + cy, STAGE.z + cz)
+      puff.position.copyFrom(base)
+      clouds.push({ mesh: puff, phase: i * 1.7, base })
+      stageNodes.push(puff)
+    })
+
+    // Warm key light so the character reads clearly against the sky.
+    const keyLight = new PointLight(
+      'cust-key',
+      new Vector3(STAGE.x + 1.6, STAGE.y + 2.4, STAGE.z + 2.6),
+      scene,
+    )
+    keyLight.diffuse = new Color3(1, 0.93, 0.82)
+    keyLight.intensity = 0.85
+    stageNodes.push(keyLight)
+
+    const camera = new FreeCamera(
+      'customize-cam',
+      new Vector3(STAGE.x, STAGE.y + 1.2, STAGE.z + 3.1),
+      scene,
+    )
+    camera.setTarget(new Vector3(STAGE.x, STAGE.y + 0.85, STAGE.z))
     scene.activeCamera = camera
     const avatar = new Avatar(scene, content, appearance, 'preview')
     // Face the camera; the player can drag left/right to turn the model.
@@ -58,18 +114,26 @@ export function customizeScreen(
 
     const ticker = setInterval(() => {
       previewTime += 1 / 30
+      // Clouds drift and bob slowly around the platform.
+      for (const c of clouds) {
+        c.mesh.position.x = c.base.x + Math.sin(previewTime * 0.16 + c.phase) * 0.5
+        c.mesh.position.y = c.base.y + Math.sin(previewTime * 0.23 + c.phase * 2) * 0.14
+        c.mesh.position.z = c.base.z + Math.cos(previewTime * 0.12 + c.phase) * 0.35
+      }
       avatar.update({
         dt: 1 / 30,
         time: previewTime,
-        x: previewPos.x,
-        y: 0.02,
-        z: previewPos.z,
-        yaw: previewYaw,
-        // Relaxed idle: subtle breathing sway and a slow look-around.
-        pitch: Math.sin(previewTime * 0.4) * 0.07,
+        // Feet exactly on the platform top (avatar y = feet height).
+        x: STAGE.x,
+        y: STAGE.y,
+        z: STAGE.z,
+        // Showcase idle: relaxed weight-shift sway + occasional look-around,
+        // on top of the animator's breathing. Empty hands read cleaner.
+        yaw: previewYaw + Math.sin(previewTime * 0.35) * 0.08,
+        pitch: Math.sin(previewTime * 0.4) * 0.06 + Math.sin(previewTime * 0.13) * 0.05,
         speed: 0,
         grounded: true,
-        itemDef: 'physgun',
+        itemDef: undefined,
       })
     }, 1000 / 30)
 
@@ -186,6 +250,7 @@ export function customizeScreen(
       document.removeEventListener('pointermove', onMove)
       document.removeEventListener('pointerup', onUp)
       avatar.dispose()
+      for (const node of stageNodes) node.dispose()
       overlay.remove()
       // The preview camera stays alive until the gameplay camera takes over —
       // the render loop must never see a camera-less scene.

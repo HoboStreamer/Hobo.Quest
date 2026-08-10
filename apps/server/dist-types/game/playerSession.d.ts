@@ -2,7 +2,7 @@ import type { Appearance, ClientInput } from '@hobo/protocol'
 import type { ContentRegistry } from '@hobo/content'
 import type { Inventory, SkillSet } from '@hobo/gameplay'
 import { CraftQueue, type PlayerMoveState } from '@hobo/gameplay'
-import type { EntityId, PlayerId, Vec3 } from '@hobo/shared'
+import type { EntityId, PlayerId, Quat, Vec3 } from '@hobo/shared'
 export declare const INVENTORY_SIZE = 24
 export declare const HOTBAR_SIZE = 6
 /** Server-held physgun grab state. */
@@ -13,11 +13,16 @@ export interface HeldProp {
   /** Grab point in the body's local space — the prop hangs from where you
    * actually grabbed it, GMod-style, not from its center. */
   localOffset: Vec3
-  /** Player-applied rotation offsets (radians). */
+  /** Player-applied rotation offsets (radians), after optional snapping. */
   yawOffset: number
   pitchOffset: number
-  /** Object yaw relative to player yaw at grab time, so it turns with the view. */
-  grabYawDelta: number
+  /** Unsnapped rotate accumulators — snapping quantizes FROM these, so small
+   * mouse deltas still add up instead of being rounded away each message. */
+  rawYaw: number
+  rawPitch: number
+  /** Full body orientation at grab time, relative to the player's view yaw:
+   * the prop keeps its exact pose (incl. tilt/roll) and turns with the view. */
+  grabRot: Quat
   /** Grid-lock: quantize the drive target while held. */
   grid: boolean
   /** Grid cell size (m). */
@@ -47,6 +52,9 @@ export interface PlayerSession {
   /** Holstered: active slot's item is put away (empty hands). */
   holstered: boolean
   held: HeldProp | null
+  /** LMB held with the physgun out: the beam is firing. While nothing is
+   * latched the server re-tries the grab each tick (GMod sweep-to-grab). */
+  grabbing: boolean
   /** Tick of the last accepted use/swing (server-side swing cooldown). */
   lastUseTick: number
   /** Stance the kinematic physics body was last built for. */

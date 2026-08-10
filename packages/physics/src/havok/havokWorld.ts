@@ -7,6 +7,7 @@ import { HavokPlugin } from '@babylonjs/core/Physics/v2/Plugins/havokPlugin.js'
 import {
   PhysicsActivationControl,
   PhysicsMotionType,
+  PhysicsPrestepType,
 } from '@babylonjs/core/Physics/v2/IPhysicsEnginePlugin.js'
 import { PhysicsBody } from '@babylonjs/core/Physics/v2/physicsBody.js'
 import type { PhysicsShape } from '@babylonjs/core/Physics/v2/physicsShape.js'
@@ -154,7 +155,12 @@ export class HavokWorld implements PhysicsWorld {
       const q = rec.node.rotationQuaternion ?? Quaternion.Identity()
       rec.body.setTargetTransform(this._v1, q)
     } else {
+      // CRITICAL: with the default prestep (DISABLED),
+      // setPhysicsBodyTransformation is a silent no-op — static mirror
+      // bodies would never actually move. Flip to TELEPORT for the call.
+      rec.body.setPrestepType(PhysicsPrestepType.TELEPORT)
       this.plugin.setPhysicsBodyTransformation(rec.body, rec.node)
+      rec.body.setPrestepType(PhysicsPrestepType.DISABLED)
       this.wake(id)
     }
   }
@@ -278,11 +284,15 @@ export class HavokWorld implements PhysicsWorld {
     radius: number,
     height: number,
     collidesWith: number,
+    exclude?: BodyId,
   ): SweepHit | null {
     const shape = this.getSweepShape(radius, height, collidesWith)
     this._v1.set(from.x, from.y, from.z)
     this._v2.set(to.x, to.y, to.z)
     this._q1.set(0, 0, 0, 1)
+    // ignoreBody lets a player's movement sweep collide with the Player
+    // layer without hitting their own kinematic body.
+    const ignoreBody = exclude === undefined ? undefined : this.bodies.get(exclude)?.body
     this.plugin.shapeCast(
       {
         shape,
@@ -290,6 +300,7 @@ export class HavokWorld implements PhysicsWorld {
         startPosition: this._v1,
         endPosition: this._v2,
         shouldHitTriggers: false,
+        ...(ignoreBody ? { ignoreBody } : {}),
       },
       this._castInput,
       this._castHit,

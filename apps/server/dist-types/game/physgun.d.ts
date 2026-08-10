@@ -13,9 +13,9 @@ import { type PlayerSession } from './playerSession.js'
  * control, zone rules); constraint tools (weld, rope, ...) will be siblings,
  * not extensions of a Physgun class.
  */
-export declare const PHYSGUN_MAX_RANGE = 8
+export declare const PHYSGUN_MAX_RANGE = 25
 export declare const PHYSGUN_MIN_DIST = 1
-export declare const PHYSGUN_MAX_DIST = 10
+export declare const PHYSGUN_MAX_DIST = 25
 export type PhysgunDeny = 'no_target' | 'not_allowed' | 'not_owner' | 'zone' | 'already_held'
 export declare function tryGrab(
   session: PlayerSession,

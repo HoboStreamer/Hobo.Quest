@@ -8,6 +8,7 @@ import type {
 } from '@hobo/protocol'
 import type { GameEntity, LevelUp } from '@hobo/gameplay'
 import type { ItemDef } from '@hobo/content'
+import { CollisionLayer } from '@hobo/physics'
 import { asEntityId, qfromYaw, quat, v3dist, vec3 } from '@hobo/shared'
 import { viewDirection } from './playerSession.js'
 import type { GameWorld } from './gameWorld.js'
@@ -186,10 +187,21 @@ export function handleDrop(
 
   eyePosition(session, _eye)
   viewDirection(session, _dropDir)
+  // Clearance check: dropping against a wall or another prop must not spawn
+  // the item INSIDE it (interpenetrated bodies sleep overlapped and never
+  // separate). Pull the spawn point back to just in front of the first hit.
+  let dropDist = 1.1
+  const _probe = vec3(
+    _eye.x + _dropDir.x * dropDist,
+    _eye.y + _dropDir.y * dropDist - 0.15,
+    _eye.z + _dropDir.z * dropDist,
+  )
+  const blocked = world.physics.raycast(_eye, _probe, CollisionLayer.Static | CollisionLayer.Prop)
+  if (blocked) dropDist = Math.max(0.35, dropDist * blocked.fraction - 0.3)
   const spawnPos = vec3(
-    _eye.x + _dropDir.x * 1.1,
-    _eye.y + _dropDir.y * 1.1 - 0.15,
-    _eye.z + _dropDir.z * 1.1,
+    _eye.x + _dropDir.x * dropDist,
+    _eye.y + _dropDir.y * dropDist - 0.15,
+    _eye.z + _dropDir.z * dropDist,
   )
   const entity = world.spawnProp({
     defId: removed.defId,
