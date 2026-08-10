@@ -55,6 +55,17 @@ export function attachWebSocket(http: Server, game: GameServer, log: Logger): We
       }
       const msg = decodeClientMessage(data.toString())
       if (!msg) {
+        // A schema-invalid first message is almost always a version-skewed
+        // or corrupted hello — tell the client so it can recover instead
+        // of freezing on a silent close, and log enough to diagnose.
+        let kind = 'unparseable'
+        try {
+          kind = String((JSON.parse(data.toString()) as { t?: string }).t ?? 'missing-t')
+        } catch {
+          /* not JSON */
+        }
+        log.warn('malformed message', { remote, kind, bytes: data.toString().length })
+        ws.send(JSON.stringify({ t: 'reject', reason: 'invalid_hello' }))
         ws.close(4007, 'malformed')
         return
       }

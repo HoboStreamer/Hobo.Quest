@@ -401,7 +401,7 @@ export class Hud {
       const mapEd = document.createElement('button')
       mapEd.className = 'menu-tab edit-toggle'
       mapEd.textContent = '🗺 Map Editor'
-      mapEd.addEventListener('click', () => window.open('/editor.html', '_blank'))
+      mapEd.addEventListener('click', () => window.open('/editor', '_blank'))
       tabs.appendChild(mapEd)
     }
   }

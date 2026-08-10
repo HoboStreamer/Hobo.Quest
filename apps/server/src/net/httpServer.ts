@@ -182,8 +182,8 @@ export function createHttpServer(
           })
           res.end(`<!doctype html><title>Signing in…</title><script>
 localStorage.setItem('hq_sso', ${tok});
-location.href = '/play.html';
-</script><noscript><a href="/play.html">Continue</a></noscript>`)
+location.href = '/play';
+</script><noscript><a href="/play">Continue</a></noscript>`)
         } catch (err) {
           log.warn('oauth callback failed', { error: String(err) })
           res.writeHead(502, { 'content-type': 'text/plain' })
@@ -207,8 +207,17 @@ location.href = '/play.html';
       res.end('not found')
       return
     }
+    // Pretty page routes: /play is the game, /editor the map editor; the
+    // old .html URLs redirect so bookmarks keep working.
+    if (url === '/play.html' || url === '/editor.html') {
+      res.writeHead(301, { location: url === '/play.html' ? '/play' : '/editor' })
+      res.end()
+      return
+    }
+    const pageAlias = url === '/play' ? 'play.html' : url === '/editor' ? 'editor.html' : null
+
     // Static files with path traversal guard.
-    const safePath = normalize(url).replace(/^(\.\.[/\\])+/, '')
+    const safePath = normalize(pageAlias ?? url).replace(/^(\.\.[/\\])+/, '')
     let filePath = join(root, safePath)
     if (!filePath.startsWith(root)) {
       res.writeHead(403)

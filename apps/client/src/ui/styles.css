@@ -946,3 +946,28 @@ input {
 .menu-tab.edit-toggle.active {
   background: rgba(200, 140, 30, 0.7);
 }
+
+.char-authbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+  padding: 9px 12px;
+  background: rgba(30, 70, 45, 0.45);
+  border: 1px solid #3f7a55;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #a8dcb8;
+}
+.char-logout {
+  padding: 5px 12px;
+  font-size: 12px;
+  background: rgba(90, 40, 40, 0.6);
+  border: 1px solid #8a4a4a;
+  border-radius: 6px;
+  color: #f0c8c8;
+  cursor: pointer;
+}
+.char-logout:hover {
+  background: rgba(120, 50, 50, 0.75);
+}

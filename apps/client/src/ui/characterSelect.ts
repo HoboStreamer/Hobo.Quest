@@ -43,6 +43,21 @@ export function characterSelect(
       }
       panel.appendChild(row)
     }
+    if (authed) {
+      const bar = document.createElement('div')
+      bar.className = 'char-authbar'
+      bar.innerHTML = '<span>✓ Signed in via hobo.tools</span>'
+      const out = document.createElement('button')
+      out.className = 'char-logout'
+      out.textContent = 'Log out'
+      out.addEventListener('click', () => {
+        localStorage.removeItem('hq_sso')
+        document.cookie = 'hq_sso=; Path=/; Max-Age=0'
+        location.reload()
+      })
+      bar.appendChild(out)
+      panel.appendChild(bar)
+    }
     if (!authed) {
       const upsell = document.createElement('div')
       upsell.className = 'char-upsell'

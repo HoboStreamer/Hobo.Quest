@@ -58,7 +58,7 @@ async function main(): Promise<void> {
     if (msg.type() === 'error') errors.push(msg.text())
   })
 
-  await page.goto(`http://127.0.0.1:${PORT}/play.html`)
+  await page.goto(`http://127.0.0.1:${PORT}/play`)
   await page.waitForSelector('.char-slot', { timeout: 60000 })
   await page.click('.char-slot')
   await page.waitForSelector('#btn-join', { timeout: 30000 })

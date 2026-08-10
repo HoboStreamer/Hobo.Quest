@@ -250,6 +250,20 @@ async function start(): Promise<void> {
         } else {
           hud.setStatus('version mismatch — hard-refresh (Ctrl+Shift+R) to update')
         }
+      } else if (msg.reason === 'invalid_hello') {
+        // Something we sent no longer fits the server's schema (stale
+        // saved session/appearance). Shed the stored state and retry once.
+        localStorage.removeItem('hq_sso')
+        document.cookie = 'hq_sso=; Path=/; Max-Age=0'
+        localStorage.removeItem('hobo.appearance')
+        const last = Number(localStorage.getItem('hq_reload_ts') ?? '0')
+        if (Date.now() - last > 60_000) {
+          localStorage.setItem('hq_reload_ts', String(Date.now()))
+          hud.setStatus('session data was out of date — reloading…')
+          setTimeout(() => location.reload(), 1200)
+        } else {
+          hud.setStatus('could not join — try signing in again from the home page')
+        }
       } else if (msg.reason === 'guest_one_character') {
         hud.setStatus('guests get one character — sign in with hobo.tools for 3 slots')
       } else if (msg.reason === 'auth_failed') {
