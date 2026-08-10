@@ -141,6 +141,12 @@ export class LocalPlayer {
     this.move.vel.z = mine.vel[2]
     this.move.grounded = mine.grounded
     this.move.stance = mine.stance
+    if (mine.stanceT !== undefined) this.move.stanceT = mine.stanceT
+    if (mine.stanceCd !== undefined) this.move.stanceCooldown = mine.stanceCd
+    if (mine.proneBits !== undefined) {
+      this.move.proneActive = (mine.proneBits & 1) !== 0
+      this.move.proneHeld = (mine.proneBits & 2) !== 0
+    }
     for (const cmd of this.pending) this.applyInput(cmd)
     this.currPos.set(this.move.pos.x, this.move.pos.y, this.move.pos.z)
 

@@ -12,7 +12,7 @@ import type { UniversalCamera } from '@babylonjs/core/Cameras/universalCamera.js
 import type { ContentRegistry } from '@hobo/content'
 import type { Appearance } from '@hobo/protocol'
 import { createHeldItemNode, type HeldItemNode } from './heldItem.js'
-import { skinTone } from './avatar/palettes.js'
+import { outfitColor, skinTone } from './avatar/palettes.js'
 import { createTaperedBox } from './avatar/taperedBox.js'
 import { materialFor } from './sceneSetup.js'
 
@@ -59,42 +59,113 @@ export class Viewmodel {
    */
   private hands: TransformNode | null = null
 
-  private buildHands(appearance: Appearance): void {
+  /** Builds one first-person arm: outfit sleeve + cuff + skin fist with
+   * knuckles and a thumb — matches the player's customized look. */
+  private buildArm(name: string, appearance: Appearance): TransformNode {
     const skin = skinTone(appearance.skin)
-    const hands = new TransformNode('vm-hands', this.scene)
-    hands.parent = this.rig
+    const sleeve = outfitColor(appearance.top)
+    const arm = new TransformNode(name, this.scene)
     const forearm = createTaperedBox(
-      'vm-forearm',
+      `${name}:sleeve`,
+      {
+        topWidth: 0.1,
+        topDepth: 0.1,
+        bottomWidth: 0.115,
+        bottomDepth: 0.115,
+        height: 0.34,
+        anchor: 'top',
+      },
+      this.scene,
+    )
+    forearm.material = materialFor(this.scene, sleeve)
+    forearm.parent = arm
+    forearm.position.set(0, -0.16, -0.1)
+    forearm.rotation.set(-1.05, -0.15, 0.1)
+    const wrist = createTaperedBox(
+      `${name}:wrist`,
+      {
+        topWidth: 0.082,
+        topDepth: 0.082,
+        bottomWidth: 0.088,
+        bottomDepth: 0.088,
+        height: 0.09,
+        anchor: 'top',
+      },
+      this.scene,
+    )
+    wrist.material = materialFor(this.scene, skin)
+    wrist.parent = arm
+    wrist.position.set(0.005, -0.075, -0.045)
+    wrist.rotation.set(-1.05, -0.15, 0.1)
+    // Fist: palm block + knuckle ridge + thumb along the side.
+    const fist = new TransformNode(`${name}:fist`, this.scene)
+    fist.parent = arm
+    fist.position.set(0.012, -0.02, -0.005)
+    fist.rotation.set(-0.65, -0.1, 0.05)
+    const palm = createTaperedBox(
+      `${name}:palm`,
       {
         topWidth: 0.085,
-        topDepth: 0.085,
-        bottomWidth: 0.1,
-        bottomDepth: 0.1,
-        height: 0.42,
+        topDepth: 0.095,
+        bottomWidth: 0.08,
+        bottomDepth: 0.09,
+        height: 0.075,
         anchor: 'top',
       },
       this.scene,
     )
-    forearm.material = materialFor(this.scene, skin)
-    forearm.parent = hands
-    forearm.position.set(0.02, -0.1, -0.06)
-    forearm.rotation.set(-0.9, -0.25, 0.15) // reaches down-right off screen
-    const hand = createTaperedBox(
-      'vm-hand',
+    palm.material = materialFor(this.scene, skin)
+    palm.parent = fist
+    const knuckles = createTaperedBox(
+      `${name}:knuckles`,
       {
-        topWidth: 0.075,
-        topDepth: 0.1,
-        bottomWidth: 0.062,
-        bottomDepth: 0.085,
-        height: 0.12,
+        topWidth: 0.082,
+        topDepth: 0.05,
+        bottomWidth: 0.078,
+        bottomDepth: 0.048,
+        height: 0.05,
         anchor: 'top',
       },
       this.scene,
     )
-    hand.material = materialFor(this.scene, skin)
-    hand.parent = hands
-    hand.position.set(0.005, -0.045, -0.03)
-    hand.rotation.set(-0.5, 0, 0)
+    knuckles.material = materialFor(this.scene, skinTone(appearance.skin))
+    knuckles.parent = fist
+    knuckles.position.set(0, -0.005, -0.062)
+    knuckles.rotation.x = -0.35
+    const thumb = createTaperedBox(
+      `${name}:thumb`,
+      {
+        topWidth: 0.028,
+        topDepth: 0.028,
+        bottomWidth: 0.024,
+        bottomDepth: 0.024,
+        height: 0.07,
+        anchor: 'top',
+      },
+      this.scene,
+    )
+    thumb.material = materialFor(this.scene, skin)
+    thumb.parent = fist
+    thumb.position.set(-0.048, -0.01, -0.03)
+    thumb.rotation.set(-0.4, 0, 0.9)
+    return arm
+  }
+
+  private leftFist: TransformNode | null = null
+
+  private buildHands(appearance: Appearance): void {
+    const hands = new TransformNode('vm-hands', this.scene)
+    hands.parent = this.rig
+    const right = this.buildArm('vm-arm-r', appearance)
+    right.parent = hands
+    right.position.set(0.02, -0.06, -0.04)
+    // Left fist shows only when unarmed — raised guard, boxer style.
+    const left = this.buildArm('vm-arm-l', appearance)
+    left.parent = this.rig
+    left.position.set(-0.52, -0.02, -0.1)
+    left.rotation.y = 0.25
+    left.scaling.x = -1
+    this.leftFist = left
     this.hands = hands
   }
 
@@ -193,8 +264,9 @@ export class Viewmodel {
     this.currentItem = itemDef
     this.equipT = 0
     // Hands always show — empty hands are FISTS (you can punch, Minecraft-
-    // style), so the body never vanishes below the crosshair.
+    // style). The left guard fist appears only when unarmed.
     if (this.hands) this.hands.setEnabled(true)
+    this.leftFist?.setEnabled(itemDef === null)
 
     this.toolProp?.dispose()
     this.toolProp = null
@@ -236,15 +308,9 @@ export class Viewmodel {
    */
   private applyRenderGroup(): void {
     for (const m of this.physgunMeshes) m.renderingGroupId = VIEWMODEL_RENDER_GROUP
-    if (this.toolProp) {
-      for (const child of this.toolProp.root.getChildMeshes()) {
-        child.renderingGroupId = VIEWMODEL_RENDER_GROUP
-      }
-    }
-    if (this.hands) {
-      for (const child of this.hands.getChildMeshes()) {
-        child.renderingGroupId = VIEWMODEL_RENDER_GROUP
-      }
+    // Everything under the rig (tool, both arms) draws in the viewmodel pass.
+    for (const child of this.rig.getChildMeshes()) {
+      child.renderingGroupId = VIEWMODEL_RENDER_GROUP
     }
   }
 

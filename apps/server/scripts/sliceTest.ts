@@ -606,7 +606,11 @@ async function main(): Promise<void> {
   const berriesBefore = a.count('berries')
   const pick = await a.use(bush.id)
   assert(pick.ok, 'berries gathered by hand')
-  await a.waitFor((m) => m.t === 'inventory' && a.count('berries') > berriesBefore, 5000)
+  {
+    const start = Date.now()
+    while (a.count('berries') <= berriesBefore && Date.now() - start < 5000) await sleep(100)
+  }
+  assert(a.count('berries') > berriesBefore, 'berries in inventory')
   assert(a.stats !== null, 'vitals replicated')
   a.results.length = 0
   a.send({ t: 'consume', slot: a.slotOf('berries') })

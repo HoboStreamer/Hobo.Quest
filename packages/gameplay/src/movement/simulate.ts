@@ -39,7 +39,7 @@ const STANCE_DUR: readonly (readonly number[])[] = [
   [1.0, 0.7, 0],
 ]
 /** Lockout after a completed transition (anti spam/peek abuse). */
-const STANCE_COOLDOWN = 0.25
+const STANCE_COOLDOWN = 0.4
 
 export function hullHeightFor(stance: Stance): number {
   return STANCE_HULL[stance] ?? 1.8

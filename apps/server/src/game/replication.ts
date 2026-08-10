@@ -101,7 +101,13 @@ export function buildSnapshot(
   sessions: Iterable<PlayerSession>,
   tick: number,
 ): ServerSnapshot {
-  const players: WirePlayerState[] = [wirePlayerFor(session)]
+  const self = wirePlayerFor(session)
+  // Reconciliation extras (own player only): the client must rewind the
+  // FULL stance machine or replays re-fight toggles (prone flap, view jerk).
+  self.stanceT = session.move.stanceT
+  self.stanceCd = session.move.stanceCooldown
+  self.proneBits = (session.move.proneActive ? 1 : 0) | (session.move.proneHeld ? 2 : 0)
+  const players: WirePlayerState[] = [self]
   for (const other of sessions) {
     if (other === session) continue
     if (session.known.has(other.entityId)) players.push(wirePlayerFor(other))

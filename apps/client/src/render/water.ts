@@ -34,7 +34,8 @@ export class Water {
     water.windDirection = new Vector2(1, 0.35)
     water.waterColor = new Color3(0.06, 0.22, 0.26)
     water.colorBlendFactor = 0.32
-    water.backFaceCulling = true
+    // Visible from BELOW too — the surface must exist when submerged.
+    water.backFaceCulling = false
     this.material = water
     this.mesh.material = water
   }

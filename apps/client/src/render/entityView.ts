@@ -102,7 +102,9 @@ export class EntityView {
       // collision mirror; without one the aim ray can't hit it and the
       // prop can never be picked up or grabbed.
       const rep = this.content.worldRepOf(e.def)
-      mesh = meshForShape(this.scene, `prop:${e.id}`, rep.shape, rep.color)
+      mesh =
+        buildPropVisual(this.scene, e.id, e.def) ??
+        meshForShape(this.scene, `prop:${e.id}`, rep.shape, rep.color)
       bodyId = this.physics.addBody({
         shape: toPhysicsShape(rep.shape),
         motion: 'static',
@@ -421,6 +423,64 @@ function nlerpQuat(
     out.z /= len
     out.w /= len
   }
+}
+
+/**
+ * Hand-tuned composite visuals for common ground drops — physics still uses
+ * the simple worldRepOf shape; these are pure dressing. Returns null for
+ * items without an override (they use the plain shape mesh).
+ */
+function buildPropVisual(scene: Scene, id: string, def: string): Mesh | null {
+  if (def === 'stone') {
+    // Irregular rock: three intersecting flattened chunks.
+    const root = CreateSphere(`prop:${id}`, { diameter: 0.32, segments: 5 }, scene)
+    root.scaling.set(1, 0.72, 0.88)
+    root.material = materialFor(scene, '#83878b')
+    const chunkA = CreateSphere(`prop:${id}:a`, { diameter: 0.22, segments: 4 }, scene)
+    chunkA.parent = root
+    chunkA.position.set(0.1, 0.05, 0.06)
+    chunkA.rotation.set(0.5, 0.9, 0.2)
+    chunkA.scaling.set(1, 0.8, 0.9)
+    chunkA.material = materialFor(scene, '#8f9296')
+    const chunkB = CreateSphere(`prop:${id}:b`, { diameter: 0.18, segments: 4 }, scene)
+    chunkB.parent = root
+    chunkB.position.set(-0.09, -0.02, -0.05)
+    chunkB.rotation.set(1.1, 0.3, 0.7)
+    chunkB.material = materialFor(scene, '#767a7e')
+    root.rotationQuaternion = new Quaternion()
+    return root
+  }
+  if (def === 'wood_log') {
+    // Log lying on its side: bark cylinder + lighter end caps + a knot.
+    const root = CreateCylinder(
+      `prop:${id}`,
+      { diameter: 0.28, height: 0.6, tessellation: 9 },
+      scene,
+    )
+    root.material = materialFor(scene, '#6b4a2b')
+    for (const end of [-1, 1]) {
+      const cap = CreateCylinder(
+        `prop:${id}:cap${end}`,
+        { diameter: 0.24, height: 0.02, tessellation: 9 },
+        scene,
+      )
+      cap.parent = root
+      cap.position.y = end * 0.3
+      cap.material = materialFor(scene, '#c8a878')
+    }
+    const knot = CreateCylinder(
+      `prop:${id}:knot`,
+      { diameter: 0.07, height: 0.06, tessellation: 6 },
+      scene,
+    )
+    knot.parent = root
+    knot.position.set(0.13, 0.1, 0)
+    knot.rotation.z = Math.PI / 2
+    knot.material = materialFor(scene, '#584022')
+    root.rotationQuaternion = new Quaternion()
+    return root
+  }
+  return null
 }
 
 /** Placeholder archetype visuals for resource nodes (root mesh at ground pos). */

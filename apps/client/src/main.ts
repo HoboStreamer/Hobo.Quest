@@ -4,6 +4,9 @@ import { createContent } from '@hobo/content'
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { Color3 } from '@babylonjs/core/Maths/math.color.js'
+import { Scene } from '@babylonjs/core/scene.js'
+import { WATER_LEVEL } from '@hobo/content'
 import { InteractionController } from './game/interactionController.js'
 import { LocalPlayer } from './game/localPlayer.js'
 import { InputTracker } from './input/inputTracker.js'
@@ -185,6 +188,8 @@ async function start(): Promise<void> {
     return
   }
 
+  let wasSubmerged = false
+
   // Fixed-timestep prediction; interpolated rendering.
   const timestep = new FixedTimestep(1 / state.tickRate)
   gameLoop = () => {
@@ -246,6 +251,19 @@ async function start(): Promise<void> {
       }
     }
     beams.update(elapsed, activeBeams)
+
+    // Underwater: dense teal fog while the camera is submerged.
+    const submerged = player.camera.position.y < WATER_LEVEL
+    if (submerged !== wasSubmerged) {
+      wasSubmerged = submerged
+      if (submerged) {
+        scene.fogMode = Scene.FOGMODE_EXP2
+        scene.fogDensity = 0.09
+        scene.fogColor = new Color3(0.08, 0.25, 0.3)
+      } else {
+        scene.fogMode = Scene.FOGMODE_NONE
+      }
+    }
 
     hud.setPrompt(promptFor(interact, content, state))
     hud.setStatus(

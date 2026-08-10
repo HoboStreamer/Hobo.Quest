@@ -35,6 +35,10 @@ export declare class Viewmodel {
    * is equipped.
    */
   private hands
+  /** Builds one first-person arm: outfit sleeve + cuff + skin fist with
+   * knuckles and a thumb — matches the player's customized look. */
+  private buildArm
+  private leftFist
   private buildHands
   private loadPhysgun
   private setPhysgunVisible

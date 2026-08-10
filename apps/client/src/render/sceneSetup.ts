@@ -273,7 +273,7 @@ function buildTerrainMesh(scene: Scene, content: ContentRegistry): Mesh[] {
     { diameter: 4000, height: 0.2, tessellation: 48 },
     scene,
   )
-  skirt.position.y = -1.4
+  skirt.position.y = -3.2
   const skirtMat = new StandardMaterial('terrain-skirt', scene)
   // Seabed: it now lies under the ocean sheet, not at the horizon.
   skirtMat.diffuseColor = new Color3(0.22, 0.24, 0.19)

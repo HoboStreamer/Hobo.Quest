@@ -78,6 +78,12 @@ export interface WirePlayerState {
   stanceP: number
   /** Equipped item def id (third-person held-item display), if any. */
   item?: string
+  /** OWN-player reconciliation extras (absent for other players):
+   * remaining transition time, cooldown, and prone latch bits. */
+  stanceT?: number
+  stanceCd?: number
+  /** bit0 proneActive, bit1 proneHeld. */
+  proneBits?: number
 }
 
 export interface WireItemStack {

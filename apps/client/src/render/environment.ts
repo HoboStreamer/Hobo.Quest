@@ -53,6 +53,8 @@ export class Environment {
         this.atmosphere.isLinearSpaceLight = false
         // Night keeps a moonlit floor instead of going pitch black.
         this.atmosphere.minimumMultiScatteringIntensity = 0.14
+        // Richer dawn/dusk color instead of a grey-brown band.
+        this.atmosphere.multiScatteringIntensity = 1.6
       }
     } catch (err) {
       console.warn('atmosphere unavailable, keeping flat sky', err)
@@ -62,11 +64,11 @@ export class Environment {
     this.flareEmitter = new TransformNode('sun-flare-emitter', scene)
     this.flares = new LensFlareSystem('sunFlares', this.flareEmitter, scene)
     const tex = flareTexture()
-    new LensFlare(0.35, 0, new Color3(1, 0.95, 0.82), tex, this.flares)
-    new LensFlare(0.12, 0.32, new Color3(0.7, 0.85, 1), tex, this.flares)
-    new LensFlare(0.18, 0.55, new Color3(1, 0.8, 0.6), tex, this.flares)
-    new LensFlare(0.08, 0.8, new Color3(0.65, 0.75, 1), tex, this.flares)
-    new LensFlare(0.14, 1.12, new Color3(1, 0.9, 0.75), tex, this.flares)
+    new LensFlare(0.16, 0, new Color3(1, 0.95, 0.82), tex, this.flares)
+    new LensFlare(0.05, 0.32, new Color3(0.7, 0.85, 1), tex, this.flares)
+    new LensFlare(0.08, 0.55, new Color3(1, 0.8, 0.6), tex, this.flares)
+    new LensFlare(0.04, 0.8, new Color3(0.65, 0.75, 1), tex, this.flares)
+    new LensFlare(0.06, 1.12, new Color3(1, 0.9, 0.75), tex, this.flares)
   }
 
   /** Attach the HDR tonemapping pipeline to the active gameplay camera. */
@@ -118,7 +120,9 @@ export class Environment {
     // Flare emitter rides opposite the light direction, far away.
     this.flareEmitter.position.copyFrom(cameraPos).subtractInPlace(dir.scale(450))
     // Flares only when the sun is actually up.
-    this.flares.isEnabled = elevation > 0.03
+    // Flares only when the sun is clearly up — dusk flares with no visible
+    // sun disc read as a bug, not a lens.
+    this.flares.isEnabled = elevation > 0.12
   }
 }
 

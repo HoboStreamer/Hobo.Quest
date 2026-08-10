@@ -22,9 +22,6 @@ export interface HeldProp {
   /** Grab point in the body's local space — the prop hangs from where you
    * actually grabbed it, GMod-style, not from its center. */
   localOffset: Vec3
-  /** Player-applied rotation offsets (radians), always unsnapped. */
-  yawOffset: number
-  pitchOffset: number
   /** Angle snap (Shift+E): quantizes the FULL world orientation each drive
    * tick — quantizing just the offsets is invisible on an arbitrary grab
    * pose, which is why offset-snapping never visibly worked. */

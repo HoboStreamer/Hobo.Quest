@@ -54,6 +54,7 @@ const _yawQ = quat()
 const _grabVec = vec3()
 const _grabWorld = vec3()
 const _euler = { pitch: 0, yaw: 0, roll: 0 }
+const _dq = quat()
 
 export type PhysgunDeny = 'no_target' | 'not_allowed' | 'not_owner' | 'zone' | 'already_held'
 
@@ -96,8 +97,6 @@ export function tryGrab(
     entityId: entity.id,
     dist: Math.max(v3dist(_eye, hit.point), PHYSGUN_MIN_DIST),
     localOffset,
-    yawOffset: 0,
-    pitchOffset: 0,
     snap: false,
     snapStep: DEFAULT_SNAP_STEP,
     grabRot,
@@ -125,10 +124,18 @@ export function rotateHeld(
 ): void {
   const held = session.held
   if (!held) return
-  held.yawOffset = wrapAngle(held.yawOffset + dyaw)
-  held.pitchOffset = clamp(held.pitchOffset + dpitch, -Math.PI, Math.PI)
-  // Snap state is applied to the FULL orientation in driveHeld — offsets
-  // always accumulate unsnapped so small mouse deltas never round away.
+  // Incremental, view-axis rotation folded straight into the carried
+  // orientation: each drag rotates the prop from where it IS (grabRot is
+  // view-yaw-relative, so frame X = view right, frame Y = world up). This
+  // is what makes long rotate sessions feel prop-relative, like GMod.
+  _dq.x = Math.sin(dpitch / 2)
+  _dq.y = 0
+  _dq.z = 0
+  _dq.w = Math.cos(dpitch / 2)
+  qmul(held.grabRot, _dq, held.grabRot)
+  qfromYaw(_dq, dyaw)
+  qmul(held.grabRot, _dq, held.grabRot)
+  qnormalize(held.grabRot, held.grabRot)
   held.snap = snap
   held.snapStep = clamp(snapStep ?? DEFAULT_SNAP_STEP, 0.02, 1.6)
 }
@@ -196,13 +203,8 @@ export function driveHeld(session: PlayerSession, world: GameWorld): void {
   world.physics.wake(bodyId)
   world.physics.setLinearVelocity(bodyId, _vel)
 
-  // Orientation: view yaw + player rotate offsets, on top of the EXACT
-  // orientation the prop had at grab time (grabRot).
-  qfromYaw(_targetRot, session.yaw + held.yawOffset)
-  if (held.pitchOffset !== 0) {
-    const half = held.pitchOffset * 0.5
-    qmul(_targetRot, _targetRot, quat(Math.sin(half), 0, 0, Math.cos(half)))
-  }
+  // Orientation: the carried (view-relative) orientation under the view yaw.
+  qfromYaw(_targetRot, session.yaw)
   qmul(_targetRot, _targetRot, held.grabRot)
   qnormalize(_targetRot, _targetRot)
   if (held.snap) {
