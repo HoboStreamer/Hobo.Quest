@@ -28,6 +28,8 @@ export interface PropComponent {
   lootCount: number
   /** Stored items for container props (storage boxes). Fixed slot array. */
   container?: ({ defId: string; count: number } | null)[]
+  /** Hinged door state (frozen doors toggle with E). */
+  doorOpen?: boolean
 }
 
 export interface ResourceComponent {

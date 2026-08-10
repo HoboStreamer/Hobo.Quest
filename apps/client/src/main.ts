@@ -286,6 +286,9 @@ function promptFor(
     if (target.def && content.item(target.def)?.container) {
       return 'E — open storage'
     }
+    if (target.def && content.item(target.def)?.door && target.frozen) {
+      return 'E — open / close door'
+    }
     if (interact.physgunActive)
       return 'RMB — freeze · E — rotate · Shift — grid · wheel — push/pull'
     const entity = state.entities.get(target.entityId)

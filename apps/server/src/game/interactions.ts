@@ -73,6 +73,14 @@ export function handleUse(
     if (!canManipulate(entity)) {
       return { outcome: result('use', false, 'not_owner'), ...none }
     }
+    // Installed (frozen) doors swing on E instead of being picked up.
+    if (
+      world.content.item(entity.prop.defId)?.door &&
+      entity.prop.motion !== 'dynamic' &&
+      world.toggleDoor(entity)
+    ) {
+      return { outcome: result('use', true), ...none, changed: entity }
+    }
     // A stocked container refuses pickup — its contents would vanish.
     if (entity.prop.container?.some((slot) => slot !== null)) {
       return { outcome: result('use', false, 'not_empty'), ...none }

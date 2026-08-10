@@ -112,6 +112,14 @@ export const RECIPES: Recipe[] = [
     requiredSkill: { skill: 'construction', level: 3 },
   },
   {
+    id: 'craft_wooden_door',
+    name: 'Wooden Door',
+    category: 'construction',
+    inputs: [{ item: 'wood_plank', count: 4 }],
+    outputs: [{ item: 'wooden_door', count: 1 }],
+    craftSeconds: 3,
+  },
+  {
     id: 'craft_storage_box',
     name: 'Storage Box',
     category: 'construction',

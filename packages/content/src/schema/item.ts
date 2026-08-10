@@ -66,6 +66,9 @@ export const ItemDefSchema = z.object({
     })
     .optional(),
 
+  /** Present iff the placed prop is a hinged door (E toggles when frozen). */
+  door: z.object({ openAngle: z.number().default(1.75) }).optional(),
+
   /** Present iff the placed prop stores items (storage boxes, chests). */
   container: z
     .object({

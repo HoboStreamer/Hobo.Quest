@@ -21,6 +21,9 @@ import {
   type PlayerId,
   type Quat,
   type Vec3,
+  qmul,
+  qnormalize,
+  qrotateVec,
 } from '@hobo/shared'
 
 /**
@@ -223,6 +226,40 @@ export class GameWorld {
     }
     this.settled.delete(id)
     if (entity.persistent) this.deletedIds.add(id)
+  }
+
+  /**
+   * Swings a frozen door about its hinge edge (local -X). The whole pose
+   * (position AND rotation) pivots so it reads as a real hinge, not a
+   * center-spin. Returns false unless the prop is an installed (non-
+   * dynamic) door.
+   */
+  toggleDoor(entity: GameEntity): boolean {
+    const def = entity.prop ? this.content.item(entity.prop.defId) : undefined
+    if (!entity.prop || !def?.door || entity.prop.motion === 'dynamic') return false
+    const bodyId = this.bodyByEntity.get(entity.id)
+    if (bodyId === undefined) return false
+    const width = def.world?.shape.type === 'box' ? def.world.shape.size[0] : 1
+    const opening = !entity.prop.doorOpen
+    const angle = def.door.openAngle * (opening ? 1 : -1)
+    const rot = entity.transform.rot
+    const pos = entity.transform.pos
+    // Hinge point: door-local (-w/2, 0, 0) in world space.
+    const hingeLocal = vec3(-width / 2, 0, 0)
+    const hingeOff = qrotateVec(vec3(), rot, hingeLocal)
+    const hinge = vec3(pos.x + hingeOff.x, pos.y + hingeOff.y, pos.z + hingeOff.z)
+    const spin = qfromYaw(quat(), angle)
+    // New rotation, then re-place the center so the hinge stays fixed.
+    qmul(rot, spin, rot)
+    qnormalize(rot, rot)
+    const newOff = qrotateVec(vec3(), rot, hingeLocal)
+    pos.x = hinge.x - newOff.x
+    pos.y = hinge.y - newOff.y
+    pos.z = hinge.z - newOff.z
+    entity.prop.doorOpen = opening
+    entity.dirty = true
+    this.physics.setTransform(bodyId, pos, rot)
+    return true
   }
 
   setPropMotion(entity: GameEntity, motion: MotionState): void {
@@ -463,6 +500,9 @@ export class GameWorld {
         lootCount: Number(row.state?.lootCount ?? 1),
         ...(row.ownerId ? { owner: row.ownerId as PlayerId } : {}),
       })
+      if (entity.prop && typeof row.state?.doorOpen === 'boolean') {
+        entity.prop.doorOpen = row.state.doorOpen
+      }
       if (entity.prop?.container && Array.isArray(row.state?.container)) {
         const stored = row.state.container as ({ defId: string; count: number } | null)[]
         for (let i = 0; i < entity.prop.container.length && i < stored.length; i++) {
@@ -538,6 +578,7 @@ function entityToDto(entity: GameEntity, now: number): WorldEntityDto {
         ? {
             lootCount: entity.prop.lootCount,
             ...(entity.prop.container ? { container: entity.prop.container } : {}),
+            ...(entity.prop.doorOpen !== undefined ? { doorOpen: entity.prop.doorOpen } : {}),
           }
         : null,
     updatedAt: now,

@@ -163,6 +163,16 @@ export class GameServer {
           this.broadcastDespawn(gather.pickedUp.id)
         }
         if (gather.spawned) this.broadcastSpawn(gather.spawned)
+        if (gather.changed?.prop) {
+          // Door swing: pin the new authoritative pose on every client.
+          const e = gather.changed
+          this.broadcastToKnowing(e.id, {
+            t: 'entity',
+            id: e.id,
+            pos: [e.transform.pos.x, e.transform.pos.y, e.transform.pos.z],
+            rot: [e.transform.rot.x, e.transform.rot.y, e.transform.rot.z, e.transform.rot.w],
+          })
+        }
         if (gather.changed?.resource) {
           this.broadcastToKnowing(gather.changed.id, {
             t: 'entity',

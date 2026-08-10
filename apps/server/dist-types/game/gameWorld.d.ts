@@ -51,6 +51,13 @@ export declare class GameWorld {
     id?: EntityId
   }): GameEntity
   despawn(id: EntityId): void
+  /**
+   * Swings a frozen door about its hinge edge (local -X). The whole pose
+   * (position AND rotation) pivots so it reads as a real hinge, not a
+   * center-spin. Returns false unless the prop is an installed (non-
+   * dynamic) door.
+   */
+  toggleDoor(entity: GameEntity): boolean
   setPropMotion(entity: GameEntity, motion: MotionState): void
   hasWeld(a: EntityId, b: EntityId): boolean
   weldCountFor(id: EntityId): number

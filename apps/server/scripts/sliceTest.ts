@@ -85,6 +85,9 @@ class TestClient {
   /** What MY beam currently holds (from physgun_state broadcasts). */
   heldTarget: string | null = null
   stats: { hp: number; hunger: number; thirst: number; stamina: number } | null = null
+  /** Mirrors the server's hotbar toggle: re-pressing the active slot holsters. */
+  activeSlot = -1
+  holstered = false
   lastContainer: {
     id: string
     size: number
@@ -142,6 +145,7 @@ class TestClient {
         if (e) {
           if (msg.motion) e.motion = msg.motion
           if (msg.pos) e.pos = msg.pos
+          if (msg.rot) e.rot = msg.rot
           if (msg.remaining !== undefined) e.remaining = msg.remaining
         }
         break
@@ -233,6 +237,16 @@ class TestClient {
     return this.skills.find((s) => s.id === id)
   }
 
+  /** Presses a hotbar key, mirroring the server's holster toggle rules. */
+  hotbar(slot: number): void {
+    this.send({ t: 'hotbar', slot })
+    if (slot === this.activeSlot) this.holstered = !this.holstered
+    else {
+      this.activeSlot = slot
+      this.holstered = false
+    }
+  }
+
   /** Ensures an item sits in a hotbar slot (0-5) and selects it. */
   async equip(defId: string): Promise<number> {
     let slot = this.slotOf(defId)
@@ -251,7 +265,8 @@ class TestClient {
       await this.waitFor((m) => m.t === 'inventory')
       slot = this.slotOf(defId)
     }
-    this.send({ t: 'hotbar', slot })
+    if (slot === this.activeSlot && !this.holstered) return slot // already out
+    this.hotbar(slot)
     await sleep(120)
     return slot
   }
@@ -383,12 +398,12 @@ async function main(): Promise<void> {
   )
   assert(crate, 'found a crate outside the gate')
   await aimAt(a, crate)
-  a.send({ t: 'hotbar', slot: 1 }) // empty slot for a fresh player
+  a.hotbar(1) // empty slot for a fresh player
   await sleep(120)
   const bare = await grabResult(a)
   assert(bare.error === 'no_physgun_equipped', 'grab without physgun rejected')
 
-  a.send({ t: 'hotbar', slot: 0 })
+  a.hotbar(0)
   await sleep(120)
   await aimAt(a, crate)
   const grabbed = await grabResult(a)
@@ -537,18 +552,18 @@ async function main(): Promise<void> {
   ])
   await settle(a)
   // Minecraft-style: bare hands (holstered) chop too, just slowly.
-  a.send({ t: 'hotbar', slot: a.inventory?.slots.find((sl) => sl.i === 0) ? 0 : 0 })
+  a.hotbar(0)
   await sleep(120)
   const logsBeforePunch = a.count('wood_log')
   await a.equip('stone_axe')
-  a.send({ t: 'hotbar', slot: a.slotOf('stone_axe') }) // re-press = holster (bare hands)
+  a.hotbar(a.slotOf('stone_axe')) // re-press = holster (bare hands)
   await sleep(150)
   const punch = await a.use(tree.id)
   assert(punch.ok, 'bare hands can chop (slowly)')
   await a.waitFor((m) => m.t === 'inventory' && a.count('wood_log') === logsBeforePunch + 1, 5000)
   assert(a.count('wood_log') === logsBeforePunch + 1, 'punch yields a single log')
   await sleep(300) // swing cooldown
-  a.send({ t: 'hotbar', slot: a.slotOf('stone_axe') }) // unholster the axe
+  a.hotbar(a.slotOf('stone_axe')) // unholster the axe
   await sleep(150)
   const logsBefore = a.count('wood_log')
   const chop = await a.use(tree.id)
@@ -632,6 +647,36 @@ async function main(): Promise<void> {
   a.send({ t: 'container_move', target: boxId, dir: 'in', slot: berrySlot })
   await a.waitFor((m) => m.t === 'container' && m.slots.some((sl) => sl.def === 'berries'), 5000)
 
+  console.log('phase: doors — craft, install (freeze), swing on E')
+  await craftAndWait(a, 'craft_planks', 'wood_plank')
+  await craftAndWait(a, 'craft_wooden_door', 'wooden_door')
+  a.send({ t: 'drop', slot: a.slotOf('wooden_door'), count: 1 })
+  const doorSpawn = await a.waitFor(
+    (m) => m.t === 'spawn' && m.entities.some((e) => e.def === 'wooden_door'),
+    5000,
+  )
+  const doorId =
+    doorSpawn.t === 'spawn'
+      ? (doorSpawn.entities.find((e) => e.def === 'wooden_door')?.id ?? '')
+      : ''
+  assert(doorId, 'door dropped into the world')
+  await sleep(800)
+  await a.equip('physgun')
+  await aimAt(a, a.entities.get(doorId) as WireEntity)
+  const doorGrab = await grabResult(a)
+  assert(doorGrab.ok, 'door grabbed')
+  a.send({ t: 'physgun', a: 'freeze' })
+  await a.waitFor((m) => m.t === 'entity' && m.id === doorId && m.motion === 'frozen')
+  const rotBefore = JSON.stringify(a.entities.get(doorId)?.rot)
+  await sleep(300)
+  const swing1 = await a.use(doorId)
+  assert(swing1.ok, 'installed door swings on E')
+  await sleep(200)
+  assert(JSON.stringify(a.entities.get(doorId)?.rot) !== rotBefore, 'door pose changed (opened)')
+  await sleep(300)
+  const swing2 = await a.use(doorId)
+  assert(swing2.ok, 'door closes again')
+
   // Return to the north-gate area — later phases (and Bob's approach path)
   // assume Alice is near the crates outside the north gate.
   await walkPath(a, [
@@ -689,7 +734,10 @@ async function main(): Promise<void> {
   await a.equip('physgun')
   await aimAt(a, a.entities.get(wall.id) as WireEntity)
   const wallGrab = await grabResult(a)
-  assert(wallGrab.ok && wallGrab.target === wall.id, 'grabbed own wall')
+  assert(
+    wallGrab.ok && wallGrab.target === wall.id,
+    `grabbed own wall (${JSON.stringify(wallGrab)} wall=${JSON.stringify(a.entities.get(wall.id)?.pos)} me=${JSON.stringify(a.me?.pos)})`,
+  )
   await sleep(400)
   a.send({ t: 'physgun', a: 'freeze' })
   await a.waitFor((m) => m.t === 'entity' && m.id === wall.id && m.motion === 'frozen')

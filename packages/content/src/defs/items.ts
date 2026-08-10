@@ -199,6 +199,21 @@ export const ITEMS: ItemDef[] = [
     placeable: { maxRange: 4, snapStep: 0.5 },
   },
   {
+    id: 'wooden_door',
+    name: 'Wooden Door',
+    description: 'Plank door. Drop it, physgun it into a doorway, freeze — then E swings it.',
+    category: 'building',
+    maxStack: 4,
+    door: { openAngle: 1.75 },
+    world: {
+      shape: { type: 'box', size: [1.05, 2.05, 0.09] },
+      massKg: 18,
+      color: '#8a6a42',
+      physgun: true,
+    },
+    placeable: { maxRange: 3.5, snapStep: 0.35 },
+  },
+  {
     id: 'storage_box',
     name: 'Storage Box',
     description: 'A lidded box for stashing goods safely outside your pockets.',
