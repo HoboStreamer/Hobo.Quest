@@ -3,8 +3,7 @@ import type {
   WireCraftJob,
   WireEntity,
   WireInventory,
-  WirePlayerState,
-} from '../wire.js'
+  WirePlayerState,, WirePlant } from '../wire.js'
 
 /**
  * Server -> client messages. Plain types (no zod): the client trusts the
@@ -62,7 +61,7 @@ export interface ServerEntityUpdate {
   rot?: [number, number, number, number]
   remaining?: number
   /** Planter crop changed (null clears after harvest). */
-  plant?: import('../wire.js').WirePlant | null
+  plant?: WirePlant | null
 }
 
 export interface ServerInventory {
