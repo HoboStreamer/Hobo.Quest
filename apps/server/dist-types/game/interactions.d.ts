@@ -21,6 +21,8 @@ export interface GatherResult {
   changed: GameEntity | null
   /** Entity picked up and removed from the world, if any. */
   pickedUp: GameEntity | null
+  /** Entity spawned as a side effect (felled tree trunk), if any. */
+  spawned: GameEntity | null
   levelUps: LevelUp[]
   xpChanged: boolean
 }

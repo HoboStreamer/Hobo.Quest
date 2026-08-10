@@ -1,3 +1,4 @@
+import { buildTerrainGrid, terrainHeight } from '@hobo/content'
 import type { ContentRegistry, WorldShape } from '@hobo/content'
 import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
 import type { ConstraintDto, PersistenceStore, WorldEntityDto } from '@hobo/persistence'
@@ -63,10 +64,21 @@ export class GameWorld {
   /** Static level geometry — mirrored by the client from the same world def. */
   private buildStaticWorld(): void {
     const world = this.content.world
+    // Safety floor beneath the terrain (catches anything that tunnels).
     this.physics.addBody({
       shape: { type: 'box', size: [world.groundHalfExtent * 2, 1, world.groundHalfExtent * 2] },
       motion: 'static',
-      pos: vec3(0, -0.5, 0),
+      pos: vec3(0, -2.0, 0),
+      layer: CollisionLayer.Static,
+      collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+    })
+    // Heightfield terrain — the SAME grid the client builds for prediction
+    // and rendering (see @hobo/content buildTerrainGrid).
+    const grid = buildTerrainGrid(world)
+    this.physics.addBody({
+      shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
+      motion: 'static',
+      pos: vec3(0, 0, 0),
       layer: CollisionLayer.Static,
       collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
     })
@@ -102,6 +114,8 @@ export class GameWorld {
     lootCount?: number
     /** Initial toss velocity (dropping an item throws it forward). */
     velocity?: Vec3
+    /** Initial spin (felled trees tip over). */
+    angularVelocity?: Vec3
   }): GameEntity {
     const rep = this.content.worldRepOf(opts.defId)
     const entity: GameEntity = {
@@ -125,6 +139,9 @@ export class GameWorld {
     })
     if (opts.velocity && opts.motion === 'dynamic') {
       this.physics.setLinearVelocity(bodyId, opts.velocity)
+    }
+    if (opts.angularVelocity && opts.motion === 'dynamic') {
+      this.physics.setAngularVelocity(bodyId, opts.angularVelocity)
     }
     this.bodyByEntity.set(entity.id, bodyId)
     this.entityByBody.set(bodyId, entity.id)
@@ -371,7 +388,11 @@ export class GameWorld {
     for (const prop of world.initialProps) {
       this.spawnProp({
         defId: prop.item,
-        pos: vec3(prop.pos[0], prop.pos[1], prop.pos[2]),
+        pos: vec3(
+          prop.pos[0],
+          prop.pos[1] + terrainHeight(this.content.world, prop.pos[0], prop.pos[2]),
+          prop.pos[2],
+        ),
         rot: qfromYaw(quat(), prop.yaw),
         motion: 'dynamic',
       })
@@ -384,7 +405,12 @@ export class GameWorld {
       const nodeType = this.content.nodeTypeOrThrow(node.node)
       this.spawnResource({
         nodeTypeId: node.node,
-        pos: vec3(node.pos[0], node.pos[1], node.pos[2]),
+        // Nodes sit ON the terrain, wherever it rolls.
+        pos: vec3(
+          node.pos[0],
+          node.pos[1] + terrainHeight(world, node.pos[0], node.pos[2]),
+          node.pos[2],
+        ),
         remaining: nodeType.amount,
       })
     }

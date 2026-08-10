@@ -284,6 +284,9 @@ async function walkTo(c: TestClient, x: number, z: number, maxMs = 40000): Promi
     if (Math.hypot(dx, dz) < 1.4) return
     const yaw = Math.atan2(dx, dz)
     c.input(0, 1, yaw, SPRINT)
+    if (Date.now() - start > 8000 && Math.floor((Date.now() - start) / 1000) % 3 === 0) {
+      console.log('  walkTo stuck?', JSON.stringify(me.pos), 'vel', JSON.stringify(me.vel))
+    }
     await sleep(1000 / 30)
   }
   throw new Error(`walkTo (${x},${z}) timed out at ${JSON.stringify(c.me?.pos)}`)
@@ -494,11 +497,8 @@ async function main(): Promise<void> {
   }
   assert(a.count('scrap_metal') === 4, 'hand-gathered 4 scrap')
 
-  console.log('phase: tool gating on trees')
   const tree = byType('oak_tree')[0]
   assert(tree, 'trees replicated')
-  const treeTry = await a.use(tree.id)
-  assert(treeTry.error === 'requires_axe', 'tree rejects bare-handed chopping')
 
   console.log('phase: craft tools (skill gate + crafting XP)')
   a.results.length = 0
@@ -524,12 +524,42 @@ async function main(): Promise<void> {
     [tree.pos[0] + 1.5, tree.pos[2] + 1.5],
   ])
   await settle(a)
+  // Minecraft-style: bare hands (holstered) chop too, just slowly.
+  a.send({ t: 'hotbar', slot: a.inventory?.slots.find((sl) => sl.i === 0) ? 0 : 0 })
+  await sleep(120)
+  const logsBeforePunch = a.count('wood_log')
   await a.equip('stone_axe')
+  a.send({ t: 'hotbar', slot: a.slotOf('stone_axe') }) // re-press = holster (bare hands)
+  await sleep(150)
+  const punch = await a.use(tree.id)
+  assert(punch.ok, 'bare hands can chop (slowly)')
+  await a.waitFor((m) => m.t === 'inventory' && a.count('wood_log') === logsBeforePunch + 1, 5000)
+  assert(a.count('wood_log') === logsBeforePunch + 1, 'punch yields a single log')
+  await sleep(300) // swing cooldown
+  a.send({ t: 'hotbar', slot: a.slotOf('stone_axe') }) // unholster the axe
+  await sleep(150)
   const logsBefore = a.count('wood_log')
   const chop = await a.use(tree.id)
   assert(chop.ok, 'axe chop accepted')
   await sleep(150)
   assert(a.count('wood_log') === logsBefore + 2, 'axe power doubles the yield')
+
+  console.log('phase: TIMBER — deplete the tree, physical trunk falls')
+  for (let i = 0; i < 12 && (a.entities.get(tree.id)?.remaining ?? 1) > 0; i++) {
+    a.send({ t: 'use', target: tree.id })
+    await sleep(260) // swing cooldown
+  }
+  assert((a.entities.get(tree.id)?.remaining ?? 1) === 0, 'tree fully chopped')
+  const trunk = [...a.entities.values()].find(
+    (e) =>
+      e.kind === 'prop' &&
+      e.def === 'tree_trunk' &&
+      Math.hypot(e.pos[0] - tree.pos[0], e.pos[2] - tree.pos[2]) < 8,
+  )
+  assert(trunk, 'felled trunk spawned as a physical prop near the stump')
+  await sleep(1200) // let it crash down under physics
+  const trunkNow = a.entities.get(trunk.id) as WireEntity
+  assert(trunkNow.pos[1] < tree.pos[1] + 1.6, 'trunk fell (physics), not floating')
 
   console.log('phase: build with physgun freeze (wilderness allows building)')
   await craftAndWait(a, 'craft_planks', 'wood_plank')

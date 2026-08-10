@@ -44,6 +44,8 @@ interface EntityVisual {
   buffer: InterpSample[]
   /** Stance the player mirror capsule was last built for (players only). */
   bodyStance: number
+  /** Hit-shake time remaining (resources being chopped/mined). */
+  shakeT: number
 }
 
 const INTERP_DELAY = 0.13
@@ -94,21 +96,23 @@ export class EntityView {
       // Collision mirror so local prediction blocks on other players the
       // same way the server does (players collide with players).
       bodyId = this.addPlayerBody(vec3(e.pos[0], e.pos[1], e.pos[2]), 0)
-    } else if (e.kind === 'prop' && e.def) {
-      const def = this.content.item(e.def)
-      if (def?.world) {
-        mesh = meshForShape(this.scene, `prop:${e.id}`, def.world.shape, def.world.color)
-        bodyId = this.physics.addBody({
-          shape: toPhysicsShape(def.world.shape),
-          motion: 'static',
-          pos: vec3(e.pos[0], e.pos[1], e.pos[2]),
-          rot: quat(e.rot[0], e.rot[1], e.rot[2], e.rot[3]),
-          layer: CollisionLayer.Prop,
-          collidesWith: CollisionLayer.Player,
-        })
-      } else {
-        mesh = CreateBox(`prop:${e.id}`, { size: 0.5 }, this.scene)
-      }
+    } else if (e.kind === 'prop' && e.def && this.content.item(e.def)) {
+      // worldRepOf ALWAYS yields a shape (fallback for defs without a
+      // world block) — matching the server exactly. Every prop also gets a
+      // collision mirror; without one the aim ray can't hit it and the
+      // prop can never be picked up or grabbed.
+      const rep = this.content.worldRepOf(e.def)
+      mesh = meshForShape(this.scene, `prop:${e.id}`, rep.shape, rep.color)
+      bodyId = this.physics.addBody({
+        shape: toPhysicsShape(rep.shape),
+        motion: 'static',
+        pos: vec3(e.pos[0], e.pos[1], e.pos[2]),
+        rot: quat(e.rot[0], e.rot[1], e.rot[2], e.rot[3]),
+        layer: CollisionLayer.Prop,
+        collidesWith: CollisionLayer.Player,
+      })
+    } else if (e.kind === 'prop') {
+      mesh = CreateBox(`prop:${e.id}`, { size: 0.5 }, this.scene)
     } else {
       // Resource node: visual archetype + collision body from the node type.
       const nodeType = this.content.nodeType(e.def ?? '')
@@ -127,10 +131,22 @@ export class EntityView {
 
     if (mesh) {
       mesh.position.set(e.pos[0], e.pos[1], e.pos[2])
-      mesh.rotationQuaternion = new Quaternion(e.rot[0], e.rot[1], e.rot[2], e.rot[3])
+      // Resources keep Euler rotation so the hit-shake wobble can drive it;
+      // props are quaternion-driven by replication.
+      if (e.kind === 'prop') {
+        mesh.rotationQuaternion = new Quaternion(e.rot[0], e.rot[1], e.rot[2], e.rot[3])
+      }
     }
     if (bodyId !== null) this.entityByBody.set(bodyId, e.id)
-    this.visuals.set(e.id, { entity: e, mesh, avatar, bodyId, buffer: [], bodyStance: 0 })
+    this.visuals.set(e.id, {
+      entity: e,
+      mesh,
+      avatar,
+      bodyId,
+      buffer: [],
+      bodyStance: 0,
+      shakeT: 0,
+    })
   }
 
   /** Static capsule matching the server's player body (short + lifted). */
@@ -169,7 +185,11 @@ export class EntityView {
     const v = this.visuals.get(e.id)
     if (!v) return
     if (e.kind === 'resource') {
-      if (v.mesh) setDepletedLook(v.mesh, (e.remaining ?? 0) <= 0)
+      if (v.mesh) {
+        setDepletedLook(v.mesh, (e.remaining ?? 0) <= 0)
+        // Resource updates only happen on hits — kick the shake animation.
+        if ((e.remaining ?? 0) > 0) v.shakeT = 0.3
+      }
       return
     }
     if (!v.mesh) return
@@ -232,6 +252,13 @@ export class EntityView {
     const renderTime = localTime + this.clockOffset - INTERP_DELAY
 
     for (const v of this.visuals.values()) {
+      // Chop/mine feedback: brief wobble on the hit node.
+      if (v.shakeT > 0 && v.mesh) {
+        v.shakeT = Math.max(0, v.shakeT - dt)
+        const k = v.shakeT / 0.3
+        v.mesh.rotation.z = Math.sin(localTime * 55) * 0.045 * k
+        v.mesh.rotation.x = Math.sin(localTime * 47 + 1.3) * 0.03 * k
+      }
       if (v.buffer.length === 0) continue
       const bracket = findBracket(v.buffer, renderTime)
       const { a, b, alpha } = bracket
@@ -393,6 +420,13 @@ function buildNodeVisual(
       canopy.material = materialFor(scene, '#3e6b34')
       canopy.parent = trunk
       canopy.position.y = 1.9
+      // Chopped-down state: the standing tree is replaced by a stump (the
+      // trunk itself falls as a physical prop spawned by the server).
+      const stump = CreateCylinder(`res:${id}:stump`, { diameter: 0.7, height: 0.45 }, scene)
+      stump.position.y = 0.22
+      stump.material = materialFor(scene, '#5c3f24')
+      stump.parent = root
+      stump.setEnabled(false)
       break
     }
     case 'rock': {
@@ -439,6 +473,15 @@ function hashAngle(id: string): number {
 }
 
 function setDepletedLook(root: Mesh, depleted: boolean): void {
+  const stump = root.getChildMeshes().find((m) => m.name.endsWith(':stump'))
+  if (stump) {
+    // Tree: felled -> stump only; regrown -> full tree back.
+    for (const child of root.getChildMeshes()) {
+      if (child === stump) child.setEnabled(depleted)
+      else child.setEnabled(!depleted)
+    }
+    return
+  }
   const value = depleted ? 0.3 : 1
   for (const child of root.getChildMeshes()) {
     ;(child as Mesh).visibility = value

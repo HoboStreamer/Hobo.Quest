@@ -1,8 +1,8 @@
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine.js'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
-import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
+import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import { Scene } from '@babylonjs/core/scene.js'
-import type { ContentRegistry, WorldShape } from '@hobo/content'
+import { type ContentRegistry, type WorldShape } from '@hobo/content'
 /**
  * Engine + scene bootstrap and static world construction. WebGPU when the
  * browser supports it, WebGL otherwise — nothing else in the client cares

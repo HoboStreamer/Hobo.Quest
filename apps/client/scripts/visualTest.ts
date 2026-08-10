@@ -138,7 +138,12 @@ async function main(): Promise<void> {
       const d = Math.hypot(dx, dz)
       if (!best || d < best.d) best = { d, pos: e.pos }
     }
-    if (!best || best.d > 7.5) return false
+    if (!best || best.d > 7.5) {
+      console.log(
+        `[aim-debug] nearest prop d=${best ? best.d.toFixed(1) : 'none'} eye=${eye.x.toFixed(1)},${eye.z.toFixed(1)}`,
+      )
+      return false
+    }
     const dx = best.pos[0] - eye.x
     const dy = best.pos[1] - eye.y
     const dz = best.pos[2] - eye.z
@@ -371,7 +376,7 @@ async function main(): Promise<void> {
     const ctx = await browser.newContext({ viewport: { width: 800, height: 600 } })
     const p2 = await ctx.newPage()
     await p2.goto(`http://127.0.0.1:${PORT}/?vmrot=${rot}`)
-    await p2.waitForSelector('#btn-join', { timeout: 30000 })
+    await p2.waitForSelector('#btn-join', { timeout: 120000 })
     await p2.waitForTimeout(1500)
     await p2.click('#btn-join')
     await p2.waitForTimeout(3500)

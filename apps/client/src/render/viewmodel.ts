@@ -192,7 +192,9 @@ export class Viewmodel {
     if (itemDef === this.currentItem) return
     this.currentItem = itemDef
     this.equipT = 0
-    if (this.hands) this.hands.setEnabled(itemDef !== null)
+    // Hands always show — empty hands are FISTS (you can punch, Minecraft-
+    // style), so the body never vanishes below the crosshair.
+    if (this.hands) this.hands.setEnabled(true)
 
     this.toolProp?.dispose()
     this.toolProp = null

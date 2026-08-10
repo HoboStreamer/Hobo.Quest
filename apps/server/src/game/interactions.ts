@@ -44,6 +44,8 @@ export interface GatherResult {
   changed: GameEntity | null
   /** Entity picked up and removed from the world, if any. */
   pickedUp: GameEntity | null
+  /** Entity spawned as a side effect (felled tree trunk), if any. */
+  spawned: GameEntity | null
   levelUps: LevelUp[]
   xpChanged: boolean
 }
@@ -59,7 +61,7 @@ export function handleUse(
   nowMs: number,
   canManipulate: (entity: GameEntity) => boolean,
 ): GatherResult {
-  const none = { changed: null, pickedUp: null, levelUps: [], xpChanged: false }
+  const none = { changed: null, pickedUp: null, spawned: null, levelUps: [], xpChanged: false }
   const entity = world.entities.get(asEntityId(msg.target))
 
   // Props carry their own item: E picks them back up into the inventory.
@@ -86,11 +88,10 @@ export function handleUse(
   const nodeType = world.content.nodeType(entity.resource.nodeTypeId)
   if (!nodeType) return { outcome: result('use', false, 'no_target'), ...none }
 
+  // Minecraft-style: ANYTHING can work a node — bare fists, a log, a rock.
+  // The matching tool is just much better (perUse x power vs a single unit).
   const tool = equippedTool(session)
   const usingMatchingTool = tool !== undefined && tool.kind === nodeType.requiredTool
-  if (nodeType.requiredTool && !usingMatchingTool) {
-    return { outcome: result('use', false, `requires_${nodeType.requiredTool}`), ...none }
-  }
 
   eyePosition(session, _eye)
   const range = usingMatchingTool ? (tool?.range ?? HAND_USE_RANGE) : HAND_USE_RANGE
@@ -112,9 +113,33 @@ export function handleUse(
   }
 
   res.remaining -= gathered
+  let spawned: GameEntity | null = null
   if (res.remaining <= 0) {
     res.remaining = 0
     res.depletedUntil = nowMs + nodeType.respawnSeconds * 1000
+    // Timber! Felling a tree spawns a real physical trunk that tips away
+    // from the chopper and crashes down under the physics engine.
+    if (nodeType.visual === 'tree') {
+      const away = vec3(
+        entity.transform.pos.x - session.move.pos.x,
+        0,
+        entity.transform.pos.z - session.move.pos.z,
+      )
+      const len = Math.hypot(away.x, away.z) || 1
+      away.x /= len
+      away.z /= len
+      spawned = world.spawnProp({
+        defId: 'tree_trunk',
+        pos: vec3(entity.transform.pos.x, entity.transform.pos.y + 1.75, entity.transform.pos.z),
+        rot: qfromYaw(quat(), session.yaw),
+        motion: 'dynamic',
+        owner: session.playerId,
+        lootCount: 1,
+        velocity: vec3(away.x * 1.2, 0.3, away.z * 1.2),
+        // Tip over the axis perpendicular to the fall direction.
+        angularVelocity: vec3(away.z * 2.2, 0, -away.x * 2.2),
+      })
+    }
   }
   entity.dirty = true
   session.dirty = true
@@ -123,6 +148,7 @@ export function handleUse(
     outcome: result('use', true),
     changed: entity,
     pickedUp: null,
+    spawned,
     levelUps,
     xpChanged: nodeType.xpPerGather > 0,
   }

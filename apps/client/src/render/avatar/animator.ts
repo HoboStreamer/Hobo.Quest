@@ -169,31 +169,44 @@ export class AvatarAnimator {
 
     // ── Stances ──────────────────────────────────────────────────────
     if (input.stance === 1) {
-      // Crouch: sunk hips, bent knees, slight forward hunch; shorter strides.
-      target.bobY -= 0.34
-      target.hipLX = target.hipLX * 0.5 - 0.85
-      target.hipRX = target.hipRX * 0.5 - 0.85
-      target.kneeLX = target.kneeLX * 0.5 + 1.25
-      target.kneeRX = target.kneeRX * 0.5 + 1.25
-      target.spineX += 0.3
+      // Crouch. The pelvis drop MUST equal how much the bent legs shorten,
+      // or the feet punch through the floor: thigh 48.7°+knee bend leaves
+      // ~0.36 less vertical leg extent, so the hips sink exactly 0.36.
+      target.bobY -= 0.36
+      target.hipLX = target.hipLX * 0.4 - 1.15
+      target.hipRX = target.hipRX * 0.4 - 1.15
+      target.kneeLX = target.kneeLX * 0.4 + 1.9
+      target.kneeRX = target.kneeRX * 0.4 + 1.9
+      target.spineX += 0.38
+      target.chestX += 0.1
+      // Arms rest on the knees-ish instead of dangling straight down.
+      target.shoulderLX = target.shoulderLX * 0.4 - 0.35
+      target.shoulderRX = target.shoulderRX * 0.4 - 0.35
+      target.elbowLX = -0.5
+      target.elbowRX = -0.5
     } else if (input.stance === 2) {
-      // Prone: body pitched flat, arms ahead, head craned up — army crawl
-      // when moving (limbs alternate with the crawl phase).
+      // Prone: body flat on the ground, legs stretched with toes down,
+      // upper body propped slightly on the elbows, head craned up.
+      // Army-crawl when moving (limbs alternate with the crawl phase).
       const crawl = Math.min(speedNorm * 4, 1)
-      const cs = Math.sin(this.phase) * 0.35 * crawl
-      target.bobRX = 1.35
-      target.bobY = -1.14
-      target.hipLX = -0.12 + cs
-      target.hipRX = -0.12 - cs
-      target.kneeLX = 0.2 + Math.max(0, -cs) * 0.8
-      target.kneeRX = 0.2 + Math.max(0, cs) * 0.8
-      target.shoulderLX = -2.6 - cs * 0.6
-      target.shoulderRX = -2.6 + cs * 0.6
-      target.shoulderLZ = 0.25
-      target.shoulderRZ = -0.25
-      target.elbowLX = -0.45
-      target.elbowRX = -0.45
-      target.spineX = -0.15
+      const cs = Math.sin(this.phase) * 0.3 * crawl
+      target.bobRX = 1.42
+      target.bobY = -1.06
+      // Legs nearly straight along the ground, slight spread via alternate
+      // hip angles while crawling.
+      target.hipLX = -0.04 + cs
+      target.hipRX = -0.04 - cs
+      target.kneeLX = 0.08 + Math.max(0, -cs) * 0.7
+      target.kneeRX = 0.08 + Math.max(0, cs) * 0.7
+      target.shoulderLX = -2.75 - cs * 0.5
+      target.shoulderRX = -2.75 + cs * 0.5
+      target.shoulderLZ = 0.35
+      target.shoulderRZ = -0.35
+      target.elbowLX = -0.85
+      target.elbowRX = -0.85
+      // Chest propped up on the forearms; head looks ahead, not into dirt.
+      target.spineX = -0.3
+      target.chestX = -0.12
     }
 
     // ── View pitch aim (body follows the eyes a little) ──────────────
@@ -226,6 +239,14 @@ export class AvatarAnimator {
         target.elbowRX = -0.75 + raise * 0.35
         target.chestX += raise * 0.12
       }
+    } else if (input.stance !== 2 && this.swingT > 0) {
+      // Bare-hand / held-item punch: a quick straight jab.
+      const k = this.swingT / 0.38
+      const jab = Math.sin(k * Math.PI)
+      target.shoulderRX = -1.15 * jab
+      target.elbowRX = -0.9 + jab * 0.85
+      target.spineY += jab * 0.18
+      target.chestX += jab * 0.08
     }
 
     // ── Exponentially damp live pose toward target (per-group rates) ──

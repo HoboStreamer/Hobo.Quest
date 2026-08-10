@@ -39,6 +39,8 @@ export declare class GameWorld {
     lootCount?: number
     /** Initial toss velocity (dropping an item throws it forward). */
     velocity?: Vec3
+    /** Initial spin (felled trees tip over). */
+    angularVelocity?: Vec3
   }): GameEntity
   /** Spawns a resource node instance of a content-defined node type. */
   spawnResource(opts: {

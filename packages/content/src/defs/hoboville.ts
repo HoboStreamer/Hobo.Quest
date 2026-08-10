@@ -27,7 +27,13 @@ export const HOBOVILLE: WorldDef = {
   spawnYaw: 0,
   statics: [
     // ── Plaza + fountain ────────────────────────────────────────────
-    { shape: { type: 'box', size: [26, 0.1, 26] }, pos: [0, 0.05, 0], yaw: 0, color: PLAZA },
+    {
+      shape: { type: 'box', size: [26, 0.1, 26] },
+      pos: [0, 0.05, 0],
+      yaw: 0,
+      color: PLAZA,
+      tex: 'floor_pavement',
+    },
     {
       shape: { type: 'cylinder', radius: 1.6, height: 0.9 },
       pos: [0, 0.45, 0],
@@ -36,40 +42,190 @@ export const HOBOVILLE: WorldDef = {
     },
 
     // ── City walls (N wall at z=20, S at z=-20, E at x=20, W at x=-20) ─
-    { shape: { type: 'box', size: [SEG, 3.5, 0.6] }, pos: [-OFF, 1.75, 20], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [SEG, 3.5, 0.6] }, pos: [OFF, 1.75, 20], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [SEG, 3.5, 0.6] }, pos: [-OFF, 1.75, -20], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [SEG, 3.5, 0.6] }, pos: [OFF, 1.75, -20], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.6, 3.5, SEG] }, pos: [20, 1.75, -OFF], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.6, 3.5, SEG] }, pos: [20, 1.75, OFF], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.6, 3.5, SEG] }, pos: [-20, 1.75, -OFF], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.6, 3.5, SEG] }, pos: [-20, 1.75, OFF], yaw: 0, color: WALL },
+    {
+      shape: { type: 'box', size: [SEG, 3.5, 0.6] },
+      pos: [-OFF, 1.75, 20],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [SEG, 3.5, 0.6] },
+      pos: [OFF, 1.75, 20],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [SEG, 3.5, 0.6] },
+      pos: [-OFF, 1.75, -20],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [SEG, 3.5, 0.6] },
+      pos: [OFF, 1.75, -20],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.6, 3.5, SEG] },
+      pos: [20, 1.75, -OFF],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.6, 3.5, SEG] },
+      pos: [20, 1.75, OFF],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.6, 3.5, SEG] },
+      pos: [-20, 1.75, -OFF],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.6, 3.5, SEG] },
+      pos: [-20, 1.75, OFF],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
     // Gate pillars (visual anchors at each opening)
-    { shape: { type: 'box', size: [0.8, 4.2, 0.8] }, pos: [-2.5, 2.1, 20], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.8, 4.2, 0.8] }, pos: [2.5, 2.1, 20], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.8, 4.2, 0.8] }, pos: [-2.5, 2.1, -20], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.8, 4.2, 0.8] }, pos: [2.5, 2.1, -20], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.8, 4.2, 0.8] }, pos: [20, 2.1, -2.5], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.8, 4.2, 0.8] }, pos: [20, 2.1, 2.5], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.8, 4.2, 0.8] }, pos: [-20, 2.1, -2.5], yaw: 0, color: WALL },
-    { shape: { type: 'box', size: [0.8, 4.2, 0.8] }, pos: [-20, 2.1, 2.5], yaw: 0, color: WALL },
+    {
+      shape: { type: 'box', size: [0.8, 4.2, 0.8] },
+      pos: [-2.5, 2.1, 20],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.8, 4.2, 0.8] },
+      pos: [2.5, 2.1, 20],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.8, 4.2, 0.8] },
+      pos: [-2.5, 2.1, -20],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.8, 4.2, 0.8] },
+      pos: [2.5, 2.1, -20],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.8, 4.2, 0.8] },
+      pos: [20, 2.1, -2.5],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.8, 4.2, 0.8] },
+      pos: [20, 2.1, 2.5],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.8, 4.2, 0.8] },
+      pos: [-20, 2.1, -2.5],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
+    {
+      shape: { type: 'box', size: [0.8, 4.2, 0.8] },
+      pos: [-20, 2.1, 2.5],
+      yaw: 0,
+      color: WALL,
+      tex: 'plastered_wall_02',
+    },
 
     // ── City buildings (future shops/services — solid shells for now) ──
-    { shape: { type: 'box', size: [6, 4, 5] }, pos: [12, 2, 12], yaw: 0.2, color: BUILDING_A },
-    { shape: { type: 'box', size: [5, 4, 6] }, pos: [-12, 2, 12], yaw: -0.15, color: BUILDING_B },
-    { shape: { type: 'box', size: [7, 4, 5] }, pos: [-11, 2, -12], yaw: 0.1, color: BUILDING_A },
-    { shape: { type: 'box', size: [5, 4, 5] }, pos: [11, 2, -12], yaw: -0.25, color: BUILDING_B },
+    {
+      shape: { type: 'box', size: [6, 4, 5] },
+      pos: [12, 2, 12],
+      yaw: 0.2,
+      color: BUILDING_A,
+      tex: 'red_brick',
+    },
+    {
+      shape: { type: 'box', size: [5, 4, 6] },
+      pos: [-12, 2, 12],
+      yaw: -0.15,
+      color: BUILDING_B,
+      tex: 'red_brick',
+    },
+    {
+      shape: { type: 'box', size: [7, 4, 5] },
+      pos: [-11, 2, -12],
+      yaw: 0.1,
+      color: BUILDING_A,
+      tex: 'red_brick',
+    },
+    {
+      shape: { type: 'box', size: [5, 4, 5] },
+      pos: [11, 2, -12],
+      yaw: -0.25,
+      color: BUILDING_B,
+      tex: 'red_brick',
+    },
     // Market awning posts near plaza (small props-to-be; statics for now)
-    { shape: { type: 'box', size: [4, 2.2, 2] }, pos: [7, 1.1, -4], yaw: 0.35, color: '#7a6a52' },
+    {
+      shape: { type: 'box', size: [4, 2.2, 2] },
+      pos: [7, 1.1, -4],
+      yaw: 0.35,
+      color: '#7a6a52',
+      tex: 'wood_planks',
+    },
 
     // ── Wilds landmarks ────────────────────────────────────────────
     // Old watchtower on the forest road
-    { shape: { type: 'box', size: [2.5, 6, 2.5] }, pos: [30, 3, 30], yaw: 0.4, color: '#6f6a60' },
+    {
+      shape: { type: 'box', size: [2.5, 6, 2.5] },
+      pos: [30, 3, 30],
+      yaw: 0.4,
+      color: '#6f6a60',
+      tex: 'weathered_plank_siding',
+    },
     // Collapsed shed in the scrapyard
-    { shape: { type: 'box', size: [5, 2.2, 4] }, pos: [42, 1.1, -40], yaw: 0.7, color: '#5f5a52' },
+    {
+      shape: { type: 'box', size: [5, 2.2, 4] },
+      pos: [42, 1.1, -40],
+      yaw: 0.7,
+      color: '#5f5a52',
+      tex: 'weathered_plank_siding',
+    },
     // Quarry ledges
-    { shape: { type: 'box', size: [8, 1.2, 6] }, pos: [-42, 0.6, -38], yaw: 0.3, color: '#75716c' },
-    { shape: { type: 'box', size: [6, 2.4, 5] }, pos: [-47, 1.2, -43], yaw: 0.5, color: '#6b6762' },
+    {
+      shape: { type: 'box', size: [8, 1.2, 6] },
+      pos: [-42, 0.6, -38],
+      yaw: 0.3,
+      color: '#75716c',
+      tex: 'gray_rocks',
+    },
+    {
+      shape: { type: 'box', size: [6, 2.4, 5] },
+      pos: [-47, 1.2, -43],
+      yaw: 0.5,
+      color: '#6b6762',
+      tex: 'gray_rocks',
+    },
 
     // ── Surf spine (NW field): two steep ramps leaning outward — steeper
     // than the walkable slope limit, so sliding them is pure surf physics.
@@ -79,6 +235,7 @@ export const HOBOVILLE: WorldDef = {
       yaw: 0,
       rot: [0, 0, 1.0],
       color: '#5d6570',
+      tex: 'metal_plate',
     },
     {
       shape: { type: 'box', size: [10, 0.6, 34] },
@@ -86,10 +243,23 @@ export const HOBOVILLE: WorldDef = {
       yaw: 0,
       rot: [0, 0, -1.0],
       color: '#5d6570',
+      tex: 'metal_plate',
     },
     // Launch platform at the spine's south end
-    { shape: { type: 'box', size: [4, 0.4, 4] }, pos: [-40, 6.2, 26], yaw: 0, color: '#6a727c' },
-    { shape: { type: 'box', size: [1.2, 6, 1.2] }, pos: [-40, 3, 24], yaw: 0, color: '#565e66' },
+    {
+      shape: { type: 'box', size: [4, 0.4, 4] },
+      pos: [-40, 6.2, 26],
+      yaw: 0,
+      color: '#6a727c',
+      tex: 'metal_plate',
+    },
+    {
+      shape: { type: 'box', size: [1.2, 6, 1.2] },
+      pos: [-40, 3, 24],
+      yaw: 0,
+      color: '#565e66',
+      tex: 'metal_plate',
+    },
   ],
 
   resourceNodes: [

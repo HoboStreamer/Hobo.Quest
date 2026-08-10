@@ -10,6 +10,7 @@ import { InputTracker } from './input/inputTracker.js'
 import { Connection, gameSocketUrl, getIdentity, saveName } from './net/connection.js'
 import { BeamRenderer, type BeamState } from './render/beams.js'
 import { EntityView } from './render/entityView.js'
+import { Environment } from './render/environment.js'
 import { FirstPersonBody } from './render/firstPersonBody.js'
 import { buildStaticWorld, createEngine, createScene } from './render/sceneSetup.js'
 import { Viewmodel } from './render/viewmodel.js'
@@ -38,12 +39,20 @@ async function start(): Promise<void> {
   // Havok loads while the player customizes their character.
   const havokPromise = HavokPhysics({ locateFile: () => havokWasmUrl })
 
+  const environment = new Environment(scene, engine)
+
   // Render immediately so the customization preview is live.
   let gameLoop: (() => void) | null = null
   let last = performance.now()
+  let envLast = performance.now()
   engine.runRenderLoop(() => {
     gameLoop?.()
-    if (scene.activeCamera) scene.render()
+    if (scene.activeCamera) {
+      const now = performance.now()
+      environment.update(Math.min((now - envLast) / 1000, 0.25), scene.activeCamera.globalPosition)
+      envLast = now
+      scene.render()
+    }
   })
   window.addEventListener('resize', () => engine.resize())
   // Ctrl+W while crouching would close the tab; the browser won't let us
@@ -82,6 +91,7 @@ async function start(): Promise<void> {
   })
   scene.activeCamera = player.camera
   releaseCamera()
+  environment.attachCamera(player.camera)
   const interact = new InteractionController(
     physics,
     player,
@@ -253,7 +263,7 @@ function promptFor(
     if (!nodeType) return null
     const itemName = content.item(nodeType.item)?.name ?? nodeType.item
     if (nodeType.requiredTool && tool !== nodeType.requiredTool) {
-      return `${nodeType.name} — requires ${nodeType.requiredTool}`
+      return `LMB — hit for ${itemName} (much faster with ${nodeType.requiredTool})`
     }
     if (nodeType.requiredTool) return `LMB — harvest ${itemName}`
     return `E — gather ${itemName}`

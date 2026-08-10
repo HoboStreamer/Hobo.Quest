@@ -1,4 +1,4 @@
-import type { ContentRegistry } from '@hobo/content'
+import { buildTerrainGrid, type ContentRegistry } from '@hobo/content'
 import { CollisionLayer, type PhysicsWorld } from '@hobo/physics'
 import { qfromEuler, qfromYaw, quat, vec3 } from '@hobo/shared'
 
@@ -13,7 +13,15 @@ export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegist
   physics.addBody({
     shape: { type: 'box', size: [world.groundHalfExtent * 2, 1, world.groundHalfExtent * 2] },
     motion: 'static',
-    pos: vec3(0, -0.5, 0),
+    pos: vec3(0, -2.0, 0),
+    layer: CollisionLayer.Static,
+    collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+  })
+  const grid = buildTerrainGrid(world)
+  physics.addBody({
+    shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
+    motion: 'static',
+    pos: vec3(0, 0, 0),
     layer: CollisionLayer.Static,
     collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
   })

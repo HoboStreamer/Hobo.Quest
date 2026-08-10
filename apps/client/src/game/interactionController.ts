@@ -216,10 +216,12 @@ export class InteractionController {
   private swing(): void {
     const now = performance.now()
     if (now - this.lastSwingMs < SWING_COOLDOWN_MS) return
+    this.lastSwingMs = now
+    // The swing always animates (punching air is allowed); it only DOES
+    // something when a resource is under the crosshair.
+    this.onSwing?.()
     const target = this.aim()
     if (target?.kind !== 'resource') return
-    this.lastSwingMs = now
-    this.onSwing?.()
     this.connection.send({ t: 'use', target: target.entityId })
   }
 }

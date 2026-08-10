@@ -153,6 +153,7 @@ export class GameServer {
           if (session.held?.entityId === gather.pickedUp.id) this.releaseHeld(session)
           this.broadcastDespawn(gather.pickedUp.id)
         }
+        if (gather.spawned) this.broadcastSpawn(gather.spawned)
         if (gather.changed?.resource) {
           this.broadcastToKnowing(gather.changed.id, {
             t: 'entity',

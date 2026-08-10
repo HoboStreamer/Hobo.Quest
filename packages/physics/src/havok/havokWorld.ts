@@ -15,8 +15,11 @@ import {
   PhysicsShapeBox,
   PhysicsShapeCapsule,
   PhysicsShapeCylinder,
+  PhysicsShapeMesh,
   PhysicsShapeSphere,
 } from '@babylonjs/core/Physics/v2/physicsShape.js'
+import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
+import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { PhysicsConstraint } from '@babylonjs/core/Physics/v2/physicsConstraint.js'
 import { PhysicsConstraintType } from '@babylonjs/core/Physics/v2/IPhysicsEnginePlugin.js'
 import { Scene } from '@babylonjs/core/scene.js'
@@ -366,6 +369,19 @@ export class HavokWorld implements PhysicsWorld {
           desc.radius,
           this.scene,
         )
+      }
+      case 'trimesh': {
+        // Build a transient mesh purely as the geometry source for the
+        // Havok mesh shape; it never renders.
+        const mesh = new Mesh(`trimesh-src-${this.nextId}`, this.scene)
+        const vd = new VertexData()
+        vd.positions = desc.positions
+        vd.indices = desc.indices
+        vd.applyToMesh(mesh)
+        mesh.isVisible = false
+        const shape = new PhysicsShapeMesh(mesh, this.scene)
+        mesh.dispose()
+        return shape
       }
     }
   }

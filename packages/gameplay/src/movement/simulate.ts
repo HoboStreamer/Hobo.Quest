@@ -226,6 +226,14 @@ function slideMove(
     v3addScaled(state.pos, state.pos, _delta, moveFrac)
     timeLeft *= 1 - hit.fraction
 
+    // Depenetration: a sweep blocked at its very start means the capsule is
+    // slightly EMBEDDED in geometry (sliding into a corner can shave past
+    // the skin). Nudge out along the contact normal — without this the
+    // player wedges permanently on box corners.
+    if (hit.fraction === 0) {
+      v3addScaled(state.pos, state.pos, hit.normal, 0.015)
+    }
+
     if (hit.normal.y < params.groundNormalY && hit.normal.y > -0.1) blocked = true
 
     if (planeCount >= MAX_CLIP_PLANES) {

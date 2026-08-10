@@ -33,6 +33,8 @@ export type ShapeDesc =
   | { type: 'cylinder'; radius: number; height: number }
   | { type: 'sphere'; radius: number }
   | { type: 'capsule'; radius: number; height: number }
+  /** Static triangle mesh (terrain). Positions/indices in local space. */
+  | { type: 'trimesh'; positions: Float32Array; indices: Uint32Array }
 
 export type MotionType = 'dynamic' | 'static' | 'kinematic'
 

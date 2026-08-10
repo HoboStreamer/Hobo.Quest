@@ -3,6 +3,14 @@ import type { Recipe } from '../schema/recipe.js'
 export const RECIPES: Recipe[] = [
   // ── Processing ─────────────────────────────────────────────────────
   {
+    id: 'buck_logs',
+    name: 'Buck Trunk into Logs',
+    category: 'processing',
+    inputs: [{ item: 'tree_trunk', count: 1 }],
+    outputs: [{ item: 'wood_log', count: 6 }],
+    craftSeconds: 2,
+  },
+  {
     id: 'craft_planks',
     name: 'Wood Planks',
     category: 'processing',

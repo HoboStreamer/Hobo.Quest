@@ -39,6 +39,25 @@ export const ITEMS: ItemDef[] = [
     description: 'Raw timber. Saw into planks.',
     category: 'material',
     maxStack: 20,
+    world: {
+      shape: { type: 'cylinder', radius: 0.14, height: 0.6 },
+      massKg: 5,
+      color: '#7a5432',
+      physgun: true,
+    },
+  },
+  {
+    id: 'tree_trunk',
+    name: 'Tree Trunk',
+    description: 'A whole felled trunk. Buck it into logs.',
+    category: 'material',
+    maxStack: 1,
+    world: {
+      shape: { type: 'cylinder', radius: 0.3, height: 2.9 },
+      massKg: 70,
+      color: '#6d4c2a',
+      physgun: true,
+    },
   },
   {
     id: 'wood_plank',
@@ -46,6 +65,12 @@ export const ITEMS: ItemDef[] = [
     description: 'Rough-sawn lumber, good enough to build with.',
     category: 'material',
     maxStack: 50,
+    world: {
+      shape: { type: 'box', size: [0.9, 0.07, 0.28] },
+      massKg: 3,
+      color: '#a3814e',
+      physgun: true,
+    },
   },
   {
     id: 'stone',
@@ -53,6 +78,12 @@ export const ITEMS: ItemDef[] = [
     description: 'Quarried rock. Heavy and dependable.',
     category: 'material',
     maxStack: 50,
+    world: {
+      shape: { type: 'sphere', radius: 0.17 },
+      massKg: 6,
+      color: '#83878b',
+      physgun: true,
+    },
   },
   {
     id: 'scrap_metal',
@@ -60,6 +91,12 @@ export const ITEMS: ItemDef[] = [
     description: 'Twisted bits of salvage. The wilderness provides.',
     category: 'material',
     maxStack: 50,
+    world: {
+      shape: { type: 'box', size: [0.42, 0.12, 0.3] },
+      massKg: 4,
+      color: '#6a7076',
+      physgun: true,
+    },
   },
   {
     id: 'sheet_metal',

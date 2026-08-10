@@ -27,3 +27,4 @@ export function createContent(): ContentRegistry {
     world: HOBOVILLE,
   })
 }
+export * from './terrain.js'
