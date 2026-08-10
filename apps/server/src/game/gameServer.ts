@@ -1079,10 +1079,11 @@ export class GameServer {
       // Bridge short network jitter by repeating the last command, but only
       // briefly — a silent client must coast to a stop, not walk forever.
       session.starvedTicks++
+      // Zero MOVEMENT only — buttons stay held. Zeroing buttons fabricates
+      // release edges for toggle keys (prone/crouch), so any client hitch
+      // longer than 3 ticks made the server flap stances endlessly.
       const input =
-        session.starvedTicks <= 3
-          ? session.lastInput
-          : { ...session.lastInput, moveX: 0, moveZ: 0, buttons: 0 }
+        session.starvedTicks <= 3 ? session.lastInput : { ...session.lastInput, moveX: 0, moveZ: 0 }
       stepMovement(session.move, input, MOVE, this.moveQueries, 1 / this.config.tickRate)
     }
     let bodyId = this.playerBodies.get(session.playerId)

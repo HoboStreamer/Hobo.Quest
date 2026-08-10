@@ -46,6 +46,9 @@ export class LocalPlayer {
   /** Reconciliation error, blended away over ~100ms instead of snapping —
    * this is what makes standing on moving props watchable. */
   private readonly corr = new Vector3()
+  /** Vertical step-up smoothing: stairs move the FEET instantly but the
+   * EYES glide (Source's smoothed stair climb). */
+  private stepOffset = 0
 
   constructor(
     scene: Scene,
@@ -107,7 +110,17 @@ export class LocalPlayer {
     if (this.pending.length > 90) this.pending.shift()
 
     this.prevPos.copyFrom(this.currPos)
+    const yBefore = this.move.pos.y
+    const groundedBefore = this.move.grounded
     this.applyInput(cmd)
+    // Grounded vertical jumps up to step height = stairs/ramp crests: fold
+    // them into a decaying eye offset so the view glides up instead of
+    // popping per step.
+    const dy = this.move.pos.y - yBefore
+    if (groundedBefore && this.move.grounded && Math.abs(dy) > 0.04 && Math.abs(dy) < 0.55) {
+      this.stepOffset -= dy
+      this.stepOffset = Math.max(-0.5, Math.min(0.5, this.stepOffset))
+    }
     this.currPos.set(this.move.pos.x, this.move.pos.y, this.move.pos.z)
   }
 
@@ -164,7 +177,8 @@ export class LocalPlayer {
     const z = this.prevPos.z + (this.currPos.z - this.prevPos.z) * alpha
     const decay = Math.exp(-dt * 12)
     this.corr.scaleInPlace(decay)
-    this.renderPos.set(x + this.corr.x, y + this.corr.y, z + this.corr.z)
+    this.stepOffset *= Math.exp(-dt * 14)
+    this.renderPos.set(x + this.corr.x, y + this.corr.y + this.stepOffset, z + this.corr.z)
     const targetEye = eyeOffsetFor(this.move.stance)
     this.eyeSmooth += (targetEye - this.eyeSmooth) * Math.min(1, dt * 9)
     this.camera.position.set(this.renderPos.x, this.renderPos.y + this.eyeSmooth, this.renderPos.z)

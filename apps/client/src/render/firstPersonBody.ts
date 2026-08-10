@@ -64,7 +64,7 @@ export class FirstPersonBody {
     const speedNorm = Math.min(speed / 7.2, 1)
     // Prone pitches the torso forward from the hips — slide the whole body
     // back so the chest doesn't engulf the camera.
-    const proneBack = move.stance === 2 ? 0.95 : 0
+    const proneBack = move.stance === 2 ? 1.15 : 0
     const back = BODY_BACK_OFFSET + Math.max(0, -pitch) * 0.12 + speedNorm * 0.06 + proneBack
     this.avatar.update({
       dt,

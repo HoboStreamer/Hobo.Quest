@@ -204,7 +204,9 @@ export class InteractionController {
   /** Called once per fixed tick: flush coalesced rotate + grid-lock state. */
   flushTick(): void {
     const { dyaw, dpitch } = this.pendingRotate
-    if (this.physgunActive && this.rotating && (dyaw !== 0 || dpitch !== 0)) {
+    // Send every tick while rotating (even zero deltas): the snap flag must
+    // reach the server the moment Shift goes down, not on the next drag.
+    if (this.physgunActive && this.rotating) {
       this.connection.send({
         t: 'physgun',
         a: 'rotate',

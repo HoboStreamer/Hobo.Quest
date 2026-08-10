@@ -909,6 +909,7 @@ async function main(): Promise<void> {
   await a.waitFor((m) => m.t === 'result' && m.action === 'trust')
 
   console.log('phase: persistence across restart (props, frozen state, skills, friends, depletion)')
+  const preRestartBranches = a.entities.get(branches.id)?.remaining
   const wcBefore = a.skill('woodcutting')
   const wallId = wall.id
   const crate2Id = crate2.id
@@ -928,7 +929,12 @@ async function main(): Promise<void> {
   assert(restoredWall.motion === 'frozen', 'frozen state persisted')
   assert(restoredWall.owner !== undefined, 'ownership persisted')
   assert(c.entities.get(crate2Id), 'placed crate restored after restart')
-  assert(c.entities.get(branchesId)?.remaining === 0, 'node depletion persisted')
+  // The pile may have legitimately respawned (120s timer) during a long
+  // run — persistence is proven by matching the PRE-restart state.
+  assert(
+    c.entities.get(branchesId)?.remaining === preRestartBranches,
+    `node state persisted (${preRestartBranches})`,
+  )
   const wcAfter = c.skill('woodcutting')
   assert(
     wcAfter && wcBefore && wcAfter.level === wcBefore.level && wcAfter.xp === wcBefore.xp,

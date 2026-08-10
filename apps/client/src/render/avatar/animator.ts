@@ -28,6 +28,7 @@ export interface AnimatorInput {
 
 interface Pose {
   bobRX: number
+  bobZ: number
   spineX: number
   spineY: number
   spineZ: number
@@ -55,6 +56,7 @@ const WALK_STRIDE = 2.15 // phase radians advanced per meter
  */
 const DAMP: Record<keyof ReturnType<typeof zeroPose>, number> = {
   bobRX: 5,
+  bobZ: 5,
   spineX: 7,
   spineY: 6,
   spineZ: 6,
@@ -76,6 +78,7 @@ const DAMP: Record<keyof ReturnType<typeof zeroPose>, number> = {
 function zeroPose(): Pose {
   return {
     bobRX: 0,
+    bobZ: 0,
     spineX: 0,
     spineY: 0,
     spineZ: 0,
@@ -197,12 +200,17 @@ export class AvatarAnimator {
       // Army-crawl when moving (limbs alternate with the crawl phase).
       const crawl = Math.min(speedNorm * 4, 1)
       const cs = Math.sin(this.phase) * 0.3 * crawl
-      target.bobRX = 1.42
+      // Babylon is LEFT-handed: POSITIVE X rotation turns the chest
+      // skyward (the face-up prone bug) — prone pitches NEGATIVE.
+      target.bobRX = -1.42
       // The bob pivot sits at FOOT height; the pelvis rides 0.84 up the
       // rotated axis, so its height is bobY + 0.84*cos(bobRX) ≈ bobY+0.13.
       // bobY must stay ~0 — a negative offset here sinks the whole rotated
       // body underground (the prone-under-the-floor bug, twice).
       target.bobY = 0.04
+      // Center the lying body on the collision capsule (fair hitboxes):
+      // the torso extends ~0.9 forward of the pivot, so pull back half.
+      target.bobZ = -0.45
       // Legs nearly straight along the ground, slight spread via alternate
       // hip angles while crawling.
       target.hipLX = -0.04 + cs
@@ -281,6 +289,7 @@ export class AvatarAnimator {
     // ── Apply to joints ──────────────────────────────────────────────
     const j = this.joints
     j.bob.position.y = p.bobY
+    j.bob.position.z = p.bobZ
     j.bob.rotation.x = p.bobRX
     j.spine.rotation.x = p.spineX
     j.spine.rotation.y = p.spineY

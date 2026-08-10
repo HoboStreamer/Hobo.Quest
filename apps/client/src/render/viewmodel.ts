@@ -250,7 +250,7 @@ export class Viewmodel {
   /** Per-frame update. mouseDx/Dy are this frame's look deltas (radians). */
   update(dt: number, speed: number, grounded: boolean, mouseDx: number, mouseDy: number): void {
     // Equip transition + swing timers
-    this.equipT = Math.min(1, this.equipT + dt * 4)
+    this.equipT = Math.min(1, this.equipT + dt * 3.1)
     if (this.swingT > 0) this.swingT = Math.max(0, this.swingT - dt)
 
     // Sway: lag behind the view with exponential decay.
@@ -263,7 +263,7 @@ export class Viewmodel {
     const bobY = Math.abs(Math.sin(this.bobPhase)) * -bobAmp
     const bobX = Math.sin(this.bobPhase * 0.5) * bobAmp * 0.6
 
-    const equipDip = (1 - this.equipT) * -0.25
+    const equipDip = (1 - this.equipT) * -0.5
     const swing = this.swingT > 0 ? Math.sin((this.swingT / 0.32) * Math.PI) : 0
 
     // Unarmed jab: the active fist snaps straight out (local -z = forward)
@@ -284,13 +284,15 @@ export class Viewmodel {
 
     this.rig.position.set(
       0.26 + bobX - this.swayYaw * 0.15,
-      -0.26 + bobY + equipDip - swing * 0.1,
-      0.55,
+      -0.26 + bobY + equipDip - swing * 0.06,
+      0.55 + swing * 0.2, // lunge INTO the swing, away from the camera
     )
+    // NOTE: under the PI-yaw rig, POSITIVE X rotation tips toward the
+    // camera — swings and draw-tilts must pitch NEGATIVE (down-range).
     this.rig.rotation.set(
-      -this.swayPitch * 0.8 + swing * 0.9 + (1 - this.equipT) * 0.6,
-      Math.PI + this.swayYaw * 0.8,
-      0,
+      -this.swayPitch * 0.8 - swing * 0.8 - (1 - this.equipT) * 0.55,
+      Math.PI + this.swayYaw * 0.8 + (1 - this.equipT) * 0.3,
+      (1 - this.equipT) * 0.2,
     )
   }
 
@@ -317,7 +319,7 @@ export class Viewmodel {
       if (this.toolProp) {
         this.toolProp.root.parent = this.rig
         const isTool = def?.tool !== undefined
-        this.toolProp.root.position.set(0, isTool ? -0.06 : -0.02, isTool ? -0.08 : 0.02)
+        this.toolProp.root.position.set(0, isTool ? -0.06 : 0.01, isTool ? -0.08 : -0.11)
         // The rig is yawed PI (see update()); cancel it on the prop so its
         // +z (muzzle) points AWAY from the camera. Without this the muzzle
         // sat BETWEEN gun and camera and the beam projected wildly off-tip.

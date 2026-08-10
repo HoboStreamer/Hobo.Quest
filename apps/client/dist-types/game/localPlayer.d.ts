@@ -27,6 +27,9 @@ export declare class LocalPlayer {
   /** Reconciliation error, blended away over ~100ms instead of snapping —
    * this is what makes standing on moving props watchable. */
   private readonly corr
+  /** Vertical step-up smoothing: stairs move the FEET instantly but the
+   * EYES glide (Source's smoothed stair climb). */
+  private stepOffset
   constructor(
     scene: Scene,
     physics: PhysicsWorld,

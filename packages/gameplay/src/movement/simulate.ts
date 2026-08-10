@@ -438,7 +438,19 @@ export function stepMovement(
 
   v3copy(_stepPos, state.pos)
   const startVel = { x: state.vel.x, y: state.vel.y, z: state.vel.z }
+  const wasGroundedBeforeMove = state.grounded
   const blocked = slideMove(state, world, params, hull, dt)
+  // Source's StayOnGround: while walking (not jumping), glue the capsule to
+  // the floor within step height — cresting ramps/stairs no longer pops you
+  // briefly airborne, which is what made slopes feel crunchy.
+  if (wasGroundedBeforeMove && state.vel.y <= 1.0) {
+    v3copy(_down, state.pos)
+    _down.y -= params.stepHeight
+    const downHit = world.sweepCapsule(state.pos, _down, params.capsuleRadius, hull)
+    if (downHit && downHit.fraction > 0.001 && downHit.normal.y >= params.groundNormalY) {
+      state.pos.y += (_down.y - state.pos.y) * downHit.fraction + params.skin
+    }
+  }
   if (blocked && state.grounded) {
     tryStepMove(state, world, params, hull, dt, _stepPos, startVel)
   }
