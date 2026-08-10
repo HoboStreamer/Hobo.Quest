@@ -154,7 +154,7 @@ export const HOBOVILLE: WorldDef = {
       name: 'Hoboville',
       min: [-20.5, -1, -20.5],
       max: [20.5, 8, 20.5],
-      rules: { pvp: false, build: false, physgun: false },
+      rules: { pvp: false, build: false, physgun: true },
     },
   ],
 }

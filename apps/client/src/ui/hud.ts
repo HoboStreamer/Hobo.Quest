@@ -3,6 +3,7 @@ import { HOTBAR_SLOTS } from '../constants.js'
 import type { Connection } from '../net/connection.js'
 import type { ClientState } from '../state/clientState.js'
 import type { IconFactory } from './iconFactory.js'
+import { weaponModuleFor, type WeaponSettings } from '../weapons/registry.js'
 
 /**
  * HUD: crosshair/prompt/toasts, the always-visible hotbar, and a single
@@ -14,7 +15,7 @@ import type { IconFactory } from './iconFactory.js'
  * 3D models. All mutations round-trip through the server.
  */
 
-type MenuTab = 'inventory' | 'crafting' | 'skills' | 'players'
+type MenuTab = 'inventory' | 'crafting' | 'equipment' | 'skills' | 'players'
 
 export class Hud {
   private root: HTMLElement
@@ -36,6 +37,7 @@ export class Hud {
     private readonly content: ContentRegistry,
     private readonly connection: Connection,
     private readonly icons: IconFactory,
+    private readonly weaponSettings: WeaponSettings,
   ) {
     this.root = root
     this.build()
@@ -129,6 +131,7 @@ export class Hud {
     const defs: [MenuTab, string][] = [
       ['inventory', 'Inventory'],
       ['crafting', 'Crafting'],
+      ['equipment', 'Equipment'],
       ['skills', 'Skills'],
       ['players', 'Players'],
     ]
@@ -146,6 +149,7 @@ export class Hud {
     this.menuBodyEl.replaceChildren()
     if (this.activeTab === 'inventory') this.renderInventory()
     else if (this.activeTab === 'crafting') this.renderCrafting()
+    else if (this.activeTab === 'equipment') this.renderEquipment()
     else if (this.activeTab === 'skills') this.renderSkills()
     else this.renderPlayers()
   }
@@ -327,6 +331,31 @@ export class Hud {
       list.appendChild(el)
     }
     this.menuBodyEl.appendChild(list)
+  }
+
+  /** Modular per-weapon settings/info — modules register per tool kind. */
+  private renderEquipment(): void {
+    const defId = this.state.activeItemDef()
+    const def = defId ? this.content.item(defId) : undefined
+    const module = weaponModuleFor(def?.tool?.kind ?? null)
+    const wrap = document.createElement('div')
+    if (!module) {
+      const empty = document.createElement('div')
+      empty.className = 'hint-line'
+      empty.textContent = defId
+        ? `${def?.name ?? defId} has no settings.`
+        : 'Nothing equipped — select a tool on the hotbar.'
+      wrap.appendChild(empty)
+    } else {
+      const title = document.createElement('div')
+      title.className = 'weapon-title'
+      title.textContent = module.title
+      wrap.appendChild(title)
+      const panel = document.createElement('div')
+      module.buildPanel(panel, this.weaponSettings)
+      wrap.appendChild(panel)
+    }
+    this.menuBodyEl.appendChild(wrap)
   }
 
   private renderSkills(): void {

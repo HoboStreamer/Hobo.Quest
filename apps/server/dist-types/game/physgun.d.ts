@@ -30,6 +30,7 @@ export declare function rotateHeld(
   dyaw: number,
   dpitch: number,
   snap: boolean,
+  snapStep?: number,
 ): void
 /** Freezes the held prop in place (motion -> static) and releases the beam. */
 export declare function freezeHeld(session: PlayerSession, world: GameWorld): GameEntity | null

@@ -8,8 +8,11 @@ export declare const HOTBAR_SIZE = 6
 /** Server-held physgun grab state. */
 export interface HeldProp {
   entityId: EntityId
-  /** Hold distance from the eye along the view ray. */
+  /** Hold distance from the eye along the view ray (to the GRAB POINT). */
   dist: number
+  /** Grab point in the body's local space — the prop hangs from where you
+   * actually grabbed it, GMod-style, not from its center. */
+  localOffset: Vec3
   /** Player-applied rotation offsets (radians). */
   yawOffset: number
   pitchOffset: number
@@ -17,6 +20,8 @@ export interface HeldProp {
   grabYawDelta: number
   /** Grid-lock: quantize the drive target while held. */
   grid: boolean
+  /** Grid cell size (m). */
+  gridSize: number
 }
 /**
  * Per-connection authoritative player state. Everything gameplay-relevant

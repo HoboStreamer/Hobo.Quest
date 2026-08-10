@@ -78,6 +78,32 @@ export function qmul(out: Quat, a: Quat, b: Quat): Quat {
   return out
 }
 
+/** Rotates vector v by quaternion q into out. */
+export function qrotateVec(out: Vec3, q: Quat, v: Vec3): Vec3 {
+  // t = 2 * cross(q.xyz, v); out = v + q.w * t + cross(q.xyz, t)
+  const tx = 2 * (q.y * v.z - q.z * v.y)
+  const ty = 2 * (q.z * v.x - q.x * v.z)
+  const tz = 2 * (q.x * v.y - q.y * v.x)
+  out.x = v.x + q.w * tx + (q.y * tz - q.z * ty)
+  out.y = v.y + q.w * ty + (q.z * tx - q.x * tz)
+  out.z = v.z + q.w * tz + (q.x * ty - q.y * tx)
+  return out
+}
+
+/** Rotates v by the INVERSE of unit quaternion q. */
+export function qrotateVecInv(out: Vec3, q: Quat, v: Vec3): Vec3 {
+  const ix = -q.x
+  const iy = -q.y
+  const iz = -q.z
+  const tx = 2 * (iy * v.z - iz * v.y)
+  const ty = 2 * (iz * v.x - ix * v.z)
+  const tz = 2 * (ix * v.y - iy * v.x)
+  out.x = v.x + q.w * tx + (iy * tz - iz * ty)
+  out.y = v.y + q.w * ty + (iz * tx - ix * tz)
+  out.z = v.z + q.w * tz + (ix * ty - iy * tx)
+  return out
+}
+
 export function qnormalize(out: Quat, a: Quat): Quat {
   const len = Math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z + a.w * a.w)
   if (len > 1e-8) {

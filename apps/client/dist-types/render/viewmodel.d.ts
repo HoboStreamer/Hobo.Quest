@@ -3,6 +3,7 @@ import type { Scene } from '@babylonjs/core/scene.js'
 import '@babylonjs/loaders/OBJ/objFileLoader.js'
 import type { UniversalCamera } from '@babylonjs/core/Cameras/universalCamera.js'
 import type { ContentRegistry } from '@hobo/content'
+import type { Appearance } from '@hobo/protocol'
 /**
  * First-person viewmodel: the equipped tool rendered at the camera with
  * smooth sway (mouse lag), movement bob, and equip/swing motions. The
@@ -22,7 +23,19 @@ export declare class Viewmodel {
   private bobPhase
   private equipT
   private swingT
-  constructor(scene: Scene, content: ContentRegistry, camera: UniversalCamera)
+  constructor(
+    scene: Scene,
+    content: ContentRegistry,
+    camera: UniversalCamera,
+    appearance: Appearance,
+  )
+  /**
+   * First-person hands in the player's own skin tone: a forearm reaching in
+   * from the lower right, gripping under the tool. Shown whenever an item
+   * is equipped.
+   */
+  private hands
+  private buildHands
   private loadPhysgun
   private setPhysgunVisible
   triggerSwing(): void

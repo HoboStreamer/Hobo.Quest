@@ -5,6 +5,7 @@ import type { EntityView } from '../render/entityView.js'
 import type { ClientState } from '../state/clientState.js'
 import type { InputAction, InputTracker } from '../input/inputTracker.js'
 import type { LocalPlayer } from './localPlayer.js'
+import type { WeaponSettings } from '../weapons/registry.js'
 export interface AimTarget {
   entityId: string
   kind: 'prop' | 'resource'
@@ -24,6 +25,7 @@ export declare class InteractionController {
   private readonly content
   private readonly connection
   private readonly input
+  private readonly weaponSettings
   physgunActive: boolean
   /** Hold-E rotate mode while carrying (mouse steers the prop, not the view). */
   rotating: boolean
@@ -40,6 +42,7 @@ export declare class InteractionController {
     content: ContentRegistry,
     connection: Connection,
     input: InputTracker,
+    weaponSettings: WeaponSettings,
   )
   equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null
   /** What the crosshair points at right now (client-side, UX only). */

@@ -6,6 +6,8 @@ import type { EntityView } from '../render/entityView.js'
 import type { ClientState } from '../state/clientState.js'
 import type { InputAction, InputTracker } from '../input/inputTracker.js'
 import type { LocalPlayer } from './localPlayer.js'
+import { physgunGridSize, physgunSnapDeg } from '../weapons/physgunModule.js'
+import type { WeaponSettings } from '../weapons/registry.js'
 
 /**
  * Turns raw input into protocol intents based on the EQUIPPED TOOL — the
@@ -54,6 +56,7 @@ export class InteractionController {
     private readonly content: ContentRegistry,
     private readonly connection: Connection,
     private readonly input: InputTracker,
+    private readonly weaponSettings: WeaponSettings,
   ) {
     input.captureLook = () => this.rotating && this.physgunActive
   }
@@ -157,6 +160,7 @@ export class InteractionController {
         dyaw: clampRot(dyaw),
         dpitch: clampRot(dpitch),
         snap: this.input.shiftHeld,
+        snapStep: (physgunSnapDeg(this.weaponSettings) * Math.PI) / 180,
       })
     }
     this.pendingRotate.dyaw = 0
@@ -166,7 +170,12 @@ export class InteractionController {
     const wantGrid = this.physgunActive && !this.rotating && this.input.shiftHeld
     if (wantGrid !== this.gridOn) {
       this.gridOn = wantGrid
-      this.connection.send({ t: 'physgun', a: 'grid', on: wantGrid })
+      this.connection.send({
+        t: 'physgun',
+        a: 'grid',
+        on: wantGrid,
+        size: physgunGridSize(this.weaponSettings),
+      })
     }
   }
 

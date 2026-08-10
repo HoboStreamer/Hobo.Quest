@@ -5,8 +5,11 @@ import {
   qfromYaw,
   qmul,
   qnormalize,
+  qrotateVec,
+  qrotateVecInv,
   quat,
   v3addScaled,
+  v3dist,
   v3sub,
   vec3,
   wrapAngle,
@@ -35,7 +38,7 @@ export const PHYSGUN_MAX_DIST = 10
 const LINEAR_GAIN = 12
 const ANGULAR_GAIN = 8
 const MAX_DRIVE_SPEED = 25
-const SNAP_STEP = Math.PI / 12 // 15°
+const DEFAULT_SNAP_STEP = Math.PI / 12 // 15°
 
 const _eye = vec3()
 const _dir = vec3()
@@ -46,6 +49,8 @@ const _bodyRot = quat()
 const _vel = vec3()
 const _targetRot = quat()
 const _yawQ = quat()
+const _grabVec = vec3()
+const _grabWorld = vec3()
 
 export type PhysgunDeny = 'no_target' | 'not_allowed' | 'not_owner' | 'zone' | 'already_held'
 
@@ -67,7 +72,6 @@ export function tryGrab(
   if (!world.zones.rulesAt(entity.transform.pos).physgun) return 'zone'
   if (!canManipulate(entity)) return 'not_owner'
 
-  const dist = Math.max(hit.fraction * PHYSGUN_MAX_RANGE, PHYSGUN_MIN_DIST)
   // Preserve current orientation relative to the player's view yaw.
   const bodyId = world.bodyOf(entity.id)
   if (bodyId === undefined) return 'no_target'
@@ -75,13 +79,20 @@ export function tryGrab(
     world.setPropMotion(entity, 'dynamic')
   }
   world.physics.getTransform(bodyId, _bodyPos, _bodyRot)
+  // Grab from the exact hit point: remember it in body-local space so the
+  // prop hangs from where the beam touched it.
+  v3sub(_grabVec, hit.point, _bodyPos)
+  const localOffset = vec3()
+  qrotateVecInv(localOffset, _bodyRot, _grabVec)
   session.held = {
     entityId: entity.id,
-    dist,
+    dist: Math.max(v3dist(_eye, hit.point), PHYSGUN_MIN_DIST),
+    localOffset,
     yawOffset: 0,
     pitchOffset: 0,
     grabYawDelta: extractYaw(_bodyRot) - session.yaw,
     grid: false,
+    gridSize: 0.25,
   }
   return entity
 }
@@ -100,14 +111,16 @@ export function rotateHeld(
   dyaw: number,
   dpitch: number,
   snap: boolean,
+  snapStep?: number,
 ): void {
   const held = session.held
   if (!held) return
   held.yawOffset = wrapAngle(held.yawOffset + dyaw)
   held.pitchOffset = clamp(held.pitchOffset + dpitch, -Math.PI / 2, Math.PI / 2)
   if (snap) {
-    held.yawOffset = Math.round(held.yawOffset / SNAP_STEP) * SNAP_STEP
-    held.pitchOffset = Math.round(held.pitchOffset / SNAP_STEP) * SNAP_STEP
+    const step = clamp(snapStep ?? DEFAULT_SNAP_STEP, 0.02, 1.6)
+    held.yawOffset = Math.round(held.yawOffset / step) * step
+    held.pitchOffset = Math.round(held.pitchOffset / step) * step
   }
 }
 
@@ -147,14 +160,20 @@ export function driveHeld(session: PlayerSession, world: GameWorld): void {
   v3addScaled(_target, _eye, _dir, held.dist)
   if (held.grid) {
     // Grid-lock: quantize the drive target for tidy construction.
-    const g = 0.25
+    const g = held.gridSize
     _target.x = Math.round(_target.x / g) * g
     _target.y = Math.round(_target.y / g) * g
     _target.z = Math.round(_target.z / g) * g
   }
 
   world.physics.getTransform(bodyId, _bodyPos, _bodyRot)
-  v3sub(_vel, _target, _bodyPos)
+  // Drive the GRAB POINT (not the center) toward the target — the prop
+  // hangs from where it was grabbed, exactly like GMod.
+  qrotateVec(_grabVec, _bodyRot, held.localOffset)
+  _grabWorld.x = _bodyPos.x + _grabVec.x
+  _grabWorld.y = _bodyPos.y + _grabVec.y
+  _grabWorld.z = _bodyPos.z + _grabVec.z
+  v3sub(_vel, _target, _grabWorld)
   _vel.x *= LINEAR_GAIN
   _vel.y *= LINEAR_GAIN
   _vel.z *= LINEAR_GAIN

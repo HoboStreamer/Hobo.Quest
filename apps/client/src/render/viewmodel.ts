@@ -10,7 +10,11 @@ import type { Scene } from '@babylonjs/core/scene.js'
 import '@babylonjs/loaders/OBJ/objFileLoader.js'
 import type { UniversalCamera } from '@babylonjs/core/Cameras/universalCamera.js'
 import type { ContentRegistry } from '@hobo/content'
+import type { Appearance } from '@hobo/protocol'
 import { createHeldItemNode, type HeldItemNode } from './heldItem.js'
+import { skinTone } from './avatar/palettes.js'
+import { createTaperedBox } from './avatar/taperedBox.js'
+import { materialFor } from './sceneSetup.js'
 
 /**
  * First-person viewmodel: the equipped tool rendered at the camera with
@@ -36,13 +40,61 @@ export class Viewmodel {
     private readonly scene: Scene,
     private readonly content: ContentRegistry,
     camera: UniversalCamera,
+    appearance: Appearance,
   ) {
     this.rig = new TransformNode('viewmodel', scene)
     this.rig.parent = camera
     this.rig.position.set(0.28, -0.32, 0.72)
+    this.buildHands(appearance)
     // The imported OBJ is kept behind a debug flag while its orientation and
     // material are tuned; the procedural physgun matches the art style.
     if (new URLSearchParams(location.search).has('vmobj')) void this.loadPhysgun()
+  }
+
+  /**
+   * First-person hands in the player's own skin tone: a forearm reaching in
+   * from the lower right, gripping under the tool. Shown whenever an item
+   * is equipped.
+   */
+  private hands: TransformNode | null = null
+
+  private buildHands(appearance: Appearance): void {
+    const skin = skinTone(appearance.skin)
+    const hands = new TransformNode('vm-hands', this.scene)
+    hands.parent = this.rig
+    const forearm = createTaperedBox(
+      'vm-forearm',
+      {
+        topWidth: 0.085,
+        topDepth: 0.085,
+        bottomWidth: 0.1,
+        bottomDepth: 0.1,
+        height: 0.42,
+        anchor: 'top',
+      },
+      this.scene,
+    )
+    forearm.material = materialFor(this.scene, skin)
+    forearm.parent = hands
+    forearm.position.set(0.02, -0.1, -0.06)
+    forearm.rotation.set(-0.9, -0.25, 0.15) // reaches down-right off screen
+    const hand = createTaperedBox(
+      'vm-hand',
+      {
+        topWidth: 0.075,
+        topDepth: 0.1,
+        bottomWidth: 0.062,
+        bottomDepth: 0.085,
+        height: 0.12,
+        anchor: 'top',
+      },
+      this.scene,
+    )
+    hand.material = materialFor(this.scene, skin)
+    hand.parent = hands
+    hand.position.set(0.005, -0.045, -0.03)
+    hand.rotation.set(-0.5, 0, 0)
+    this.hands = hands
   }
 
   private async loadPhysgun(): Promise<void> {
@@ -138,6 +190,7 @@ export class Viewmodel {
     if (itemDef === this.currentItem) return
     this.currentItem = itemDef
     this.equipT = 0
+    if (this.hands) this.hands.setEnabled(itemDef !== null)
 
     this.toolProp?.dispose()
     this.toolProp = null

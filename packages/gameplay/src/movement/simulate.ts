@@ -167,6 +167,28 @@ function accelerate(
 }
 
 /**
+ * Source's air accelerate, faithfully: the ADD limit compares against the
+ * CAPPED wish speed (that's what makes strafing gain speed sideways), but
+ * the acceleration RATE uses the UNCAPPED wish speed. Capping both (the
+ * classic porting mistake) makes air control mushy and surfing impossible.
+ */
+function airAccelerate(
+  state: PlayerMoveState,
+  wishdir: Vec3,
+  wishSpeedFull: number,
+  cap: number,
+  accel: number,
+  dt: number,
+): void {
+  const wishSpd = Math.min(wishSpeedFull, cap)
+  const currentSpeed = v3dot(state.vel, wishdir)
+  const addSpeed = wishSpd - currentSpeed
+  if (addSpeed <= 0) return
+  const accelSpeed = Math.min(accel * wishSpeedFull * dt, addSpeed)
+  v3addScaled(state.vel, state.vel, wishdir, accelSpeed)
+}
+
+/**
  * Sweep-and-slide with clip planes (Quake's SlideMove). Mutates pos/vel.
  * Returns true if movement was blocked by a wall-like plane this tick.
  */
@@ -402,7 +424,7 @@ export function stepMovement(
     // Air control (air-strafing) + gravity: on steep ramps checkGround finds
     // no floor, slideMove clips velocity along the surface — that pair IS
     // surf physics.
-    accelerate(state, _wishdir, Math.min(wishSpeed, params.airSpeedCap), params.airAccel, dt)
+    airAccelerate(state, _wishdir, wishSpeed, params.airSpeedCap, params.airAccel, dt)
     state.vel.y -= params.gravity * dt
   }
 

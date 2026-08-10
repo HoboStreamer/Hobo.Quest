@@ -17,6 +17,8 @@ import { ClientState } from './state/clientState.js'
 import { customizeScreen } from './ui/customizeScreen.js'
 import { Hud } from './ui/hud.js'
 import { IconFactory } from './ui/iconFactory.js'
+import { registerPhysgunModule } from './weapons/physgunModule.js'
+import { WeaponSettings } from './weapons/registry.js'
 
 /**
  * Client bootstrap: engine/scene -> character customization (live preview)
@@ -68,7 +70,9 @@ async function start(): Promise<void> {
   const input = new InputTracker(canvas)
   const view = new EntityView(scene, physics, content, state)
   const icons = new IconFactory(scene, content)
-  const hud = new Hud(uiRoot, state, content, connection, icons)
+  const weaponSettings = new WeaponSettings()
+  registerPhysgunModule()
+  const hud = new Hud(uiRoot, state, content, connection, icons, weaponSettings)
 
   const world = content.world
   const player = new LocalPlayer(scene, physics, input, connection, state, {
@@ -86,6 +90,7 @@ async function start(): Promise<void> {
     content,
     connection,
     input,
+    weaponSettings,
   )
   // Debug handles for the automated visual/E2E harness.
   ;(window as unknown as Record<string, unknown>).__hobo = {
@@ -97,7 +102,7 @@ async function start(): Promise<void> {
     icons,
   }
   const fpBody = new FirstPersonBody(scene, content, appearance, player, state)
-  const viewmodel = new Viewmodel(scene, content, player.camera)
+  const viewmodel = new Viewmodel(scene, content, player.camera, appearance)
   const beams = new BeamRenderer(scene)
 
   interact.onSwing = () => {

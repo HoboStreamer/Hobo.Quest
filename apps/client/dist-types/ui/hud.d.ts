@@ -2,11 +2,13 @@ import type { ContentRegistry } from '@hobo/content'
 import type { Connection } from '../net/connection.js'
 import type { ClientState } from '../state/clientState.js'
 import type { IconFactory } from './iconFactory.js'
+import { type WeaponSettings } from '../weapons/registry.js'
 export declare class Hud {
   private readonly state
   private readonly content
   private readonly connection
   private readonly icons
+  private readonly weaponSettings
   private root
   private hotbarEl
   private menuEl
@@ -24,6 +26,7 @@ export declare class Hud {
     content: ContentRegistry,
     connection: Connection,
     icons: IconFactory,
+    weaponSettings: WeaponSettings,
   )
   private build
   private byId
@@ -39,6 +42,8 @@ export declare class Hud {
   renderHotbar(): void
   private renderInventory
   private renderCrafting
+  /** Modular per-weapon settings/info — modules register per tool kind. */
+  private renderEquipment
   private renderSkills
   private renderPlayers
   setPrompt(text: string | null): void

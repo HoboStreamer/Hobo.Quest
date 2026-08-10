@@ -87,13 +87,21 @@ export const ClientPhysgunSchema = z.discriminatedUnion('a', [
     /** Incremental rotation of the held object, radians (clamped). */
     dyaw: z.number().min(-1).max(1),
     dpitch: z.number().min(-1).max(1),
-    /** Snap rotation to 15-degree increments (precision mode). */
+    /** Snap rotation to increments (precision mode). */
     snap: z.boolean().optional(),
+    /** Snap increment in radians (defaults to 15°). */
+    snapStep: z.number().min(0.02).max(1.6).optional(),
   }),
   z.object({ t: z.literal('physgun'), a: z.literal('freeze') }),
   z.object({ t: z.literal('physgun'), a: z.literal('unfreeze'), target: z.string().max(32) }),
-  /** Grid-lock: snap the held prop's drive target to a coarse grid. */
-  z.object({ t: z.literal('physgun'), a: z.literal('grid'), on: z.boolean() }),
+  /** Grid-lock: snap the held prop's drive target to a grid. */
+  z.object({
+    t: z.literal('physgun'),
+    a: z.literal('grid'),
+    on: z.boolean(),
+    /** Grid cell size in meters (defaults to 0.25). */
+    size: z.number().min(0.05).max(2).optional(),
+  }),
 ])
 
 /**

@@ -409,9 +409,12 @@ export class GameServer {
     } else if (msg.a === 'adjust') {
       adjustDistance(session, msg.dist)
     } else if (msg.a === 'rotate') {
-      rotateHeld(session, msg.dyaw, msg.dpitch, msg.snap ?? false)
+      rotateHeld(session, msg.dyaw, msg.dpitch, msg.snap ?? false, msg.snapStep)
     } else if (msg.a === 'grid') {
-      if (session.held) session.held.grid = msg.on
+      if (session.held) {
+        session.held.grid = msg.on
+        if (msg.size !== undefined) session.held.gridSize = msg.size
+      }
     } else if (msg.a === 'freeze') {
       const frozen = freezeHeld(session, this.world)
       if (frozen) {
