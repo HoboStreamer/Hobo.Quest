@@ -37,6 +37,7 @@ export declare class Hud {
   flashHitmarker(): void
   private flashDamage
   private shopOpen
+  private showDeathScreen
   /** Merchant trade sheet (content-driven; server validates every trade). */
   openShop(): void
   closeShop(): void

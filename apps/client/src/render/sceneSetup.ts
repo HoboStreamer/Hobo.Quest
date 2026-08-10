@@ -14,6 +14,7 @@ import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { TerrainMaterial } from '@babylonjs/materials/terrain/terrainMaterial.js'
 import { ParticleSystem } from '@babylonjs/core/Particles/particleSystem.js'
+import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { Color4 as BColor4 } from '@babylonjs/core/Maths/math.color.js'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import {
@@ -62,6 +63,7 @@ export function materialFor(scene: Scene, hex: string): StandardMaterial {
     mat = new StandardMaterial(`mat:${hex}`, scene)
     mat.diffuseColor = Color3.FromHexString(hex)
     mat.specularColor = new Color3(0.08, 0.08, 0.08)
+    mat.maxSimultaneousLights = 8
     cache.set(hex, mat)
   }
   return mat
@@ -106,6 +108,7 @@ export function buildStaticWorld(scene: Scene, content: ContentRegistry): void {
     water.addToRenderList(mesh)
     if (s.decor === 'building') decorateBuilding(scene, mesh, s)
     else if (s.decor === 'fountain') buildFountain(scene, mesh, s, water)
+    else if (s.decor === 'lamp') decorateLamp(scene, mesh, s, i)
   }
 }
 
@@ -161,6 +164,24 @@ function decorateBuilding(scene: Scene, building: Mesh, s: StaticBody): void {
       win.material = winMat
     }
   }
+}
+
+/**
+ * Street lamp: arm + warm head on the post; its PointLight is named
+ * 'lamp:*' so the Environment fades it up after dark.
+ */
+function decorateLamp(scene: Scene, post: Mesh, s: StaticBody, i: number): void {
+  const head = CreateBox(`${post.name}:head`, { width: 0.34, height: 0.22, depth: 0.34 }, scene)
+  head.parent = post
+  head.position.y = 1.75
+  const headMat = new StandardMaterial(`${post.name}:headmat`, scene)
+  headMat.diffuseColor = Color3.FromHexString('#2c3136')
+  headMat.emissiveColor = new Color3(0.45, 0.36, 0.16)
+  head.material = headMat
+  const light = new PointLight(`lamp:${i}`, new Vector3(s.pos[0], s.pos[1] + 1.9, s.pos[2]), scene)
+  light.diffuse = new Color3(1, 0.82, 0.5)
+  light.intensity = 0 // Environment drives this after dark
+  light.range = 16
 }
 
 /**
@@ -264,6 +285,7 @@ function buildTerrainMesh(scene: Scene, content: ContentRegistry): Mesh[] {
   mat.diffuseTexture2 = tiled(scene, 'gray_rocks', 55) // G
   mat.diffuseTexture3 = tiled(scene, 'brown_mud_dry', 60) // B
   mat.specularColor = new Color3(0.02, 0.02, 0.02)
+  mat.maxSimultaneousLights = 8
   mesh.material = mat
 
   // Horizon skirt: a huge tinted disc under the world edge so the map
@@ -365,5 +387,6 @@ function applyStaticTexture(
   // Mostly let the texture speak — a heavy tint multiplies photos into mud.
   mat.diffuseColor = Color3.Lerp(Color3.FromHexString(s.color), Color3.White(), 0.75)
   mat.specularColor = new Color3(0.04, 0.04, 0.04)
+  mat.maxSimultaneousLights = 8
   mesh.material = mat
 }

@@ -62,6 +62,10 @@ export interface ClientStateEvents {
     }[]
   }
   announce: string
+  fx: {
+    kind: 'hurt' | 'death'
+    id: string
+  }
   disconnected: undefined
   [key: string]: unknown
 }

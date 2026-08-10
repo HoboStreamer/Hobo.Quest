@@ -1,3 +1,5 @@
+import '@babylonjs/core/Rendering/outlineRenderer.js'
+import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import type { ContentRegistry } from '@hobo/content'
@@ -30,6 +32,8 @@ export interface AvatarUpdate {
   itemDef?: string | undefined
   beamActive?: boolean
 }
+
+const HURT_OVERLAY = new Color3(0.9, 0.12, 0.08)
 
 export class Avatar {
   private rig: AvatarRig
@@ -82,6 +86,25 @@ export class Avatar {
   setArmsVisible(visible: boolean): void {
     this.armsVisible = visible
     this.rig.setArmsVisible(visible)
+  }
+
+  triggerFlinch(): void {
+    this.animator.triggerFlinch()
+  }
+
+  private hurtTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Red overlay pulse when this avatar takes damage. */
+  flashHurt(strength: number): void {
+    for (const mesh of this.rig.joints.root.getChildMeshes()) {
+      mesh.renderOverlay = true
+      mesh.overlayColor = HURT_OVERLAY
+      mesh.overlayAlpha = strength
+    }
+    if (this.hurtTimer) clearTimeout(this.hurtTimer)
+    this.hurtTimer = setTimeout(() => {
+      for (const mesh of this.rig.joints.root.getChildMeshes()) mesh.renderOverlay = false
+    }, 220)
   }
 
   triggerSwing(): void {

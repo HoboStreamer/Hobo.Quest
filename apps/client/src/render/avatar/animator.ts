@@ -100,6 +100,8 @@ export class AvatarAnimator {
   private pose = zeroPose()
   /** One-shot swing timer (s remaining); drives axe/pickaxe chop. */
   private swingT = 0
+  /** One-shot hurt flinch timer. */
+  private flinchT = 0
   /** Smoothed grounded factor so landings ease instead of snapping. */
   private groundBlend = 1
 
@@ -109,11 +111,16 @@ export class AvatarAnimator {
     this.swingT = 0.38
   }
 
+  triggerFlinch(): void {
+    this.flinchT = 0.35
+  }
+
   update(input: AnimatorInput): void {
     const dt = Math.min(input.dt, 0.1)
     const speedNorm = Math.min(input.speed / RUN_SPEED, 1.2)
     this.phase += input.speed * WALK_STRIDE * dt
     if (this.swingT > 0) this.swingT = Math.max(0, this.swingT - dt)
+    if (this.flinchT > 0) this.flinchT = Math.max(0, this.flinchT - dt)
     this.groundBlend += ((input.grounded ? 1 : 0) - this.groundBlend) * Math.min(1, dt * 10)
 
     const target = zeroPose()
@@ -191,7 +198,7 @@ export class AvatarAnimator {
       const crawl = Math.min(speedNorm * 4, 1)
       const cs = Math.sin(this.phase) * 0.3 * crawl
       target.bobRX = 1.42
-      target.bobY = -1.06
+      target.bobY = -0.66
       // Legs nearly straight along the ground, slight spread via alternate
       // hip angles while crawling.
       target.hipLX = -0.04 + cs
@@ -247,6 +254,17 @@ export class AvatarAnimator {
       target.elbowRX = -0.9 + jab * 0.85
       target.spineY += jab * 0.18
       target.chestX += jab * 0.08
+    }
+
+    // ── Hurt flinch: sharp recoil twist that decays fast ─────────────
+    if (this.flinchT > 0) {
+      const k = this.flinchT / 0.35
+      const snap = Math.sin(k * Math.PI) * k
+      target.chestX += snap * 0.5
+      target.spineY += snap * 0.35
+      target.headX += snap * 0.6
+      target.shoulderLZ += snap * 0.45
+      target.shoulderRZ -= snap * 0.45
     }
 
     // ── Exponentially damp live pose toward target (per-group rates) ──

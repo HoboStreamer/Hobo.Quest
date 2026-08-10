@@ -92,6 +92,16 @@ export const ItemDefSchema = z.object({
     .optional(),
 
   /** Present iff the item can be placed from inventory into the world. */
+  /** Present iff the item is a purpose-built melee weapon (damage override).
+   * Any held item can swing — this capability makes it GOOD at it. Ranged
+   * weapons will extend this shape (projectile, ammo) rather than fork it. */
+  weapon: z
+    .object({
+      damage: z.number().positive(),
+      range: z.number().positive().default(2.6),
+    })
+    .optional(),
+
   placeable: z
     .object({
       /** Max distance from player eye to placement point, meters. */

@@ -52,6 +52,9 @@ importers:
       '@babylonjs/materials':
         specifier: ^9.20.0
         version: 9.20.0(@babylonjs/core@9.20.0)
+      '@babylonjs/procedural-textures':
+        specifier: ^9.20.0
+        version: 9.20.0(@babylonjs/core@9.20.0)
       '@hobo/content':
         specifier: workspace:*
         version: link:../../packages/content
@@ -206,6 +209,14 @@ packages:
     resolution:
       {
         integrity: sha512-eHs6dn+kasWufTUC2EcrXaTTkWxbGDW0d7U1SyrsUc+ldYb4ktCb9taaoxooGhvLdmrCfd8GaqLvCSBf71Y0fw==,
+      }
+    peerDependencies:
+      '@babylonjs/core': ^9.0.0
+
+  '@babylonjs/procedural-textures@9.20.0':
+    resolution:
+      {
+        integrity: sha512-ABrxLCVnB/xkq+Sgw7r+0qs9J8QJr4fit0YI6eysqTNUeP751Ob/1VAlxLllGN7nG5cIlCVP152/t3VanxXgzQ==,
       }
     peerDependencies:
       '@babylonjs/core': ^9.0.0
@@ -2419,6 +2430,10 @@ snapshots:
       babylonjs-gltf2interface: 9.20.0
 
   '@babylonjs/materials@9.20.0(@babylonjs/core@9.20.0)':
+    dependencies:
+      '@babylonjs/core': 9.20.0
+
+  '@babylonjs/procedural-textures@9.20.0(@babylonjs/core@9.20.0)':
     dependencies:
       '@babylonjs/core': 9.20.0
 

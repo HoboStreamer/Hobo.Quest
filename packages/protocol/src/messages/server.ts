@@ -157,6 +157,13 @@ export interface ServerTime {
   frac: number
 }
 
+/** Transient visual effect on an entity (hurt flinch, death...). */
+export interface ServerFx {
+  t: 'fx'
+  kind: 'hurt' | 'death'
+  id: string
+}
+
 /** World-event banner shown to everyone (supply drops etc.). */
 export interface ServerAnnounce {
   t: 'announce'
@@ -190,3 +197,4 @@ export type ServerMessage =
   | ServerTime
   | ServerContainer
   | ServerAnnounce
+  | ServerFx

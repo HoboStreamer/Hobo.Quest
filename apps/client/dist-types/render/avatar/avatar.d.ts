@@ -1,3 +1,4 @@
+import '@babylonjs/core/Rendering/outlineRenderer.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import type { ContentRegistry } from '@hobo/content'
@@ -43,6 +44,10 @@ export declare class Avatar {
   setAppearance(appearance: Appearance): void
   setHeadVisible(visible: boolean): void
   setArmsVisible(visible: boolean): void
+  triggerFlinch(): void
+  private hurtTimer
+  /** Red overlay pulse when this avatar takes damage. */
+  flashHurt(strength: number): void
   triggerSwing(): void
   /** World position the physgun beam should start from (hand/muzzle). */
   beamOrigin(): Vector3

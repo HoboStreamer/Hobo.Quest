@@ -24,6 +24,7 @@ export interface ClientStateEvents {
   timeSync: number
   container: { id: string; size: number; slots: { i: number; def: string; count: number }[] }
   announce: string
+  fx: { kind: 'hurt' | 'death'; id: string }
   disconnected: undefined
   [key: string]: unknown
 }
@@ -134,6 +135,9 @@ export class ClientState {
         break
       case 'announce':
         this.events.emit('announce', msg.text)
+        break
+      case 'fx':
+        this.events.emit('fx', { kind: msg.kind, id: msg.id })
         break
       case 'container':
         this.events.emit('container', { id: msg.id, size: msg.size, slots: msg.slots })

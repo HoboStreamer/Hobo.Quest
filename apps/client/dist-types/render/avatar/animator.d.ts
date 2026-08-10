@@ -29,10 +29,13 @@ export declare class AvatarAnimator {
   private pose
   /** One-shot swing timer (s remaining); drives axe/pickaxe chop. */
   private swingT
+  /** One-shot hurt flinch timer. */
+  private flinchT
   /** Smoothed grounded factor so landings ease instead of snapping. */
   private groundBlend
   constructor(joints: RigJoints)
   triggerSwing(): void
+  triggerFlinch(): void
   update(input: AnimatorInput): void
 }
 //# sourceMappingURL=animator.d.ts.map

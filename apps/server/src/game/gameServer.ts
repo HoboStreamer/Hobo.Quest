@@ -839,7 +839,12 @@ export class GameServer {
       this.send(attacker, { t: 'result', action: 'use', ok: false, error: 'not_a_weapon' })
       return
     }
-    const range = tool ? Math.min(tool.range, 3.5) : 2.4
+    // ANY held item swings; weapon capability > tool power > improvised.
+    const heldDef = attacker.holstered
+      ? undefined
+      : this.world.content.item(attacker.inventory.get(attacker.activeHotbar)?.defId ?? '')
+    const weapon = heldDef?.weapon
+    const range = weapon?.range ?? (tool ? Math.min(tool.range, 3.5) : 2.4)
     if (d > range) {
       this.send(attacker, { t: 'result', action: 'use', ok: false, error: 'out_of_range' })
       return
@@ -857,7 +862,8 @@ export class GameServer {
     const exhausted = attacker.stats.stamina < 10
     attacker.stats.stamina = Math.max(0, attacker.stats.stamina - 12)
     attacker.statsDirty = true
-    const damage = (tool ? 6 + tool.power * 4 : 6) * (exhausted ? 0.5 : 1)
+    const base = weapon?.damage ?? (tool ? 6 + tool.power * 4 : heldDef ? 5 : 6)
+    const damage = base * (exhausted ? 0.5 : 1)
     // Knockback: shove the victim away (replicates through prediction).
     const kx = victim.move.pos.x - attacker.move.pos.x
     const kz = victim.move.pos.z - attacker.move.pos.z
@@ -869,6 +875,12 @@ export class GameServer {
     victim.statsDirty = true
     victim.dirty = true
     this.send(attacker, { t: 'result', action: 'use', ok: true })
+    // Everyone nearby sees the flinch (or the drop).
+    this.broadcastToKnowing(victim.entityId, {
+      t: 'fx',
+      kind: died ? 'death' : 'hurt',
+      id: victim.entityId as string,
+    })
     if (died) {
       this.log.info('player killed', {
         victim: victim.playerId,

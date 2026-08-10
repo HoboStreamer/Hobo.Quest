@@ -9,15 +9,19 @@ export declare class Environment {
   private readonly scene
   readonly sun: DirectionalLight
   private readonly hemi
-  private readonly atmosphere
   private pipeline
   private readonly flareEmitter
   private readonly flares
+  private readonly skyMat
+  private readonly clouds
+  private readonly cloudMat
+  private readonly moon
+  private readonly moonMat
   private t
-  constructor(scene: Scene, engine: AbstractEngine)
+  private targetT
+  constructor(scene: Scene, _engine: AbstractEngine)
   /** Attach the HDR tonemapping pipeline to the active gameplay camera. */
   attachCamera(camera: Camera): void
-  private targetT
   /** Sync toward the server's shared day fraction (smoothed, no sun jumps). */
   setDayFraction(frac: number): void
   /** Advance time of day; call once per frame. */

@@ -157,6 +157,50 @@ export const HOBOVILLE: WorldDef = {
       tex: 'plastered_wall_02',
     },
 
+    // ── Street lamps around the plaza + one at each gate ──────────────
+    {
+      shape: { type: 'box', size: [0.16, 3.4, 0.16] },
+      pos: [7, 1.7, 7],
+      yaw: 0,
+      color: '#3a3f45',
+      decor: 'lamp',
+    },
+    {
+      shape: { type: 'box', size: [0.16, 3.4, 0.16] },
+      pos: [-7, 1.7, 7],
+      yaw: 0,
+      color: '#3a3f45',
+      decor: 'lamp',
+    },
+    {
+      shape: { type: 'box', size: [0.16, 3.4, 0.16] },
+      pos: [7, 1.7, -7],
+      yaw: 0,
+      color: '#3a3f45',
+      decor: 'lamp',
+    },
+    {
+      shape: { type: 'box', size: [0.16, 3.4, 0.16] },
+      pos: [-7, 1.7, -7],
+      yaw: 0,
+      color: '#3a3f45',
+      decor: 'lamp',
+    },
+    {
+      shape: { type: 'box', size: [0.16, 3.4, 0.16] },
+      pos: [3.4, 1.7, 19.2],
+      yaw: 0,
+      color: '#3a3f45',
+      decor: 'lamp',
+    },
+    {
+      shape: { type: 'box', size: [0.16, 3.4, 0.16] },
+      pos: [-3.4, 1.7, -19.2],
+      yaw: 0,
+      color: '#3a3f45',
+      decor: 'lamp',
+    },
+
     // ── City buildings (hollow shells — walk in through the doorway) ──
     {
       shape: { type: 'box', size: [6, 3.2, 0.35] },

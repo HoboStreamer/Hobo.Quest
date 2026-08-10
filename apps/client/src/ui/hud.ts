@@ -72,7 +72,7 @@ export class Hud {
       this.lastHp = s.hp
       this.byId('vignette').style.opacity = s.hp < 40 ? String((40 - s.hp) / 55) : '0'
       this.renderVitals()
-      if (s.died) this.toast('☠ You died — waking up back in Hoboville', true)
+      if (s.died) this.showDeathScreen()
     })
     state.events.on('container', ({ id, size, slots }) => {
       // Refresh only if it's the container we're looking at (or a fresh open).
@@ -115,6 +115,10 @@ export class Hud {
         <div class="vital"><span>STAM</span><div class="vital-bar"><div id="bar-stamina" class="vital-fill stamina"></div></div></div>
       </div>
       <div class="announce" id="announce"></div>
+      <div class="death-screen" id="death-screen">
+        <div class="death-title">YOU DIED</div>
+        <div class="death-sub">Waking up back in Hoboville…</div>
+      </div>
       <div class="container-panel" id="shop-panel" style="display:none">
         <div class="container-title">Goose's Trading Post</div>
         <div class="shop-list" id="shop-list"></div>
@@ -189,6 +193,12 @@ export class Hud {
   }
 
   private shopOpen = false
+
+  private showDeathScreen(): void {
+    const el = this.byId('death-screen')
+    el.classList.add('show')
+    setTimeout(() => el.classList.remove('show'), 3800)
+  }
 
   /** Merchant trade sheet (content-driven; server validates every trade). */
   openShop(): void {

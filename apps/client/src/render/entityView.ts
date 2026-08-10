@@ -1,6 +1,7 @@
 import '@babylonjs/core/Rendering/outlineRenderer.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder.js'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
@@ -40,6 +41,7 @@ interface EntityVisual {
   entity: WireEntity
   mesh: Mesh | null
   avatar: Avatar | null
+  light: PointLight | null
   bodyId: BodyId | null
   buffer: InterpSample[]
   /** Stance the player mirror capsule was last built for (players only). */
@@ -68,6 +70,12 @@ export class EntityView {
     state.events.on('entityAdded', (e) => this.add(e))
     state.events.on('entityRemoved', (id) => this.remove(id))
     state.events.on('entityUpdated', (e) => this.applyAuthoritative(e))
+    state.events.on('fx', ({ kind, id }) => {
+      const avatar = this.visuals.get(id)?.avatar
+      if (!avatar) return
+      avatar.triggerFlinch()
+      avatar.flashHurt(kind === 'death' ? 0.9 : 0.45)
+    })
   }
 
   entityIdForBody(bodyId: BodyId): string | undefined {
@@ -140,10 +148,23 @@ export class EntityView {
       }
     }
     if (bodyId !== null) this.entityByBody.set(bodyId, e.id)
+    // Campfires cast flickering warm light.
+    let light: PointLight | null = null
+    if (e.kind === 'prop' && e.def === 'campfire') {
+      light = new PointLight(
+        `fire:${e.id}`,
+        new Vector3(e.pos[0], e.pos[1] + 0.5, e.pos[2]),
+        this.scene,
+      )
+      light.diffuse = new Color3(1, 0.6, 0.25)
+      light.intensity = 0.8
+      light.range = 10
+    }
     this.visuals.set(e.id, {
       entity: e,
       mesh,
       avatar,
+      light,
       bodyId,
       buffer: [],
       bodyStance: 0,
@@ -170,6 +191,7 @@ export class EntityView {
   private remove(id: string): void {
     const v = this.visuals.get(id)
     if (!v) return
+    v.light?.dispose()
     if (v.mesh) {
       for (const child of v.mesh.getChildMeshes()) child.dispose()
       v.mesh.dispose()
@@ -275,6 +297,11 @@ export class EntityView {
           crop.dispose()
         }
       }
+      // Campfire flicker follows the (possibly carried) prop.
+      if (v.light && v.mesh) {
+        v.light.position.set(v.mesh.position.x, v.mesh.position.y + 0.5, v.mesh.position.z)
+        v.light.intensity = 0.75 + Math.sin(localTime * 11) * 0.12 + Math.sin(localTime * 23) * 0.06
+      }
       // Chop/mine feedback: brief wobble on the hit node.
       if (v.shakeT > 0 && v.mesh) {
         v.shakeT = Math.max(0, v.shakeT - dt)
@@ -292,6 +319,12 @@ export class EntityView {
       if (v.avatar) {
         const yaw = lerpAngle(a.yaw ?? 0, b.yaw ?? a.yaw ?? 0, alpha)
         const latest = v.buffer[v.buffer.length - 1] as InterpSample
+        // Blend FEET height, not capsule-center height: the center jumps
+        // when the hull shrinks (crouch/prone) and blending centers sinks
+        // the avatar through the floor mid-transition.
+        const feetA = a.pos[1] - hullHeightFor((a.stance ?? 0) as 0 | 1 | 2) / 2
+        const feetB = b.pos[1] - hullHeightFor((b.stance ?? 0) as 0 | 1 | 2) / 2
+        const feetY = feetA + (feetB - feetA) * alpha
         // Keep the player collision mirror on the smooth pose; swap the hull
         // when their stance changes so crouched players are shorter to walk on.
         if (v.bodyId !== null) {
@@ -311,7 +344,7 @@ export class EntityView {
           dt,
           time: localTime,
           x: _pos.x,
-          y: _pos.y - hullHeightFor((latest.stance ?? 0) as 0 | 1 | 2) / 2,
+          y: feetY,
           z: _pos.z,
           yaw,
           pitch: lerpAngle(a.pitch ?? 0, b.pitch ?? a.pitch ?? 0, alpha),
