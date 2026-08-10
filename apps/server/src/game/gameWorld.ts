@@ -140,7 +140,18 @@ export class GameWorld {
       id: opts.id ?? newEntityId(),
       kind: 'prop',
       transform: { pos: { ...opts.pos }, rot: { ...opts.rot } },
-      prop: { defId: opts.defId, motion: opts.motion, lootCount: opts.lootCount ?? 1 },
+      prop: {
+        defId: opts.defId,
+        motion: opts.motion,
+        lootCount: opts.lootCount ?? 1,
+        ...(this.content.item(opts.defId)?.container
+          ? {
+              container: new Array<null>(this.content.item(opts.defId)!.container!.slots).fill(
+                null,
+              ) as ({ defId: string; count: number } | null)[],
+            }
+          : {}),
+      },
       ...(opts.owner !== undefined ? { owner: opts.owner } : {}),
       persistent: true,
       dirty: true,
@@ -438,7 +449,8 @@ export class GameWorld {
     const pos = vec3(row.pos[0], row.pos[1], row.pos[2])
     const rot = quat(row.rot[0], row.rot[1], row.rot[2], row.rot[3])
     if (row.kind === 'prop') {
-      if (!this.content.item(row.defId)?.world) {
+      // worldRepOf provides a fallback shape for every known item.
+      if (!this.content.item(row.defId)) {
         this.deletedIds.add(row.id as EntityId)
         return false
       }
@@ -451,6 +463,12 @@ export class GameWorld {
         lootCount: Number(row.state?.lootCount ?? 1),
         ...(row.ownerId ? { owner: row.ownerId as PlayerId } : {}),
       })
+      if (entity.prop?.container && Array.isArray(row.state?.container)) {
+        const stored = row.state.container as ({ defId: string; count: number } | null)[]
+        for (let i = 0; i < entity.prop.container.length && i < stored.length; i++) {
+          entity.prop.container[i] = stored[i] ?? null
+        }
+      }
       entity.dirty = false
       return true
     }
@@ -517,7 +535,10 @@ function entityToDto(entity: GameEntity, now: number): WorldEntityDto {
     state: entity.resource
       ? { remaining: entity.resource.remaining, depletedUntil: entity.resource.depletedUntil }
       : entity.prop
-        ? { lootCount: entity.prop.lootCount }
+        ? {
+            lootCount: entity.prop.lootCount,
+            ...(entity.prop.container ? { container: entity.prop.container } : {}),
+          }
         : null,
     updatedAt: now,
   }

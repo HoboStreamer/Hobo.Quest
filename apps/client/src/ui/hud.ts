@@ -65,6 +65,22 @@ export class Hud {
       const def = this.content.skill(skill)
       this.toast(`⭐ ${def?.name ?? skill} reached level ${level}!`)
     })
+    state.events.on('stats', (s) => {
+      this.renderVitals()
+      if (s.died) this.toast('☠ You died — waking up back in Hoboville', true)
+    })
+    state.events.on('container', ({ id, size, slots }) => {
+      // Refresh only if it's the container we're looking at (or a fresh open).
+      if (this.openContainerId === null || this.openContainerId === id) {
+        this.showContainer(id, size, slots)
+      }
+    })
+    state.events.on('entityRemoved', (id) => {
+      if (this.openContainerId === id) this.closeContainer()
+    })
+    state.events.on('inventory', () => {
+      if (this.openContainerId) this.renderContainer()
+    })
   }
 
   private build(): void {
@@ -78,6 +94,22 @@ export class Hud {
         <div class="menu-body" id="menu-body"></div>
       </div>
       <div class="hotbar" id="hotbar"></div>
+      <div class="vitals" id="vitals">
+        <div class="vital"><span>HP</span><div class="vital-bar"><div id="bar-hp" class="vital-fill hp"></div></div></div>
+        <div class="vital"><span>FOOD</span><div class="vital-bar"><div id="bar-hunger" class="vital-fill hunger"></div></div></div>
+        <div class="vital"><span>H2O</span><div class="vital-bar"><div id="bar-thirst" class="vital-fill thirst"></div></div></div>
+        <div class="vital"><span>STAM</span><div class="vital-bar"><div id="bar-stamina" class="vital-fill stamina"></div></div></div>
+      </div>
+      <div class="container-panel" id="container-panel" style="display:none">
+        <div class="container-title">Storage</div>
+        <div class="container-grid" id="container-grid"></div>
+        <div class="hint-line">Click an item to move it · your inventory below</div>
+        <div class="container-grid" id="container-player"></div>
+        <div class="cust-actions">
+          <button id="container-pickup" class="cust-btn">Pick up (empty box)</button>
+          <button id="container-close" class="cust-btn">Close</button>
+        </div>
+      </div>
     `
     this.hotbarEl = this.byId('hotbar')
     this.menuEl = this.byId('menu')
@@ -100,6 +132,113 @@ export class Hud {
 
     this.renderTabs()
     this.renderHotbar()
+
+    this.byId('container-close').addEventListener('click', () => this.closeContainer())
+    this.byId('container-pickup').addEventListener('click', () => {
+      if (this.openContainerId) {
+        this.connection.send({ t: 'use', target: this.openContainerId })
+        this.closeContainer()
+      }
+    })
+  }
+
+  // ── Survival vitals + container storage ────────────────────────────
+
+  private openContainerId: string | null = null
+  private containerData: { size: number; slots: { i: number; def: string; count: number }[] } = {
+    size: 0,
+    slots: [],
+  }
+
+  private renderVitals(): void {
+    const s = this.state.stats
+    ;(this.byId('bar-hp').style as CSSStyleDeclaration).width = `${s.hp}%`
+    ;(this.byId('bar-hunger').style as CSSStyleDeclaration).width = `${s.hunger}%`
+    ;(this.byId('bar-thirst').style as CSSStyleDeclaration).width = `${s.thirst}%`
+    ;(this.byId('bar-stamina').style as CSSStyleDeclaration).width = `${s.stamina}%`
+  }
+
+  /** Opens (or refreshes) the storage panel for a container entity. */
+  showContainer(
+    id: string,
+    size: number,
+    slots: { i: number; def: string; count: number }[],
+  ): void {
+    this.openContainerId = id
+    this.containerData = { size, slots }
+    this.byId('container-panel').style.display = 'flex'
+    this.renderContainer()
+    this.onUiCaptureChange?.(true)
+  }
+
+  closeContainer(): void {
+    if (!this.openContainerId) return
+    this.openContainerId = null
+    this.byId('container-panel').style.display = 'none'
+    if (!this.menuOpen) this.onUiCaptureChange?.(false)
+  }
+
+  get containerOpen(): boolean {
+    return this.openContainerId !== null
+  }
+
+  private renderContainer(): void {
+    const grid = this.byId('container-grid')
+    grid.replaceChildren()
+    const bySlot = new Map(this.containerData.slots.map((s) => [s.i, s]))
+    for (let i = 0; i < this.containerData.size; i++) {
+      const cell = document.createElement('button')
+      cell.className = 'slot'
+      const stack = bySlot.get(i)
+      if (stack) {
+        const img = document.createElement('img')
+        img.src = this.icons.iconFor(stack.def)
+        img.draggable = false
+        cell.appendChild(img)
+        const count = document.createElement('span')
+        count.className = 'slot-count'
+        count.textContent = stack.count > 1 ? String(stack.count) : ''
+        cell.appendChild(count)
+        cell.title = this.content.item(stack.def)?.name ?? stack.def
+        cell.addEventListener('click', () => {
+          if (this.openContainerId) {
+            this.connection.send({
+              t: 'container_move',
+              target: this.openContainerId,
+              dir: 'out',
+              slot: i,
+            })
+          }
+        })
+      }
+      grid.appendChild(cell)
+    }
+    const mine = this.byId('container-player')
+    mine.replaceChildren()
+    for (const slot of this.state.inventory?.slots ?? []) {
+      const cell = document.createElement('button')
+      cell.className = 'slot'
+      const img = document.createElement('img')
+      img.src = this.icons.iconFor(slot.stack.def)
+      img.draggable = false
+      cell.appendChild(img)
+      const count = document.createElement('span')
+      count.className = 'slot-count'
+      count.textContent = slot.stack.count > 1 ? String(slot.stack.count) : ''
+      cell.appendChild(count)
+      cell.title = this.content.item(slot.stack.def)?.name ?? slot.stack.def
+      cell.addEventListener('click', () => {
+        if (this.openContainerId) {
+          this.connection.send({
+            t: 'container_move',
+            target: this.openContainerId,
+            dir: 'in',
+            slot: slot.i,
+          })
+        }
+      })
+      mine.appendChild(cell)
+    }
   }
 
   private byId(id: string): HTMLElement {

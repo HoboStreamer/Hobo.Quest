@@ -157,6 +157,7 @@ async function start(): Promise<void> {
 
   connection.onMessage = (msg) => {
     state.apply(msg)
+    if (msg.t === 'time') environment.setDayFraction(msg.frac)
     if (msg.t === 'snap') {
       player.onSnapshot(msg)
       view.onSnapshot(msg, performance.now() / 1000)
@@ -268,7 +269,14 @@ function promptFor(
     if (nodeType.requiredTool) return `LMB — harvest ${itemName}`
     return `E — gather ${itemName}`
   }
+  if (target.kind === 'player') {
+    const entity = state.entities.get(target.entityId)
+    return `${entity?.name ?? 'drifter'}${tool && tool !== 'physgun' ? ' — LMB attack' : ''}`
+  }
   if (target.kind === 'prop') {
+    if (target.def && content.item(target.def)?.container) {
+      return 'E — open storage'
+    }
     if (interact.physgunActive)
       return 'RMB — freeze · E — rotate · Shift — grid · wheel — push/pull'
     const entity = state.entities.get(target.entityId)

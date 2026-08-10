@@ -36,6 +36,19 @@ export const RECIPES: Recipe[] = [
     workstation: 'workbench',
   },
 
+  {
+    id: 'cook_trail_stew',
+    name: 'Trail Stew',
+    category: 'food',
+    inputs: [
+      { item: 'berries', count: 3 },
+      { item: 'wood_log', count: 1 },
+    ],
+    outputs: [{ item: 'trail_stew', count: 1 }],
+    craftSeconds: 3,
+    workstation: 'campfire',
+  },
+
   // ── Tools ──────────────────────────────────────────────────────────
   {
     id: 'craft_stone_axe',

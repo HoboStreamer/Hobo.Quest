@@ -1,9 +1,13 @@
 import {
+  Buttons,
   DEFAULT_MOVEMENT,
   Inventory,
   SkillSet,
+  applyDamage,
+  eat,
   hullHeightFor,
   stepMovement,
+  tickSurvival,
   type CollisionQueries,
   type GameEntity,
 } from '@hobo/gameplay'
@@ -138,6 +142,11 @@ export class GameServer {
       case 'use': {
         // Swing cooldown: silently drop spam faster than ~5 swings/sec.
         if (this.tick - session.lastUseTick < 6) break
+        const targetSession = this.sessionsByEntity.get(msg.target as EntityId)
+        if (targetSession) {
+          this.handleMelee(session, targetSession)
+          break
+        }
         const gather = handleUse(session, this.world, msg, Date.now(), (e) =>
           this.canManipulate(session, e),
         )
@@ -247,7 +256,143 @@ export class GameServer {
       case 'physgun':
         this.handlePhysgun(session, msg)
         break
+      case 'consume': {
+        const stack = session.inventory.get(msg.slot)
+        const food = stack ? this.world.content.item(stack.defId)?.food : undefined
+        if (!stack || !food) {
+          this.send(session, { t: 'result', action: 'consume', ok: false, error: 'not_food' })
+          break
+        }
+        session.inventory.removeFromSlot(msg.slot, 1)
+        eat(session.stats, food)
+        session.statsDirty = true
+        session.dirty = true
+        this.send(session, { t: 'result', action: 'consume', ok: true })
+        this.sendInventory(session)
+        break
+      }
+      case 'container_open': {
+        const entity = this.world.entities.get(msg.target as EntityId)
+        const denied = this.containerAccessDenied(session, entity)
+        if (denied || !entity?.prop?.container) {
+          this.send(session, {
+            t: 'result',
+            action: 'container',
+            ok: false,
+            error: denied ?? 'no_container',
+          })
+          break
+        }
+        session.openContainer = entity.id
+        this.sendContainer(session, entity)
+        break
+      }
+      case 'container_move': {
+        const entity = this.world.entities.get(msg.target as EntityId)
+        const denied = this.containerAccessDenied(session, entity)
+        const box = entity?.prop?.container
+        if (denied || !entity || !box) {
+          this.send(session, {
+            t: 'result',
+            action: 'container',
+            ok: false,
+            error: denied ?? 'no_container',
+          })
+          break
+        }
+        let ok = false
+        if (msg.dir === 'in') {
+          const stack = session.inventory.get(msg.slot)
+          if (stack) {
+            const moved = this.containerAdd(box, stack.defId, stack.count)
+            if (moved > 0) {
+              session.inventory.removeFromSlot(msg.slot, moved)
+              ok = true
+            }
+          }
+        } else {
+          const slot = box[msg.slot]
+          if (slot) {
+            const leftover = session.inventory.add(slot.defId, slot.count)
+            const moved = slot.count - leftover
+            if (moved > 0) {
+              slot.count -= moved
+              if (slot.count <= 0) box[msg.slot] = null
+              ok = true
+            }
+          }
+        }
+        if (ok) {
+          entity.dirty = true
+          session.dirty = true
+          this.sendInventory(session)
+          // Push fresh contents to EVERYONE with this container open.
+          for (const other of this.sessions.values()) {
+            if (other.openContainer === entity.id) this.sendContainer(other, entity)
+          }
+        } else {
+          this.send(session, { t: 'result', action: 'container', ok: false, error: 'no_space' })
+        }
+        break
+      }
     }
+  }
+
+  /** Range + prop-protection gate shared by all container operations. */
+  private containerAccessDenied(
+    session: PlayerSession,
+    entity: GameEntity | undefined,
+  ): string | null {
+    if (!entity?.prop) return 'no_target'
+    const d = Math.hypot(
+      entity.transform.pos.x - session.move.pos.x,
+      entity.transform.pos.y - session.move.pos.y,
+      entity.transform.pos.z - session.move.pos.z,
+    )
+    if (d > 4.5) return 'out_of_range'
+    if (!this.canManipulate(session, entity)) return 'not_owner'
+    return null
+  }
+
+  /** Adds to a container with stacking; returns how many items fit. */
+  private containerAdd(
+    box: ({ defId: string; count: number } | null)[],
+    defId: string,
+    count: number,
+  ): number {
+    const maxStack = this.world.content.item(defId)?.maxStack ?? 1
+    let left = count
+    for (const slot of box) {
+      if (left <= 0) break
+      if (slot && slot.defId === defId && slot.count < maxStack) {
+        const take = Math.min(maxStack - slot.count, left)
+        slot.count += take
+        left -= take
+      }
+    }
+    for (let i = 0; i < box.length && left > 0; i++) {
+      if (!box[i]) {
+        const take = Math.min(maxStack, left)
+        box[i] = { defId, count: take }
+        left -= take
+      }
+    }
+    return count - left
+  }
+
+  private sendContainer(session: PlayerSession, entity: GameEntity): void {
+    const box = entity.prop?.container ?? []
+    this.send(session, {
+      t: 'container',
+      id: entity.id,
+      size: box.length,
+      slots: box.flatMap((slot, i) => (slot ? [{ i, def: slot.defId, count: slot.count }] : [])),
+    })
+  }
+
+  private dayFraction(): number {
+    // 20-minute shared day/night cycle anchored to server uptime.
+    return (this.tick / this.config.tickRate / 1200 + 0.34) % 1
   }
 
   onDisconnect(conn: GameConnection): void {
@@ -338,6 +483,7 @@ export class GameServer {
       skills,
       friends,
       appearance,
+      stats: existing?.stats ?? undefined,
       content: this.world.content,
       send: (text) => conn.send(text),
       closeConnection: (code, reason) => conn.close(code, reason),
@@ -381,6 +527,7 @@ export class GameServer {
     this.sendInventory(session)
     this.sendSkills(session)
     this.sendFriends(session)
+    this.send(session, { t: 'time', frac: this.dayFraction() })
     this.metrics.sessions = this.sessions.size
     this.log.info('player connected', {
       playerId: playerId as string,
@@ -533,6 +680,75 @@ export class GameServer {
     this.broadcastAll({ t: 'physgun_state', player: session.entityId, target: null })
   }
 
+  /** Melee swing on another player: range + zone PvP rules + tool damage. */
+  private handleMelee(attacker: PlayerSession, victim: PlayerSession): void {
+    const d = Math.hypot(
+      victim.move.pos.x - attacker.move.pos.x,
+      victim.move.pos.y - attacker.move.pos.y,
+      victim.move.pos.z - attacker.move.pos.z,
+    )
+    const tool = equippedTool(attacker)
+    if (tool?.kind === 'physgun') {
+      this.send(attacker, { t: 'result', action: 'use', ok: false, error: 'not_a_weapon' })
+      return
+    }
+    const range = tool ? Math.min(tool.range, 3.5) : 2.4
+    if (d > range) {
+      this.send(attacker, { t: 'result', action: 'use', ok: false, error: 'out_of_range' })
+      return
+    }
+    // PvP must be legal where BOTH players stand (no shooting into the city).
+    if (
+      !this.world.zones.rulesAt(attacker.move.pos).pvp ||
+      !this.world.zones.rulesAt(victim.move.pos).pvp
+    ) {
+      this.send(attacker, { t: 'result', action: 'use', ok: false, error: 'safe_zone' })
+      return
+    }
+    attacker.lastUseTick = this.tick
+    const damage = tool ? 6 + tool.power * 4 : 6
+    const died = applyDamage(victim.stats, damage)
+    victim.statsDirty = true
+    victim.dirty = true
+    this.send(attacker, { t: 'result', action: 'use', ok: true })
+    if (died) {
+      this.log.info('player killed', {
+        victim: victim.playerId,
+        attacker: attacker.playerId,
+      })
+      this.respawn(victim, true)
+    }
+  }
+
+  /** Death/rescue respawn: back to the city with restored vitals. */
+  private respawn(session: PlayerSession, died: boolean): void {
+    const spawn = this.world.content.world.spawnPoint
+    session.move.pos.x = spawn[0]
+    session.move.pos.y = spawn[1]
+    session.move.pos.z = spawn[2]
+    session.move.vel.x = 0
+    session.move.vel.y = 0
+    session.move.vel.z = 0
+    if (died) {
+      session.stats.health = 60
+      session.stats.hunger = Math.max(session.stats.hunger, 40)
+      session.stats.thirst = Math.max(session.stats.thirst, 40)
+      session.statsDirty = true
+      this.send(session, { t: 'stats', ...this.statsWire(session), died: true })
+      session.statsDirty = false
+    }
+    session.dirty = true
+  }
+
+  private statsWire(session: PlayerSession) {
+    return {
+      hp: Math.round(session.stats.health),
+      hunger: Math.round(session.stats.hunger),
+      thirst: Math.round(session.stats.thirst),
+      stamina: Math.round(session.stats.stamina),
+    }
+  }
+
   // ── Simulation tick ────────────────────────────────────────────────
 
   step(): void {
@@ -593,20 +809,37 @@ export class GameServer {
       }
     }
 
-    // 6. Void rescue: anyone below the world (physics escape, glitch)
-    // respawns at the city rather than falling forever.
+    // 6. Once a second: survival vitals, void rescue, world clock sync.
     if (this.tick % this.config.tickRate === 0) {
-      const spawn = this.world.content.world.spawnPoint
       for (const session of this.sessions.values()) {
+        const sprinting =
+          (session.buttons & Buttons.Sprint) !== 0 &&
+          Math.hypot(session.move.vel.x, session.move.vel.z) > 1
+        const before = { ...session.stats }
+        const died = tickSurvival(session.stats, 1, sprinting)
+        if (
+          Math.round(before.health) !== Math.round(session.stats.health) ||
+          Math.round(before.hunger) !== Math.round(session.stats.hunger) ||
+          Math.round(before.thirst) !== Math.round(session.stats.thirst) ||
+          Math.round(before.stamina) !== Math.round(session.stats.stamina)
+        ) {
+          session.statsDirty = true
+        }
+        if (died) {
+          this.log.info('player died of exposure', { playerId: session.playerId })
+          this.respawn(session, true)
+        } else if (session.statsDirty) {
+          this.send(session, { t: 'stats', ...this.statsWire(session) })
+          session.statsDirty = false
+          session.dirty = true
+        }
         if (session.move.pos.y < -25) {
-          session.move.pos.x = spawn[0]
-          session.move.pos.y = spawn[1]
-          session.move.pos.z = spawn[2]
-          session.move.vel.x = 0
-          session.move.vel.y = 0
-          session.move.vel.z = 0
+          this.respawn(session, false)
           this.log.info('void rescue', { playerId: session.playerId })
         }
+      }
+      if (this.tick % (this.config.tickRate * 10) === 0) {
+        this.broadcastAll({ t: 'time', frac: this.dayFraction() })
       }
     }
 
@@ -765,6 +998,7 @@ export class GameServer {
       skills: session.skills.toDto(),
       friends: [...session.friends],
       appearance: session.appearance,
+      stats: session.stats,
       updatedAt: Date.now(),
     }
   }

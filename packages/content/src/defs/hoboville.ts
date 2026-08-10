@@ -279,6 +279,12 @@ export const HOBOVILLE: WorldDef = {
     { node: 'oak_tree', pos: [46, 0, 52] },
     { node: 'oak_tree', pos: [53, 0, 47] },
     { node: 'oak_tree', pos: [36, 0, 55] },
+    // Berry bushes near the forest edge (food bootstrap)
+    { node: 'berry_bush', pos: [28, 0, 33] },
+    { node: 'berry_bush', pos: [33, 0, 29] },
+    { node: 'berry_bush', pos: [44, 0, 46] },
+    { node: 'berry_bush', pos: [-25, 0, 8] },
+
     // Forest edge — hand-gatherable branches (tool bootstrap)
     { node: 'branch_pile', pos: [27, 0, 30] },
     { node: 'branch_pile', pos: [31, 0, 34] },

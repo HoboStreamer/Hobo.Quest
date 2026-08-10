@@ -73,6 +73,10 @@ export function handleUse(
     if (!canManipulate(entity)) {
       return { outcome: result('use', false, 'not_owner'), ...none }
     }
+    // A stocked container refuses pickup — its contents would vanish.
+    if (entity.prop.container?.some((slot) => slot !== null)) {
+      return { outcome: result('use', false, 'not_empty'), ...none }
+    }
     const count = Math.max(1, entity.prop.lootCount)
     if (!session.inventory.canFit(entity.prop.defId, count)) {
       return { outcome: result('use', false, 'inventory_full'), ...none }

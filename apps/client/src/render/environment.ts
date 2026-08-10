@@ -80,6 +80,11 @@ export class Environment {
     this.pipeline.fxaaEnabled = true
   }
 
+  /** Snap the clock to the server's shared day fraction. */
+  setDayFraction(frac: number): void {
+    this.t = frac * DAY_SECONDS
+  }
+
   /** Advance time of day; call once per frame. */
   update(dt: number, cameraPos: Vector3): void {
     this.t = (this.t + dt) % DAY_SECONDS

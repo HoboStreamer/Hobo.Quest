@@ -26,6 +26,8 @@ export interface PropComponent {
   motion: MotionState
   /** Items recovered by picking this prop up (E). Most props carry their own item. */
   lootCount: number
+  /** Stored items for container props (storage boxes). Fixed slot array. */
+  container?: ({ defId: string; count: number } | null)[]
 }
 
 export interface ResourceComponent {

@@ -29,6 +29,22 @@ export declare class Hud {
     weaponSettings: WeaponSettings,
   )
   private build
+  private openContainerId
+  private containerData
+  private renderVitals
+  /** Opens (or refreshes) the storage panel for a container entity. */
+  showContainer(
+    id: string,
+    size: number,
+    slots: {
+      i: number
+      def: string
+      count: number
+    }[],
+  ): void
+  closeContainer(): void
+  get containerOpen(): boolean
+  private renderContainer
   private byId
   toggleMenu(): void
   closeAll(): void

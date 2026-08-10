@@ -646,3 +646,78 @@ input {
   gap: 6px;
   flex-wrap: wrap;
 }
+
+/* ── Survival vitals ─────────────────────────────────────────────── */
+.vitals {
+  position: absolute;
+  left: 16px;
+  bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 190px;
+  pointer-events: none;
+}
+.vital {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vital span {
+  width: 38px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #cdd3da;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+.vital-bar {
+  flex: 1;
+  height: 8px;
+  background: rgba(10, 14, 18, 0.55);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.vital-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+.vital-fill.hp {
+  background: #d05050;
+}
+.vital-fill.hunger {
+  background: #d0913f;
+}
+.vital-fill.thirst {
+  background: #4d9fd6;
+}
+.vital-fill.stamina {
+  background: #66b36a;
+}
+
+/* ── Container storage panel ─────────────────────────────────────── */
+.container-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(16, 20, 26, 0.96);
+  border: 1px solid #2a3340;
+  border-radius: 10px;
+  padding: 16px;
+  min-width: 340px;
+  pointer-events: auto;
+}
+.container-title {
+  font-weight: 600;
+  color: #e8b54a;
+  letter-spacing: 0.06em;
+}
+.container-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 48px);
+  gap: 6px;
+}

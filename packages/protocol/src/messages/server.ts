@@ -77,7 +77,17 @@ export interface ServerCraftState {
 /** Result of an explicit player request (craft, place, use...). */
 export interface ServerActionResult {
   t: 'result'
-  action: 'craft' | 'drop' | 'use' | 'inv_move' | 'physgun' | 'weld' | 'unweld' | 'trust'
+  action:
+    | 'craft'
+    | 'drop'
+    | 'use'
+    | 'inv_move'
+    | 'physgun'
+    | 'weld'
+    | 'unweld'
+    | 'trust'
+    | 'consume'
+    | 'container'
   ok: boolean
   error?: string
 }
@@ -126,6 +136,31 @@ export interface ServerPhysgunState {
   grab?: [number, number, number]
 }
 
+/** The receiving player's own vitals (sent on meaningful change). */
+export interface ServerStats {
+  t: 'stats'
+  hp: number
+  hunger: number
+  thirst: number
+  stamina: number
+  /** Set on the update that killed you (client shows death feedback). */
+  died?: boolean
+}
+
+/** World clock sync: fraction of the day cycle [0..1). */
+export interface ServerTime {
+  t: 'time'
+  frac: number
+}
+
+/** Contents of an opened container (and pushed while it stays open). */
+export interface ServerContainer {
+  t: 'container'
+  id: string
+  slots: { i: number; def: string; count: number }[]
+  size: number
+}
+
 export type ServerMessage =
   | ServerWelcome
   | ServerReject
@@ -141,3 +176,6 @@ export type ServerMessage =
   | ServerLevelUp
   | ServerWeldState
   | ServerFriends
+  | ServerStats
+  | ServerTime
+  | ServerContainer

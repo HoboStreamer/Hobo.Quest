@@ -84,6 +84,12 @@ class TestClient {
   weldEvents: { a: string; b: string; active: boolean }[] = []
   /** What MY beam currently holds (from physgun_state broadcasts). */
   heldTarget: string | null = null
+  stats: { hp: number; hunger: number; thirst: number; stamina: number } | null = null
+  lastContainer: {
+    id: string
+    size: number
+    slots: { i: number; def: string; count: number }[]
+  } | null = null
   private waiters: { pred: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] =
     []
 
@@ -157,6 +163,12 @@ class TestClient {
         break
       case 'physgun_state':
         if (msg.player === this.entityId) this.heldTarget = msg.target ?? null
+        break
+      case 'stats':
+        this.stats = { hp: msg.hp, hunger: msg.hunger, thirst: msg.thirst, stamina: msg.stamina }
+        break
+      case 'container':
+        this.lastContainer = { id: msg.id, size: msg.size, slots: msg.slots }
         break
       case 'result':
         this.results.push({
@@ -561,6 +573,73 @@ async function main(): Promise<void> {
   const trunkNow = a.entities.get(trunk.id) as WireEntity
   assert(trunkNow.pos[1] < tree.pos[1] + 1.6, 'trunk fell (physics), not floating')
 
+  console.log('phase: survival — berries, eating, vitals')
+  const bush = byType('berry_bush')[0]
+  assert(bush, 'berry bush replicated')
+  // Route around the city's north side — straight-line hits the west wall.
+  await walkPath(a, [
+    [24, 26],
+    [-26, 26],
+    [bush.pos[0] + 1.2, bush.pos[2] + 1.2],
+  ])
+  await settle(a)
+  await sleep(300)
+  const berriesBefore = a.count('berries')
+  const pick = await a.use(bush.id)
+  assert(pick.ok, 'berries gathered by hand')
+  await a.waitFor((m) => m.t === 'inventory' && a.count('berries') > berriesBefore, 5000)
+  assert(a.stats !== null, 'vitals replicated')
+  a.results.length = 0
+  a.send({ t: 'consume', slot: a.slotOf('berries') })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'consume')
+  assert(a.results.at(-1)?.ok === true, 'eating berries accepted')
+
+  console.log('phase: container storage (craft box, stash, persists)')
+  await craftAndWait(a, 'craft_rope', 'rope')
+  await craftAndWait(a, 'craft_planks', 'wood_plank')
+  await craftAndWait(a, 'craft_planks', 'wood_plank')
+  await craftAndWait(a, 'craft_storage_box', 'storage_box')
+  a.send({ t: 'drop', slot: a.slotOf('storage_box'), count: 1 })
+  const boxSpawn = await a.waitFor(
+    (m) => m.t === 'spawn' && m.entities.some((e) => e.def === 'storage_box'),
+    5000,
+  )
+  const boxId =
+    boxSpawn.t === 'spawn' ? (boxSpawn.entities.find((e) => e.def === 'storage_box')?.id ?? '') : ''
+  assert(boxId, 'storage box placed in the world')
+  await sleep(600)
+  a.send({ t: 'container_open', target: boxId })
+  await a.waitFor((m) => m.t === 'container' && m.id === boxId)
+  assert(a.lastContainer?.size === 12, 'container opened with 12 slots')
+  const stashSlot = a.slotOf('stone')
+  assert(stashSlot >= 0, 'has stone to stash')
+  a.send({ t: 'container_move', target: boxId, dir: 'in', slot: stashSlot })
+  await a.waitFor((m) => m.t === 'container' && m.slots.some((sl) => sl.def === 'stone'), 5000)
+  assert(
+    a.lastContainer?.slots.some((sl) => sl.def === 'stone'),
+    'stone stashed in the box',
+  )
+  const pickupTry = await a.use(boxId)
+  assert(pickupTry.error === 'not_empty', 'stocked box refuses pickup')
+  // Take the stone back (later phases need it); leave berries stashed so
+  // the restart phase can verify container persistence.
+  const stoneInBox = a.lastContainer?.slots.find((sl) => sl.def === 'stone')
+  assert(stoneInBox, 'stone slot located in box')
+  a.send({ t: 'container_move', target: boxId, dir: 'out', slot: stoneInBox.i })
+  await a.waitFor((m) => m.t === 'inventory' && a.count('stone') > 0, 5000)
+  const berrySlot = a.slotOf('berries')
+  assert(berrySlot >= 0, 'berries left to stash')
+  a.send({ t: 'container_move', target: boxId, dir: 'in', slot: berrySlot })
+  await a.waitFor((m) => m.t === 'container' && m.slots.some((sl) => sl.def === 'berries'), 5000)
+
+  // Return to the north-gate area — later phases (and Bob's approach path)
+  // assume Alice is near the crates outside the north gate.
+  await walkPath(a, [
+    [-26, 26],
+    [2, 25],
+  ])
+  await settle(a)
+
   console.log('phase: build with physgun freeze (wilderness allows building)')
   await craftAndWait(a, 'craft_planks', 'wood_plank')
   await craftAndWait(a, 'craft_wooden_wall', 'wooden_wall')
@@ -689,6 +768,17 @@ async function main(): Promise<void> {
   assert(bobGrab3.error === 'not_owner', 'revoking trust restores protection')
   b.send({ t: 'physgun', a: 'release' })
 
+  console.log('phase: melee PvP (outside the safe city)')
+  await a.equip('stone_axe')
+  await sleep(300)
+  a.results.length = 0
+  a.send({ t: 'use', target: b.entityId })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'use')
+  const hit = a.results.at(-1)
+  assert(hit?.ok === true, `melee hit accepted (${hit?.error ?? 'ok'})`)
+  await b.waitFor((m) => m.t === 'stats' && m.hp < 100, 5000)
+  assert((b.stats?.hp ?? 100) < 100, 'victim lost health')
+
   console.log('phase: players collide (blocking bodies)')
   await settle(a)
   await settle(b)
@@ -740,6 +830,22 @@ async function main(): Promise<void> {
     'skill progression persisted',
   )
   assert(c.count('stone_axe') === 1, 'tools persisted in inventory')
+  {
+    const box = [...c.entities.values()].find((e) => e.def === 'storage_box')
+    assert(box, 'storage box restored after restart')
+    // Containers are range-checked: walk to the box (around the city).
+    await walkPath(c, [
+      [-26, 26],
+      [box.pos[0] + 1.5, box.pos[2] + 1.5],
+    ])
+    await settle(c)
+    c.send({ t: 'container_open', target: box.id })
+    await c.waitFor((m) => m.t === 'container' && m.id === box.id, 8000)
+    assert(
+      c.lastContainer?.slots.some((sl) => sl.def === 'berries'),
+      'container contents persisted across restart',
+    )
+  }
   assert(
     c.friends.some((f) => f.name === 'Bob'),
     'friends list persisted across restart',

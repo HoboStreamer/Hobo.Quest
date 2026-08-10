@@ -16,8 +16,8 @@ export interface WorldEntityDto {
   pos: [number, number, number]
   rot: [number, number, number, number]
   motion: 'dynamic' | 'frozen' | 'static'
-  /** Kind-specific extra state (e.g. resource remaining/perUse) as JSON. */
-  state: Record<string, number | string> | null
+  /** Kind-specific extra state (resource remaining, container slots...) as JSON. */
+  state: Record<string, unknown> | null
   updatedAt: number
 }
 
@@ -35,6 +35,8 @@ export interface PlayerDto {
   friends: string[]
   /** Avatar customization; null until the player first customizes. */
   appearance: Appearance | null
+  /** Survival vitals; null for players from before the survival system. */
+  stats: { health: number; hunger: number; thirst: number; stamina: number } | null
   updatedAt: number
 }
 

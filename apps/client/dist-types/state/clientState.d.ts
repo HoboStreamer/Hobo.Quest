@@ -44,6 +44,23 @@ export interface ClientStateEvents {
     id: string
     name: string
   }[]
+  stats: {
+    hp: number
+    hunger: number
+    thirst: number
+    stamina: number
+    died?: boolean
+  }
+  timeSync: number
+  container: {
+    id: string
+    size: number
+    slots: {
+      i: number
+      def: string
+      count: number
+    }[]
+  }
   disconnected: undefined
   [key: string]: unknown
 }
@@ -74,6 +91,14 @@ export declare class ClientState {
   readonly heldBy: Map<string, string>
   /** Holder entity id -> grab point in the held body's local space. */
   readonly heldGrab: Map<string, [number, number, number]>
+  stats: {
+    hp: number
+    hunger: number
+    thirst: number
+    stamina: number
+  }
+  /** Shared world clock (fraction of the day cycle). */
+  dayFraction: number
   apply(msg: ServerMessage): void
   countOf(defId: string): number
   /** Item def id in the active hotbar slot (null when holstered). */

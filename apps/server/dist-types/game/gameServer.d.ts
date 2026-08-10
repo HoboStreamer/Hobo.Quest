@@ -43,6 +43,12 @@ export declare class GameServer {
    */
   private canManipulate
   onMessage(conn: GameConnection, msg: ClientMessage): void
+  /** Range + prop-protection gate shared by all container operations. */
+  private containerAccessDenied
+  /** Adds to a container with stacking; returns how many items fit. */
+  private containerAdd
+  private sendContainer
+  private dayFraction
   onDisconnect(conn: GameConnection): void
   private handleHello
   private handlePhysgun
@@ -51,6 +57,11 @@ export declare class GameServer {
   /** One grab attempt down the view ray; latches + broadcasts on success. */
   private attemptGrab
   private releaseHeld
+  /** Melee swing on another player: range + zone PvP rules + tool damage. */
+  private handleMelee
+  /** Death/rescue respawn: back to the city with restored vitals. */
+  private respawn
+  private statsWire
   step(): void
   private stepSessionMovement
   private replicate

@@ -106,6 +106,34 @@ export const ITEMS: ItemDef[] = [
     maxStack: 20,
   },
   {
+    id: 'berries',
+    name: 'Wild Berries',
+    description: 'Tart forest berries. A snack, or stew them at a campfire.',
+    category: 'food',
+    maxStack: 20,
+    food: { hunger: 8, thirst: 4, health: 0 },
+    world: {
+      shape: { type: 'sphere', radius: 0.09 },
+      massKg: 0.5,
+      color: '#5a2a4a',
+      physgun: true,
+    },
+  },
+  {
+    id: 'trail_stew',
+    name: 'Trail Stew',
+    description: 'Berries and bark simmered over a campfire. Hobo haute cuisine.',
+    category: 'food',
+    maxStack: 10,
+    food: { hunger: 42, thirst: 18, health: 10 },
+    world: {
+      shape: { type: 'cylinder', radius: 0.12, height: 0.12 },
+      massKg: 1,
+      color: '#7a4a2a',
+      physgun: true,
+    },
+  },
+  {
     id: 'rope',
     name: 'Rope',
     description: 'Braided scavenged fiber.',
@@ -173,9 +201,10 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'storage_box',
     name: 'Storage Box',
-    description: 'A lidded box for stashing goods. (Container storage soon.)',
+    description: 'A lidded box for stashing goods safely outside your pockets.',
     category: 'building',
     maxStack: 4,
+    container: { slots: 12 },
     world: {
       shape: { type: 'box', size: [0.9, 0.8, 0.6] },
       massKg: 30,
@@ -187,9 +216,10 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'campfire',
     name: 'Campfire',
-    description: 'Stone ring and kindling. Warmth and cooking, eventually.',
+    description: 'Stone ring and kindling. Cook food here.',
     category: 'building',
     maxStack: 2,
+    workstation: { kind: 'campfire', range: 2.5 },
     world: {
       shape: { type: 'cylinder', radius: 0.4, height: 0.3 },
       massKg: 15,

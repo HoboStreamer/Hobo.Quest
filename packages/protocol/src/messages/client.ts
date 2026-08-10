@@ -127,6 +127,27 @@ export const ClientUnweldSchema = z.object({
   target: z.string().max(32),
 })
 
+/** Eat/drink the food item in the given inventory slot. */
+export const ClientConsumeSchema = z.object({
+  t: z.literal('consume'),
+  slot: z.number().int().min(0).max(63),
+})
+
+/** Open a container prop (server replies with its contents). */
+export const ClientContainerOpenSchema = z.object({
+  t: z.literal('container_open'),
+  target: z.string().max(32),
+})
+
+/** Move items between the player inventory and an open container. */
+export const ClientContainerMoveSchema = z.object({
+  t: z.literal('container_move'),
+  target: z.string().max(32),
+  /** 'in': player slot -> container; 'out': container slot -> player. */
+  dir: z.enum(['in', 'out']),
+  slot: z.number().int().min(0).max(63),
+})
+
 export const ClientMessageSchema = z.union([
   ClientHelloSchema,
   ClientInputSchema,
@@ -139,6 +160,9 @@ export const ClientMessageSchema = z.union([
   ClientTrustSchema,
   ClientWeldSchema,
   ClientUnweldSchema,
+  ClientConsumeSchema,
+  ClientContainerOpenSchema,
+  ClientContainerMoveSchema,
 ])
 
 export type ClientHello = z.infer<typeof ClientHelloSchema>
@@ -152,4 +176,7 @@ export type ClientPhysgun = z.infer<typeof ClientPhysgunSchema>
 export type ClientTrust = z.infer<typeof ClientTrustSchema>
 export type ClientWeld = z.infer<typeof ClientWeldSchema>
 export type ClientUnweld = z.infer<typeof ClientUnweldSchema>
+export type ClientConsume = z.infer<typeof ClientConsumeSchema>
+export type ClientContainerOpen = z.infer<typeof ClientContainerOpenSchema>
+export type ClientContainerMove = z.infer<typeof ClientContainerMoveSchema>
 export type ClientMessage = z.infer<typeof ClientMessageSchema>

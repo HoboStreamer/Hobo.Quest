@@ -20,6 +20,9 @@ export interface ClientStateEvents {
   levelUp: { skill: string; level: number }
   weldState: { a: string; b: string; active: boolean }
   friendsChanged: { id: string; name: string }[]
+  stats: { hp: number; hunger: number; thirst: number; stamina: number; died?: boolean }
+  timeSync: number
+  container: { id: string; size: number; slots: { i: number; def: string; count: number }[] }
   disconnected: undefined
   [key: string]: unknown
 }
@@ -45,6 +48,9 @@ export class ClientState {
   readonly heldBy = new Map<string, string>()
   /** Holder entity id -> grab point in the held body's local space. */
   readonly heldGrab = new Map<string, [number, number, number]>()
+  stats = { hp: 100, hunger: 100, thirst: 100, stamina: 100 }
+  /** Shared world clock (fraction of the day cycle). */
+  dayFraction = 0.34
 
   apply(msg: ServerMessage): void {
     switch (msg.t) {
@@ -112,6 +118,17 @@ export class ClientState {
       case 'friends':
         this.friends = msg.friends
         this.events.emit('friendsChanged', msg.friends)
+        break
+      case 'stats':
+        this.stats = { hp: msg.hp, hunger: msg.hunger, thirst: msg.thirst, stamina: msg.stamina }
+        this.events.emit('stats', { ...this.stats, ...(msg.died ? { died: true } : {}) })
+        break
+      case 'time':
+        this.dayFraction = msg.frac
+        this.events.emit('timeSync', msg.frac)
+        break
+      case 'container':
+        this.events.emit('container', { id: msg.id, size: msg.size, slots: msg.slots })
         break
       case 'physgun_state': {
         // Clear any previous target held by this player, then set the new one.

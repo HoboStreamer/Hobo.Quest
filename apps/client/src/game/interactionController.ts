@@ -33,7 +33,7 @@ const _to = vec3()
 
 export interface AimTarget {
   entityId: string
-  kind: 'prop' | 'resource'
+  kind: 'prop' | 'resource' | 'player'
   def: string | undefined
   frozen: boolean
   point: { x: number; y: number; z: number }
@@ -76,12 +76,16 @@ export class InteractionController {
     _eye.z = this.player.eye.z
     this.player.viewDir(_dir)
     v3addScaled(_to, _eye, _dir, AIM_RANGE)
-    const hit = this.physics.raycast(_eye, _to, CollisionLayer.Prop)
+    const hit = this.physics.raycast(_eye, _to, CollisionLayer.Prop | CollisionLayer.Player)
     if (!hit) return null
     const entityId = this.view.entityIdForBody(hit.bodyId)
     if (!entityId) return null
     const entity = this.state.entities.get(entityId)
-    if (!entity || (entity.kind !== 'prop' && entity.kind !== 'resource')) return null
+    if (
+      !entity ||
+      (entity.kind !== 'prop' && entity.kind !== 'resource' && entity.kind !== 'player')
+    )
+      return null
     return {
       entityId,
       kind: entity.kind,
@@ -116,9 +120,16 @@ export class InteractionController {
         if (tool === 'physgun') {
           this.connection.send({ t: 'physgun', a: 'grab' })
           this.physgunActive = true
-        } else {
-          this.swing()
+          break
         }
+        // Eating: primary fire with food equipped consumes it.
+        const defId = this.state.activeItemDef()
+        if (defId && this.content.item(defId)?.food) {
+          this.connection.send({ t: 'consume', slot: this.state.activeHotbar })
+          this.onSwing?.()
+          break
+        }
+        this.swing()
         break
       }
       case 'primary_up': {
@@ -141,7 +152,13 @@ export class InteractionController {
           break
         }
         const target = this.aim()
-        if (target) this.connection.send({ t: 'use', target: target.entityId })
+        if (!target) break
+        // Containers open on E instead of being picked up.
+        if (target.def && this.content.item(target.def)?.container) {
+          this.connection.send({ t: 'container_open', target: target.entityId })
+          break
+        }
+        this.connection.send({ t: 'use', target: target.entityId })
         break
       }
       case 'use_up':

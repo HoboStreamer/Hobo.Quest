@@ -57,6 +57,22 @@ export const ItemDefSchema = z.object({
     })
     .optional(),
 
+  /** Present iff the item can be eaten/drunk (consumed from the hotbar). */
+  food: z
+    .object({
+      hunger: z.number().default(0),
+      thirst: z.number().default(0),
+      health: z.number().default(0),
+    })
+    .optional(),
+
+  /** Present iff the placed prop stores items (storage boxes, chests). */
+  container: z
+    .object({
+      slots: z.number().int().positive(),
+    })
+    .optional(),
+
   /** Present iff the item can be placed from inventory into the world. */
   placeable: z
     .object({
