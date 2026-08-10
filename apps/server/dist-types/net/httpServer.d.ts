@@ -13,5 +13,11 @@ export declare function createHttpServer(
   log: Logger,
   mapPath?: string,
   editorAuth?: EditorAuth,
+  onMapSaved?: (body: string) => void,
+  listCharacters?: (token: string) => {
+    slot: number
+    name: string
+    appearance: unknown
+  }[],
 ): Server
 //# sourceMappingURL=httpServer.d.ts.map

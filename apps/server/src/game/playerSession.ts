@@ -44,6 +44,8 @@ export interface PlayerSession {
   playerId: PlayerId
   entityId: EntityId
   token: string
+  /** Character slot under the account token (0..2). */
+  charSlot: number
   name: string
   move: PlayerMoveState
   /** Latest processed view angles (authoritative for ray origins). */
@@ -95,6 +97,7 @@ export interface SessionInit {
   playerId: PlayerId
   entityId: EntityId
   token: string
+  charSlot?: number
   name: string
   spawn: Vec3
   yaw: number
@@ -113,6 +116,7 @@ export function createSession(init: SessionInit): PlayerSession {
     playerId: init.playerId,
     entityId: init.entityId,
     token: init.token,
+    charSlot: init.charSlot ?? 0,
     name: init.name,
     move: createMoveState(init.spawn),
     yaw: init.yaw,

@@ -200,9 +200,11 @@ export class AvatarAnimator {
       // Army-crawl when moving (limbs alternate with the crawl phase).
       const crawl = Math.min(speedNorm * 4, 1)
       const cs = Math.sin(this.phase) * 0.3 * crawl
-      // Babylon is LEFT-handed: POSITIVE X rotation turns the chest
-      // skyward (the face-up prone bug) — prone pitches NEGATIVE.
-      target.bobRX = -1.42
+      // Babylon LH: POSITIVE rotation about +X carries +Y (spine) toward
+      // +Z (facing) — head goes FORWARD along the view, chest faces DOWN.
+      // (-1.42 produced the face-up/backwards prone; verified by the
+      // two-client harness side shot.)
+      target.bobRX = 1.42
       // The bob pivot sits at FOOT height; the pelvis rides 0.84 up the
       // rotated axis, so its height is bobY + 0.84*cos(bobRX) ≈ bobY+0.13.
       // bobY must stay ~0 — a negative offset here sinks the whole rotated

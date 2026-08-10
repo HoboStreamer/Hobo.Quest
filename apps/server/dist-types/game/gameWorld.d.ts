@@ -26,6 +26,10 @@ export declare class GameWorld {
   constructor(content: ContentRegistry, physics: PhysicsWorld, log: Logger)
   /** Static level geometry — mirrored by the client from the same world def. */
   private buildStaticWorld
+  private terrainBody
+  private buildTerrainBody
+  /** Live map edit: swap the terrain collision for the new heightfield. */
+  rebuildTerrain(): void
   bodyOf(id: EntityId): BodyId | undefined
   entityOfBody(body: BodyId): GameEntity | undefined
   spawnProp(opts: {

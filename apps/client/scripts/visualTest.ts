@@ -59,6 +59,8 @@ async function main(): Promise<void> {
   })
 
   await page.goto(`http://127.0.0.1:${PORT}/`)
+  await page.waitForSelector('.char-slot', { timeout: 60000 })
+  await page.click('.char-slot')
   await page.waitForSelector('#btn-join', { timeout: 30000 })
   await page.waitForTimeout(2500) // engine boot + first preview frames
   await shot(page, '01-customize-male')
@@ -376,7 +378,9 @@ async function main(): Promise<void> {
     const ctx = await browser.newContext({ viewport: { width: 800, height: 600 } })
     const p2 = await ctx.newPage()
     await p2.goto(`http://127.0.0.1:${PORT}/?vmrot=${rot}`)
-    await p2.waitForSelector('#btn-join', { timeout: 120000 })
+    await p2.waitForSelector('.char-slot', { timeout: 120000 })
+    await p2.click('.char-slot')
+    await p2.waitForSelector('#btn-join', { timeout: 30000 })
     await p2.waitForTimeout(1500)
     await p2.click('#btn-join')
     await p2.waitForTimeout(3500)

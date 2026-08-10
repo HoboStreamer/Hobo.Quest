@@ -35,6 +35,8 @@ export interface PlayerDto {
   friends: string[]
   /** Avatar customization; null until the player first customizes. */
   appearance: Appearance | null
+  /** Character slot under this account token (0..2, MMO-style). */
+  charSlot: number
   /** Survival vitals; null for players from before the survival system. */
   stats: { health: number; hunger: number; thirst: number; stamina: number } | null
   updatedAt: number

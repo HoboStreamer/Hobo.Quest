@@ -7,7 +7,13 @@ export declare class Connection {
   private ws
   onMessage: ((msg: ServerMessage) => void) | null
   onClose: (() => void) | null
-  connect(url: string, token: string, name: string, appearance: Appearance): Promise<void>
+  connect(
+    url: string,
+    token: string,
+    name: string,
+    appearance: Appearance,
+    slot?: number,
+  ): Promise<void>
   send(msg: ClientMessage): void
   get open(): boolean
 }

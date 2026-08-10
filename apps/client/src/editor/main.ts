@@ -350,6 +350,52 @@ async function boot(): Promise<void> {
     })()
   })
 
+  // ── Collaboration: poll for saves from OTHER admins and fold them in
+  // (heights + paint refresh when we're not mid-stroke). Last save wins.
+  let lastSaved = JSON.stringify({ h: encodeHeights(heights).length, s: placedStatics.length })
+  setInterval(() => {
+    if (painting) return
+    void (async () => {
+      try {
+        const map = (await (await fetch('/map.json')).json()) as MapFile | null
+        if (!map || map.v !== 1 || map.sub !== SUB) return
+        const sig = JSON.stringify({ h: map.heights.length, s: map.statics.length })
+        if (sig === lastSaved) return
+        lastSaved = sig
+        const remote = decodeHeights(map.heights)
+        heights.set(remote)
+        for (let j = 0; j <= SUB; j++) {
+          for (let i = 0; i <= SUB; i++) {
+            posBuf[vtx(i, j) * 3 + 1] = heights[j * (SUB + 1) + i] ?? 0
+          }
+        }
+        terrain.updateVerticesData(VertexBuffer.PositionKind, posBuf, true)
+        const nn: number[] = []
+        VertexData.ComputeNormals(posBuf, indices, nn)
+        terrain.updateVerticesData(VertexBuffer.NormalKind, nn, true)
+        if (map.mix) {
+          const img = new Image()
+          img.onload = () => {
+            mixCtx.drawImage(img, 0, 0, MIX, MIX)
+            mixTex.update()
+          }
+          img.src = map.mix
+        }
+        for (const [mesh, body] of staticMeshes) {
+          if (body) {
+            staticMeshes.delete(mesh)
+            mesh.dispose()
+          }
+        }
+        placedStatics = map.statics
+        for (const st of placedStatics) renderStatic(st, true)
+        status.textContent = '🔄 merged edits from another admin'
+      } catch {
+        // offline poll — ignore
+      }
+    })()
+  }, 4000)
+
   engine.runRenderLoop(() => scene.render())
   window.addEventListener('resize', () => engine.resize())
   void Quaternion

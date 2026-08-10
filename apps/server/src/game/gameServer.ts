@@ -581,13 +581,14 @@ export class GameServer {
       return
     }
 
-    const existing = this.store.players.findByToken(msg.token)
-    // A token can only drive one live session; kick the older one.
-    if (existing) {
-      for (const s of this.sessions.values()) {
-        if (s.token === msg.token) {
-          s.closeConnection(4004, 'session_superseded')
-        }
+    const slot = msg.slot ?? 0
+    const existing = this.store.players.findByTokenSlot(msg.token, slot)
+    // One live session per CHARACTER; other characters of the same account
+    // may stay online (an account still only plays one at a time in
+    // practice — same token kicks apply per slot).
+    for (const s of this.sessions.values()) {
+      if (s.token === msg.token && s.charSlot === slot) {
+        s.closeConnection(4004, 'session_superseded')
       }
     }
 
@@ -621,6 +622,7 @@ export class GameServer {
 
     const session = createSession({
       playerId,
+      charSlot: slot,
       entityId: newEntityId(),
       token: msg.token,
       name: msg.name,
@@ -1193,6 +1195,7 @@ export class GameServer {
     return {
       id: session.playerId as string,
       token: session.token,
+      charSlot: session.charSlot,
       name: session.name,
       pos: [pos.x, pos.y, pos.z],
       yaw: session.yaw,
@@ -1284,6 +1287,12 @@ export class GameServer {
     for (const session of this.sessions.values()) {
       if (session.known.has(id)) this.sendRaw(session, encoded)
     }
+  }
+
+  /** Live map edit: every client refetches and rebuilds its terrain. */
+  broadcastMapReload(): void {
+    this.broadcastAll({ t: 'map_reload' })
+    this.broadcastAll({ t: 'announce', text: '🗺 The world was reshaped by the map editors…' })
   }
 
   /** Exposes crafting context for the client-facing recipe availability (welcome-time). */

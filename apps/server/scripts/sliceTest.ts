@@ -107,6 +107,7 @@ class TestClient {
       t: 'hello',
       v: PROTOCOL_VERSION,
       token,
+      slot: 0,
       name,
       appearance: appearance ?? defaultAppearance(),
     })

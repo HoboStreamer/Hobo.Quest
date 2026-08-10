@@ -23,4 +23,10 @@ export declare function buildStaticWorld(
   content: ContentRegistry,
   mapMix?: string,
 ): void
+/** Live map edit: replace the rendered terrain with the new grid + paint. */
+export declare function rebuildTerrainVisual(
+  scene: Scene,
+  content: ContentRegistry,
+  mix?: string,
+): void
 //# sourceMappingURL=sceneSetup.d.ts.map

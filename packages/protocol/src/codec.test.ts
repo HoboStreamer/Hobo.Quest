@@ -10,6 +10,7 @@ describe('protocol codec', () => {
         t: 'hello',
         v: 1,
         token: 'abcdefgh12345678',
+        slot: 0,
         name: 'Tester',
         appearance: defaultAppearance(),
       },

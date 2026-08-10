@@ -58,6 +58,8 @@ export function createHttpServer(
   log: Logger,
   mapPath?: string,
   editorAuth?: EditorAuth,
+  onMapSaved?: (body: string) => void,
+  listCharacters?: (token: string) => { slot: number; name: string; appearance: unknown }[],
 ): Server {
   const root = staticDir ? resolve(staticDir) : null
   return createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -95,14 +97,21 @@ export function createHttpServer(
             mkdirSync(dirname(mapPath), { recursive: true })
             writeFileSync(mapPath, body)
             log.info('map saved by editor', { bytes: body.length })
+            onMapSaved?.(body)
             res.writeHead(200, { 'content-type': 'application/json' })
-            res.end('{"ok":true,"note":"restart the server to apply the map to physics"}')
+            res.end('{"ok":true,"live":true}')
           } catch {
             res.writeHead(400, { 'content-type': 'application/json' })
             res.end('{"error":"bad_map"}')
           }
         })
       })
+      return
+    }
+    if (url === '/api/characters' && listCharacters) {
+      const token = new URL(req.url ?? '/', 'http://x').searchParams.get('token') ?? ''
+      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' })
+      res.end(JSON.stringify(token.length >= 8 ? listCharacters(token) : []))
       return
     }
     if (url === '/healthz') {

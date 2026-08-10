@@ -69,6 +69,27 @@ async function main(): Promise<void> {
       key: config.editorKey,
       hoboToolsUrl: config.hoboToolsAuthUrl,
     },
+    (body) => {
+      // LIVE map apply: swap the heightfield under everyone's feet and tell
+      // clients to refetch + rebuild. (Statics still need a restart; the
+      // editor works on terrain/paint live.)
+      try {
+        const raw = JSON.parse(body) as MapFile | null
+        if (raw && raw.v === 1) {
+          setMapOverride(mapFileToOverride(raw))
+          world.rebuildTerrain()
+          game.broadcastMapReload()
+          log.info('map applied live', { sub: raw.sub })
+        }
+      } catch (err) {
+        log.warn('live map apply failed', { error: String(err) })
+      }
+    },
+    (token) =>
+      store.players
+        .listByToken(token)
+        .slice(0, 3)
+        .map((p) => ({ slot: p.charSlot, name: p.name, appearance: p.appearance })),
   )
   attachWebSocket(http, game, log.child({ system: 'ws' }))
   http.listen(config.port, config.host, () => {

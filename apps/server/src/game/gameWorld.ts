@@ -77,14 +77,7 @@ export class GameWorld {
     })
     // Heightfield terrain — the SAME grid the client builds for prediction
     // and rendering (see @hobo/content buildTerrainGrid).
-    const grid = buildTerrainGrid(world)
-    this.physics.addBody({
-      shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
-      motion: 'static',
-      pos: vec3(0, 0, 0),
-      layer: CollisionLayer.Static,
-      collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
-    })
+    this.terrainBody = this.buildTerrainBody()
     // Invisible boundary walls: past the terrain edge there is only ocean
     // and an endless fall — the island's edge is the end of the world.
     const b = world.groundHalfExtent + 0.5
@@ -113,6 +106,25 @@ export class GameWorld {
         collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
       })
     }
+  }
+
+  private terrainBody: BodyId | null = null
+
+  private buildTerrainBody(): BodyId {
+    const grid = buildTerrainGrid(this.content.world)
+    return this.physics.addBody({
+      shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
+      motion: 'static',
+      pos: vec3(0, 0, 0),
+      layer: CollisionLayer.Static,
+      collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+    })
+  }
+
+  /** Live map edit: swap the terrain collision for the new heightfield. */
+  rebuildTerrain(): void {
+    if (this.terrainBody !== null) this.physics.removeBody(this.terrainBody)
+    this.terrainBody = this.buildTerrainBody()
   }
 
   bodyOf(id: EntityId): BodyId | undefined {

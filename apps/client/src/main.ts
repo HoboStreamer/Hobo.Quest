@@ -4,6 +4,7 @@ import { createContent, mapFileToOverride, setMapOverride, type MapFile } from '
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import type { Appearance } from '@hobo/protocol'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { WATER_LEVEL } from '@hobo/content'
@@ -15,9 +16,15 @@ import { BeamRenderer, type BeamState } from './render/beams.js'
 import { EntityView } from './render/entityView.js'
 import { Environment } from './render/environment.js'
 import { FirstPersonBody } from './render/firstPersonBody.js'
-import { buildStaticWorld, createEngine, createScene } from './render/sceneSetup.js'
+import {
+  buildStaticWorld,
+  createEngine,
+  createScene,
+  rebuildTerrainVisual,
+} from './render/sceneSetup.js'
 import { Viewmodel } from './render/viewmodel.js'
 import { ClientState } from './state/clientState.js'
+import { characterSelect, type CharacterInfo } from './ui/characterSelect.js'
 import { customizeScreen } from './ui/customizeScreen.js'
 import { Hud } from './ui/hud.js'
 import { IconFactory } from './ui/iconFactory.js'
@@ -76,17 +83,35 @@ async function start(): Promise<void> {
     e.preventDefault()
   })
 
-  const { name, appearance, releaseCamera } = await customizeScreen(
-    scene,
-    content,
-    uiRoot,
-    identity.name,
-  )
+  // MMO-style character select: pick an existing drifter or claim a slot.
+  let characters: CharacterInfo[] = []
+  try {
+    characters = (await (
+      await fetch(`/api/characters?token=${encodeURIComponent(identity.token)}`)
+    ).json()) as CharacterInfo[]
+  } catch {
+    characters = []
+  }
+  const choice = await characterSelect(uiRoot, characters)
+  let name: string
+  let appearance: Appearance
+  let releaseCamera: () => void
+  if (choice.existing?.appearance) {
+    name = choice.existing.name
+    appearance = { ...choice.existing.appearance, height: 1, build: 1 }
+    releaseCamera = () => {}
+  } else {
+    const created = await customizeScreen(scene, content, uiRoot, identity.name)
+    name = created.name
+    appearance = created.appearance
+    releaseCamera = created.releaseCamera
+  }
+  const slot = choice.slot
   saveName(name)
 
   const havok = await havokPromise
   const physics = createHavokWorldForScene(scene, havok)
-  const { buildStaticPhysics } = await import('./game/staticPhysics.js')
+  const { buildStaticPhysics, rebuildTerrainPhysics } = await import('./game/staticPhysics.js')
   buildStaticPhysics(physics, content)
 
   const state = new ClientState()
@@ -179,6 +204,20 @@ async function start(): Promise<void> {
   })
   connection.onMessage = (msg) => {
     state.apply(msg)
+    if (msg.t === 'map_reload') {
+      void (async () => {
+        try {
+          const map = (await (await fetch('/map.json')).json()) as MapFile | null
+          if (map && map.v === 1) {
+            setMapOverride(mapFileToOverride(map))
+            rebuildTerrainPhysics(physics, content)
+            rebuildTerrainVisual(scene, content, map.mix)
+          }
+        } catch {
+          // keep the old terrain if the fetch fails
+        }
+      })()
+    }
     if (msg.t === 'time') environment.setDayFraction(msg.frac)
     if (msg.t === 'snap') {
       player.onSnapshot(msg)
@@ -194,7 +233,7 @@ async function start(): Promise<void> {
 
   hud.setStatus('connecting…')
   try {
-    await connection.connect(gameSocketUrl(), identity.token, name, appearance)
+    await connection.connect(gameSocketUrl(), identity.token, name, appearance, slot)
   } catch {
     hud.setStatus('could not reach server — is it running?')
     return

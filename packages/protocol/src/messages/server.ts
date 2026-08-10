@@ -157,6 +157,11 @@ export interface ServerTime {
   frac: number
 }
 
+/** The world map was edited live — refetch /map.json and rebuild terrain. */
+export interface ServerMapReload {
+  t: 'map_reload'
+}
+
 /** Transient visual effect on an entity (hurt flinch, death...). */
 export interface ServerFx {
   t: 'fx'
@@ -198,3 +203,4 @@ export type ServerMessage =
   | ServerContainer
   | ServerAnnounce
   | ServerFx
+  | ServerMapReload

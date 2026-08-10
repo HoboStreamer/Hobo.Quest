@@ -1,5 +1,5 @@
 import { buildTerrainGrid, type ContentRegistry } from '@hobo/content'
-import { CollisionLayer, type PhysicsWorld } from '@hobo/physics'
+import { CollisionLayer, type BodyId, type PhysicsWorld } from '@hobo/physics'
 import { qfromEuler, qfromYaw, quat, vec3 } from '@hobo/shared'
 
 /**
@@ -18,7 +18,7 @@ export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegist
     collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
   })
   const grid = buildTerrainGrid(world)
-  physics.addBody({
+  lastTerrainBody = physics.addBody({
     shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
     motion: 'static',
     pos: vec3(0, 0, 0),
@@ -57,4 +57,19 @@ export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegist
       collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
     })
   }
+}
+
+let lastTerrainBody: BodyId | null = null
+
+/** Live map edit: swap the prediction terrain body for the new grid. */
+export function rebuildTerrainPhysics(physics: PhysicsWorld, content: ContentRegistry): void {
+  if (lastTerrainBody !== null) physics.removeBody(lastTerrainBody)
+  const grid = buildTerrainGrid(content.world)
+  lastTerrainBody = physics.addBody({
+    shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
+    motion: 'static',
+    pos: vec3(0, 0, 0),
+    layer: CollisionLayer.Static,
+    collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+  })
 }

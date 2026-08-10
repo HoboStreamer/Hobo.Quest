@@ -17,6 +17,9 @@ export interface WorldEntityRepository {
 
 export interface PlayerRepository {
   findByToken(token: string): PlayerDto | null
+  /** All characters under an account token (max 3, ordered by slot). */
+  listByToken(token: string): PlayerDto[]
+  findByTokenSlot(token: string, slot: number): PlayerDto | null
   /** Offline lookups (prop protection checks owners who are not connected). */
   findById(id: string): PlayerDto | null
   upsert(player: PlayerDto): void

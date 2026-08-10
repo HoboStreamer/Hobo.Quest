@@ -258,6 +258,17 @@ function dropletTexture(): string {
   return canvas.toDataURL()
 }
 
+/** Live map edit: replace the rendered terrain with the new grid + paint. */
+export function rebuildTerrainVisual(scene: Scene, content: ContentRegistry, mix?: string): void {
+  scene.getMeshByName('terrain')?.dispose(false, true)
+  scene.getMeshByName('terrain-skirt')?.dispose(false, true)
+  const meshes = buildTerrainMesh(scene, content, mix)
+  // Water reflections keep working on the fresh meshes.
+  const waterMat = scene.getMeshByName('water')?.material as
+    { addToRenderList?: (m: unknown) => void } | undefined
+  for (const m of meshes) waterMat?.addToRenderList?.(m)
+}
+
 /**
  * Terrain: the SHARED heightfield grid (same one physics collides with)
  * rendered with 3-way texture splatting — grass everywhere, rock in the

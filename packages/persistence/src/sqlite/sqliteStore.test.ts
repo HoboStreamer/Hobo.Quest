@@ -54,6 +54,7 @@ describe('sqlite store', () => {
       skills: { woodcutting: 120, mining: 40 },
       friends: ['p2', 'p3'],
       stats: { health: 90, hunger: 80, thirst: 70, stamina: 100 },
+      charSlot: 0,
       appearance: {
         body: 'female',
         skin: 3,
@@ -128,7 +129,7 @@ describe('sqlite store', () => {
       { id: 'c1', type: 'weld', entityA: 'x', entityB: 'y', updatedAt: 1 },
     ])
     expect(store.constraints.loadAll()).toHaveLength(1)
-    expect(store.meta.get('schema_version')).toBe('5')
+    expect(store.meta.get('schema_version')).toBe('6')
     store.close()
   })
 

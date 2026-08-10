@@ -16,7 +16,13 @@ export class Connection {
   onMessage: ((msg: ServerMessage) => void) | null = null
   onClose: (() => void) | null = null
 
-  async connect(url: string, token: string, name: string, appearance: Appearance): Promise<void> {
+  async connect(
+    url: string,
+    token: string,
+    name: string,
+    appearance: Appearance,
+    slot = 0,
+  ): Promise<void> {
     const ws = new WebSocket(url)
     this.ws = ws
     await new Promise<void>((resolve, reject) => {
@@ -28,7 +34,7 @@ export class Connection {
       if (msg) this.onMessage?.(msg)
     }
     ws.onclose = () => this.onClose?.()
-    this.send({ t: 'hello', v: PROTOCOL_VERSION, token, name, appearance })
+    this.send({ t: 'hello', v: PROTOCOL_VERSION, token, slot, name, appearance })
   }
 
   send(msg: ClientMessage): void {

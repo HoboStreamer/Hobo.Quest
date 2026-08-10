@@ -89,6 +89,8 @@ export declare class GameServer {
   private broadcastSpawn
   private broadcastDespawn
   private broadcastToKnowing
+  /** Live map edit: every client refetches and rebuilds its terrain. */
+  broadcastMapReload(): void
   /** Exposes crafting context for the client-facing recipe availability (welcome-time). */
   workstationsNear(session: PlayerSession): ReadonlySet<string>
 }

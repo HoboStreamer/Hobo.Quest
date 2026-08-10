@@ -18,7 +18,7 @@ import type {
  * a database is upgraded step by step inside a transaction per step.
  */
 
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_entities (
@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS world_entities (
 );
 CREATE TABLE IF NOT EXISTS players (
   id TEXT PRIMARY KEY,
-  token TEXT NOT NULL UNIQUE,
+  token TEXT NOT NULL,
+  char_slot INTEGER NOT NULL DEFAULT 0,
   name TEXT NOT NULL,
   pos_x REAL NOT NULL, pos_y REAL NOT NULL, pos_z REAL NOT NULL,
   yaw REAL NOT NULL,
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS players (
   stats TEXT,
   updated_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_players_token_slot ON players (token, char_slot);
 CREATE TABLE IF NOT EXISTS constraints (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL,
@@ -81,6 +83,31 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
   4: (db) => {
     db.exec('ALTER TABLE players ADD COLUMN stats TEXT;')
   },
+  5: (db) => {
+    // Multi-character accounts: token is no longer unique — (token, slot)
+    // is. SQLite can't drop a UNIQUE constraint, so rebuild the table.
+    db.exec(`
+      ALTER TABLE players RENAME TO players_old;
+      CREATE TABLE players (
+        id TEXT PRIMARY KEY,
+        token TEXT NOT NULL,
+        char_slot INTEGER NOT NULL DEFAULT 0,
+        name TEXT NOT NULL,
+        pos_x REAL NOT NULL, pos_y REAL NOT NULL, pos_z REAL NOT NULL,
+        yaw REAL NOT NULL,
+        inventory TEXT NOT NULL,
+        skills TEXT NOT NULL DEFAULT '{}',
+        friends TEXT NOT NULL DEFAULT '[]',
+        appearance TEXT,
+        stats TEXT,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO players (id, token, char_slot, name, pos_x, pos_y, pos_z, yaw, inventory, skills, friends, appearance, stats, updated_at)
+        SELECT id, token, 0, name, pos_x, pos_y, pos_z, yaw, inventory, skills, friends, appearance, stats, updated_at FROM players_old;
+      DROP TABLE players_old;
+      CREATE UNIQUE INDEX idx_players_token_slot ON players (token, char_slot);
+    `)
+  },
 }
 
 interface WorldEntityRow {
@@ -113,6 +140,7 @@ interface PlayerRow {
   friends: string
   appearance: string | null
   stats: string | null
+  char_slot: number
   updated_at: number
 }
 
@@ -222,8 +250,8 @@ export function openSqliteStore(path: string): PersistenceStore {
   }
 
   const upsertPlayer = db.prepare(`
-    INSERT INTO players (id, token, name, pos_x, pos_y, pos_z, yaw, inventory, skills, friends, appearance, stats, updated_at)
-    VALUES (@id, @token, @name, @pos_x, @pos_y, @pos_z, @yaw, @inventory, @skills, @friends, @appearance, @stats, @updated_at)
+    INSERT INTO players (id, token, char_slot, name, pos_x, pos_y, pos_z, yaw, inventory, skills, friends, appearance, stats, updated_at)
+    VALUES (@id, @token, @char_slot, @name, @pos_x, @pos_y, @pos_z, @yaw, @inventory, @skills, @friends, @appearance, @stats, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       name=excluded.name, pos_x=excluded.pos_x, pos_y=excluded.pos_y, pos_z=excluded.pos_z,
       yaw=excluded.yaw, inventory=excluded.inventory, skills=excluded.skills, friends=excluded.friends, appearance=excluded.appearance, stats=excluded.stats, updated_at=excluded.updated_at
@@ -244,6 +272,7 @@ export function openSqliteStore(path: string): PersistenceStore {
     friends: JSON.parse(row.friends || '[]') as string[],
     appearance: row.appearance ? (JSON.parse(row.appearance) as PlayerDto['appearance']) : null,
     stats: row.stats ? (JSON.parse(row.stats) as PlayerDto['stats']) : null,
+    charSlot: row.char_slot ?? 0,
     updatedAt: row.updated_at,
   })
 
@@ -260,10 +289,23 @@ export function openSqliteStore(path: string): PersistenceStore {
     friends: JSON.stringify(p.friends),
     appearance: p.appearance ? JSON.stringify(p.appearance) : null,
     stats: p.stats ? JSON.stringify(p.stats) : null,
+    char_slot: p.charSlot ?? 0,
     updated_at: p.updatedAt,
   })
 
   const players: PlayerRepository = {
+    listByToken(token: string): PlayerDto[] {
+      const rows = db
+        .prepare('SELECT * FROM players WHERE token = ? ORDER BY char_slot')
+        .all(token) as PlayerRow[]
+      return rows.map(rowToPlayer)
+    },
+    findByTokenSlot(token: string, slot: number): PlayerDto | null {
+      const row = db
+        .prepare('SELECT * FROM players WHERE token = ? AND char_slot = ?')
+        .get(token, slot) as PlayerRow | undefined
+      return row ? rowToPlayer(row) : null
+    },
     findByToken(token: string): PlayerDto | null {
       const row = selectPlayerByToken.get(token)
       return row ? rowToPlayer(row) : null

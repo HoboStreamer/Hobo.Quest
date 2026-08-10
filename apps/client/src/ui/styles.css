@@ -858,3 +858,17 @@ input {
   color: #b99;
   letter-spacing: 0.1em;
 }
+
+.char-slot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 14px 16px;
+  margin-top: 8px;
+  font-size: 15px;
+}
+.char-slot span {
+  color: #78828e;
+  font-size: 12px;
+}
