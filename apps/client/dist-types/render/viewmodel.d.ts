@@ -31,11 +31,12 @@ export declare class Viewmodel {
      */
     private hands;
     /**
-     * One first-person arm: outfit sleeve + skin wrist + chunky fist with a
-     * knuckle ridge and thumb. `m` mirrors offsets/rotations for the left arm
-     * (never negative scaling — that flips winding and culls the mesh).
-     * NOTE: the rig is yawed PI, so local +x renders on the LEFT of screen
-     * and local -z is world-forward.
+     * One first-person arm, matching the avatar's clean low-poly look: a
+     * single straight chain (mitt fist -> skin wrist -> outfit sleeve) that
+     * shares ONE rotation, so there are no open seams or stray flaps. `m`
+     * mirrors offsets for the left arm (never negative scaling — that flips
+     * winding and culls the mesh). Rig is yawed PI: local +x renders LEFT,
+     * local -z is world-forward.
      */
     private buildArm;
     private leftFist;
