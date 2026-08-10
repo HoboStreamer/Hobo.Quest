@@ -198,7 +198,11 @@ export class AvatarAnimator {
       const crawl = Math.min(speedNorm * 4, 1)
       const cs = Math.sin(this.phase) * 0.3 * crawl
       target.bobRX = 1.42
-      target.bobY = -0.66
+      // The bob pivot sits at FOOT height; the pelvis rides 0.84 up the
+      // rotated axis, so its height is bobY + 0.84*cos(bobRX) ≈ bobY+0.13.
+      // bobY must stay ~0 — a negative offset here sinks the whole rotated
+      // body underground (the prone-under-the-floor bug, twice).
+      target.bobY = 0.04
       // Legs nearly straight along the ground, slight spread via alternate
       // hip angles while crawling.
       target.hipLX = -0.04 + cs
