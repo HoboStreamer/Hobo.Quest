@@ -3,7 +3,9 @@ import type {
   WireCraftJob,
   WireEntity,
   WireInventory,
-  WirePlayerState,, WirePlant } from '../wire.js'
+  WirePlayerState,
+  WirePlant,
+} from '../wire.js'
 
 /**
  * Server -> client messages. Plain types (no zod): the client trusts the
