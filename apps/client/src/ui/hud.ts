@@ -103,6 +103,7 @@ export class Hud {
       <div class="prompt" id="prompt"></div>
       <div class="toast-area" id="toasts"></div>
       <div class="status" id="status"></div>
+      <div class="edit-indicator" id="edit-indicator">🛠 EDIT MODE — noclip · Space up · Ctrl down · Shift fast</div>
       <div class="menu" id="menu">
         <div class="menu-tabs" id="menu-tabs"></div>
         <div class="menu-body" id="menu-body"></div>
@@ -349,6 +350,7 @@ export class Hud {
   toggleMenu(): void {
     this.menuOpen = !this.menuOpen
     this.menuEl.style.display = this.menuOpen ? 'flex' : 'none'
+    this.renderTabs()
     this.renderMenu()
     this.onUiCaptureChange?.(this.menuOpen)
   }
@@ -362,6 +364,8 @@ export class Hud {
     this.renderTabs()
     this.renderMenu()
   }
+
+  private editMode = false
 
   private renderTabs(): void {
     const tabs = this.byId('menu-tabs')
@@ -379,6 +383,26 @@ export class Hud {
       b.textContent = label
       b.addEventListener('click', () => this.setTab(tab))
       tabs.appendChild(b)
+    }
+    // Staff-only build tools, MMO-GM style: noclip fly toggle + the full
+    // terrain/map editor in a new tab.
+    if (this.state.myRank === 'owner' || this.state.myRank === 'admin') {
+      const edit = document.createElement('button')
+      edit.className = this.editMode ? 'menu-tab edit-toggle active' : 'menu-tab edit-toggle'
+      edit.textContent = this.editMode ? '🛠 Exit Edit Mode' : '🛠 Edit Mode'
+      edit.addEventListener('click', () => {
+        this.editMode = !this.editMode
+        this.connection.send({ t: 'editmode', on: this.editMode })
+        this.renderTabs()
+        const ind = this.byId('edit-indicator')
+        ind.style.display = this.editMode ? 'block' : 'none'
+      })
+      tabs.appendChild(edit)
+      const mapEd = document.createElement('button')
+      mapEd.className = 'menu-tab edit-toggle'
+      mapEd.textContent = '🗺 Map Editor'
+      mapEd.addEventListener('click', () => window.open('/editor.html', '_blank'))
+      tabs.appendChild(mapEd)
     }
   }
 

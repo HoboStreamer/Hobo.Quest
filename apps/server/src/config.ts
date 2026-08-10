@@ -9,6 +9,8 @@ export interface ServerConfig {
   hoboToolsAuthUrl: string | null
   /** Bind fresh guest tokens to client IPs (off in tests: peers share an IP). */
   guestIpBinding: boolean
+  /** hobo.tools OAuth client (SSO); null until the secret is configured. */
+  oauth: { clientId: string; clientSecret: string; baseUrl: string; selfUrl: string } | null
   tickRate: number
   /** Send a snapshot every N ticks. */
   snapshotEvery: number
@@ -29,8 +31,20 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
     /** Fallback admin secret for the map editor (until hobo.tools SSO). */
     editorKey: env.EDITOR_KEY ?? null,
     /** hobo.tools auth endpoint; when set, editor tokens validate there. */
-    hoboToolsAuthUrl: env.HOBO_TOOLS_AUTH_URL ?? null,
+    hoboToolsAuthUrl:
+      env.HOBO_TOOLS_AUTH_URL ??
+      (env.HOBO_OAUTH_CLIENT_SECRET
+        ? `${env.HOBO_TOOLS_URL ?? 'https://hobo.tools'}/api/auth/me`
+        : null),
     guestIpBinding: env.GUEST_IP_BINDING !== 'off',
+    oauth: env.HOBO_OAUTH_CLIENT_SECRET
+      ? {
+          clientId: env.HOBO_OAUTH_CLIENT_ID ?? 'hoboquest',
+          clientSecret: env.HOBO_OAUTH_CLIENT_SECRET,
+          baseUrl: env.HOBO_TOOLS_URL ?? 'https://hobo.tools',
+          selfUrl: env.SELF_URL ?? 'https://hobo.quest',
+        }
+      : null,
     tickRate: 30,
     snapshotEvery: 2,
     interestRadius: intEnv(env, 'INTEREST_RADIUS', 80),

@@ -9,6 +9,13 @@ export interface ServerConfig {
   hoboToolsAuthUrl: string | null
   /** Bind fresh guest tokens to client IPs (off in tests: peers share an IP). */
   guestIpBinding: boolean
+  /** hobo.tools OAuth client (SSO); null until the secret is configured. */
+  oauth: {
+    clientId: string
+    clientSecret: string
+    baseUrl: string
+    selfUrl: string
+  } | null
   tickRate: number
   /** Send a snapshot every N ticks. */
   snapshotEvery: number

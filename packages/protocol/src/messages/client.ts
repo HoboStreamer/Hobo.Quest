@@ -26,6 +26,12 @@ export const ClientHelloSchema = z.object({
  * validates command counts to prevent speedup, and simulates movement itself —
  * the client never reports a position.
  */
+/** Admin/owner only: toggle edit mode (noclip fly). Server checks rank. */
+export const ClientEditModeSchema = z.object({
+  t: z.literal('editmode'),
+  on: z.boolean(),
+})
+
 export const ClientInputSchema = z.object({
   t: z.literal('input'),
   seq: z.number().int().nonnegative(),
@@ -164,6 +170,7 @@ export const ClientContainerMoveSchema = z.object({
 })
 
 export const ClientMessageSchema = z.union([
+  ClientEditModeSchema,
   ClientHelloSchema,
   ClientInputSchema,
   ClientUseSchema,

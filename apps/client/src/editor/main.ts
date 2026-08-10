@@ -184,7 +184,9 @@ async function boot(): Promise<void> {
     placeSel.appendChild(o)
   })
   const status = document.getElementById('status') as HTMLElement
-  $('key').value = localStorage.getItem('hobo.editorkey') ?? ''
+  // Admins signed in via hobo.tools SSO don't need a shared key — their
+  // session token authorizes map saves directly.
+  $('key').value = localStorage.getItem('hobo.editorkey') ?? localStorage.getItem('hq_sso') ?? ''
 
   // ── Sculpt/paint core ───────────────────────────────────────────────
   const posBuf = terrain.getVerticesData(VertexBuffer.PositionKind) as Float32Array

@@ -75,6 +75,8 @@ export interface PlayerMoveState {
   stanceDur: number
   /** Post-transition lockout remaining. */
   stanceCooldown: number
+  /** Admin edit mode: fly through everything, no gravity, no collision. */
+  noclip: boolean
 }
 
 export function createMoveState(spawn: Vec3): PlayerMoveState {
@@ -89,6 +91,7 @@ export function createMoveState(spawn: Vec3): PlayerMoveState {
     stanceT: 0,
     stanceDur: 0,
     stanceCooldown: 0,
+    noclip: false,
   }
 }
 
@@ -96,6 +99,48 @@ export function createMoveState(spawn: Vec3): PlayerMoveState {
 export function stanceProgress(state: PlayerMoveState): number {
   if (state.stanceT <= 0 || state.stanceDur <= 0) return 1
   return 1 - state.stanceT / state.stanceDur
+}
+
+/**
+ * Source-style noclip: wish direction follows the FULL view (pitch included)
+ * so you fly where you look; jump rises, crouch sinks. No gravity, no
+ * collision, exponential ease toward the wish velocity for a smooth feel.
+ */
+function noclipMove(
+  state: PlayerMoveState,
+  input: MoveInput,
+  params: MovementParams,
+  dt: number,
+): void {
+  const sy = Math.sin(input.yaw)
+  const cy = Math.cos(input.yaw)
+  const sp = Math.sin(input.pitch)
+  const cp = Math.cos(input.pitch)
+  const mx = clamp(input.moveX, -1, 1)
+  const mz = clamp(input.moveZ, -1, 1)
+  _wishdir.x = cy * mx + sy * mz * cp
+  _wishdir.y = -sp * mz
+  _wishdir.z = -sy * mx + cy * mz * cp
+  if ((input.buttons & Buttons.Jump) !== 0) _wishdir.y += 1
+  if ((input.buttons & Buttons.Crouch) !== 0) _wishdir.y -= 1
+  const len = Math.sqrt(v3lengthSq(_wishdir))
+  if (len > 1e-6) {
+    _wishdir.x /= len
+    _wishdir.y /= len
+    _wishdir.z /= len
+  }
+  const speed =
+    params.maxSprintSpeed * ((input.buttons & Buttons.Sprint) !== 0 ? 5 : 2.5) * Math.min(len, 1)
+  const blend = 1 - Math.exp(-12 * dt)
+  state.vel.x += (_wishdir.x * speed - state.vel.x) * blend
+  state.vel.y += (_wishdir.y * speed - state.vel.y) * blend
+  state.vel.z += (_wishdir.z * speed - state.vel.z) * blend
+  v3addScaled(state.pos, state.pos, state.vel, dt)
+  state.grounded = false
+  state.stance = Stance.Stand
+  state.stanceT = 0
+  state.stanceCooldown = 0
+  state.proneActive = false
 }
 
 const MAX_CLIP_PLANES = 5
@@ -386,6 +431,10 @@ export function stepMovement(
   world: CollisionQueries,
   dt: number,
 ): void {
+  if (state.noclip) {
+    noclipMove(state, input, params, dt)
+    return
+  }
   updateStance(state, input, params, world, dt)
   const hull = hullHeightFor(state.stance)
 

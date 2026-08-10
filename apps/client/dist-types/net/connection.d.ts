@@ -19,6 +19,11 @@ export declare class Connection {
   get open(): boolean
 }
 /** Persistent anonymous identity (interim auth — see ADR-0004). */
+/**
+ * Guest identity token: localStorage primary, a long-lived cookie as
+ * backup (survives localStorage wipes), and the server additionally maps
+ * the token to the client IP — three chances to keep a guest's drifter.
+ */
 export declare function getIdentity(): {
   token: string
   name: string | null

@@ -160,6 +160,7 @@ export class LocalPlayer {
       this.move.proneActive = (mine.proneBits & 1) !== 0
       this.move.proneHeld = (mine.proneBits & 2) !== 0
     }
+    this.move.noclip = mine.noclip ?? false
     for (const cmd of this.pending) this.applyInput(cmd)
     this.currPos.set(this.move.pos.x, this.move.pos.y, this.move.pos.z)
 

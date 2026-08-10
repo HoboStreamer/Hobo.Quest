@@ -33,6 +33,8 @@ export class ClientState {
   readonly events = new TypedEmitter<ClientStateEvents>()
   readonly entities = new Map<string, WireEntity>()
   myEntityId = ''
+  /** hobo.tools rank from welcome (owner/admin/moderator, null = player). */
+  myRank: 'owner' | 'admin' | 'moderator' | null = null
   myPlayerId = ''
   /** Player ids I trust with my props. */
   friends: { id: string; name: string }[] = []
@@ -59,6 +61,7 @@ export class ClientState {
       case 'welcome':
         this.myEntityId = msg.entityId
         this.myPlayerId = msg.playerId
+        this.myRank = msg.rank
         this.tickRate = msg.tickRate
         this.snapshotRate = msg.snapshotRate
         this.serverTick = msg.tick

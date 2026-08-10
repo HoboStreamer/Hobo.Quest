@@ -11,6 +11,7 @@ export declare function customizeScreen(
   content: ContentRegistry,
   uiRoot: HTMLElement,
   savedName: string | null,
+  guest?: boolean,
 ): Promise<{
   name: string
   appearance: Appearance

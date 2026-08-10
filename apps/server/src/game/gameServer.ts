@@ -283,6 +283,22 @@ export class GameServer {
           }
         }
         break
+      case 'editmode': {
+        // Rank-gated noclip build mode. The flag lives in the move state so
+        // server sim and client prediction stay in lockstep via the normal
+        // self-state replication path.
+        if (session.rank === 'owner' || session.rank === 'admin') {
+          session.move.noclip = msg.on
+          session.move.vel.x = 0
+          session.move.vel.y = 0
+          session.move.vel.z = 0
+          this.send(session, {
+            t: 'announce',
+            text: msg.on ? '🛠 Edit mode ON — noclip flight' : '🛠 Edit mode OFF',
+          })
+        }
+        break
+      }
       case 'physgun':
         this.handlePhysgun(session, msg)
         break
@@ -590,6 +606,7 @@ export class GameServer {
     // character bound to their connection: browser token first, IP as the
     // recovery path when the token is gone.
     let token = msg.token
+    let rank: 'owner' | 'admin' | 'moderator' | null = null
     if (msg.auth) {
       const user = await resolveHoboToolsUser(this.config.hoboToolsAuthUrl, msg.auth)
       if (!user) {
@@ -598,6 +615,7 @@ export class GameServer {
         return
       }
       token = `hobotools:${user.id}`.slice(0, 64)
+      rank = user.rank
     } else {
       if (slot > 0) {
         conn.send(encodeServerMessage({ t: 'reject', reason: 'guest_one_character' }))
@@ -651,6 +669,7 @@ export class GameServer {
       charSlot: slot,
       entityId: newEntityId(),
       token,
+      rank,
       name: msg.name,
       spawn,
       yaw: existing?.yaw ?? world.spawnYaw,
@@ -693,6 +712,7 @@ export class GameServer {
     this.send(session, {
       t: 'welcome',
       v: PROTOCOL_VERSION,
+      rank,
       playerId: playerId as string,
       entityId: session.entityId as string,
       tick: this.tick,

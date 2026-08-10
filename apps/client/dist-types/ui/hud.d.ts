@@ -62,6 +62,7 @@ export declare class Hud {
   toggleMenu(): void
   closeAll(): void
   private setTab
+  private editMode
   private renderTabs
   renderMenu(): void
   private slotStack

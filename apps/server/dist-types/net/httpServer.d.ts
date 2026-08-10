@@ -7,6 +7,15 @@ export interface EditorAuth {
   /** hobo.tools session endpoint; token validated there when configured. */
   hoboToolsUrl: string | null
 }
+/** hobo.tools OAuth2 client — powers the /auth/login → /auth/callback flow. */
+export interface OAuthConfig {
+  clientId: string
+  clientSecret: string
+  /** Public hobo.tools base, e.g. https://hobo.tools */
+  baseUrl: string
+  /** Our public base, e.g. https://hobo.quest (redirect_uri host). */
+  selfUrl: string
+}
 export declare function createHttpServer(
   staticDir: string | null,
   metrics: ServerMetrics,
@@ -24,5 +33,6 @@ export declare function createHttpServer(
       appearance: unknown
     }[]
   >,
+  oauth?: OAuthConfig | null,
 ): Server
 //# sourceMappingURL=httpServer.d.ts.map

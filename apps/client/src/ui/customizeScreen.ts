@@ -29,6 +29,7 @@ export function customizeScreen(
   content: ContentRegistry,
   uiRoot: HTMLElement,
   savedName: string | null,
+  guest = false,
 ): Promise<{ name: string; appearance: Appearance; releaseCamera: () => void }> {
   return new Promise((resolve) => {
     let appearance = loadAppearance()
@@ -156,6 +157,14 @@ export function customizeScreen(
         <div class="cust-actions">
           <button id="btn-random">🎲 Randomize</button>
           <button id="btn-join" class="primary">Enter the Yard</button>
+          ${
+            guest
+              ? '<div class="cust-guest-note">⚠️ You are creating a <b>guest</b> drifter. ' +
+                'It lives on this connection and can be lost. ' +
+                '<a href="/auth/login">Sign in with hobo.tools</a> to save your progress ' +
+                'for good — and get 3 character slots.</div>'
+              : ''
+          }
         </div>
       </div>
     `

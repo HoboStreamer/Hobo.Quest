@@ -47,10 +47,17 @@ export function characterSelect(
       const upsell = document.createElement('div')
       upsell.className = 'char-upsell'
       upsell.innerHTML =
-        'Guests get <b>one</b> drifter, tied to this connection. ' +
-        '<a href="https://hobo.tools" target="_blank" rel="noopener">Sign in with hobo.tools</a> ' +
-        'to unlock <b>3 character slots</b> and keep your progress safe across devices and IP changes.'
+        'Guests get <b>one</b> drifter, tied to this connection — it can be lost if ' +
+        'your browser data and IP both change. Sign in to unlock <b>3 character slots</b> ' +
+        'and keep your progress safe forever.'
       panel.appendChild(upsell)
+      const btn = document.createElement('button')
+      btn.className = 'cust-btn char-sso-btn'
+      btn.textContent = '🔑 Sign in with hobo.tools'
+      btn.addEventListener('click', () => {
+        location.href = '/auth/login'
+      })
+      panel.appendChild(btn)
     }
     overlay.appendChild(panel)
     uiRoot.appendChild(overlay)

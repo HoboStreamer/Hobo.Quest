@@ -91,7 +91,12 @@ async function start(): Promise<void> {
     localStorage.setItem('hq_sso', ssoParam)
     history.replaceState(null, '', location.pathname)
   }
-  const sso = localStorage.getItem('hq_sso') ?? undefined
+  const ssoCookie = document.cookie
+    .split('; ')
+    .find((c) => c.startsWith('hq_sso='))
+    ?.slice('hq_sso='.length)
+  const sso =
+    localStorage.getItem('hq_sso') ?? (ssoCookie ? decodeURIComponent(ssoCookie) : undefined)
   let characters: CharacterInfo[] = []
   try {
     const q = `token=${encodeURIComponent(identity.token)}${sso ? `&auth=${encodeURIComponent(sso)}` : ''}`
@@ -108,7 +113,7 @@ async function start(): Promise<void> {
     appearance = { ...choice.existing.appearance, height: 1, build: 1 }
     releaseCamera = () => {}
   } else {
-    const created = await customizeScreen(scene, content, uiRoot, identity.name)
+    const created = await customizeScreen(scene, content, uiRoot, identity.name, !sso)
     name = created.name
     appearance = created.appearance
     releaseCamera = created.releaseCamera

@@ -15,6 +15,8 @@ import type {
 export interface ServerWelcome {
   t: 'welcome'
   v: number
+  /** hobo.tools rank of this account: owner/admin/moderator, null for players. */
+  rank: 'owner' | 'admin' | 'moderator' | null
   playerId: string
   /** The player's own world entity id. */
   entityId: string

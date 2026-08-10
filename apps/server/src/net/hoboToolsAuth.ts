@@ -1,13 +1,19 @@
 /**
- * hobo.tools SSO adapter. A session token is exchanged against the
- * configured HOBO_TOOLS_AUTH_URL for a stable user identity; the game then
- * keys the account on that identity instead of the browser's guest token,
- * unlocking multiple character slots that survive device and IP changes.
+ * hobo.tools SSO adapter. Access tokens are JWTs issued by the hobo.tools
+ * OAuth server; we validate by calling its /api/auth/me endpoint (which
+ * verifies signature + ban state) rather than trusting the JWT locally.
+ * The response nests the account under `user`; rank maps the network RBAC:
+ * the configured owner account, then role admin / moderator (global_mod).
  */
+export type HoboRank = 'owner' | 'admin' | 'moderator' | null
+
 export interface HoboToolsUser {
   id: string
-  admin: boolean
+  name: string
+  rank: HoboRank
 }
+
+const OWNER_USERNAME = (process.env.OWNER_USERNAME ?? 'goosely').toLowerCase()
 
 export async function resolveHoboToolsUser(
   url: string | null,
@@ -18,21 +24,25 @@ export async function resolveHoboToolsUser(
     const resp = await fetch(url, { headers: { authorization: `Bearer ${auth}` } })
     if (!resp.ok) return null
     const body = (await resp.json()) as {
+      user?: { id?: string | number; username?: string; role?: string; is_banned?: number }
       id?: string | number
-      userId?: string | number
       username?: string
-      user?: { id?: string | number; username?: string }
-      rank?: string
       role?: string
-      admin?: boolean
     }
-    const id = body.id ?? body.userId ?? body.user?.id ?? body.username ?? body.user?.username
+    const u = body.user ?? body
+    const id = u.id ?? u.username
     if (id === undefined || id === null || String(id).length === 0) return null
-    return {
-      id: String(id),
-      admin: body.admin === true || body.rank === 'admin' || body.role === 'admin',
-    }
+    const username = String(u.username ?? id)
+    let rank: HoboRank = null
+    if (username.toLowerCase() === OWNER_USERNAME) rank = 'owner'
+    else if (u.role === 'admin') rank = 'admin'
+    else if (u.role === 'moderator' || u.role === 'global_mod') rank = 'moderator'
+    return { id: String(id), name: username, rank }
   } catch {
     return null
   }
+}
+
+export function canEditMap(rank: HoboRank): boolean {
+  return rank === 'owner' || rank === 'admin'
 }

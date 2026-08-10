@@ -100,6 +100,7 @@ async function main(): Promise<void> {
         .slice(0, 3)
         .map((p) => ({ slot: p.charSlot, name: p.name, appearance: p.appearance }))
     },
+    config.oauth,
   )
   attachWebSocket(http, game, log.child({ system: 'ws' }))
   http.listen(config.port, config.host, () => {

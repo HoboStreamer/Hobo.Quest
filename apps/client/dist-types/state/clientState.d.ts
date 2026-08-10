@@ -73,6 +73,8 @@ export declare class ClientState {
   readonly events: TypedEmitter<ClientStateEvents>
   readonly entities: Map<string, WireEntity>
   myEntityId: string
+  /** hobo.tools rank from welcome (owner/admin/moderator, null = player). */
+  myRank: 'owner' | 'admin' | 'moderator' | null
   myPlayerId: string
   /** Player ids I trust with my props. */
   friends: {

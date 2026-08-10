@@ -84,6 +84,8 @@ export interface WirePlayerState {
   stanceCd?: number
   /** bit0 proneActive, bit1 proneHeld. */
   proneBits?: number
+  /** Self-only: admin edit-mode noclip flag (prediction must match). */
+  noclip?: boolean
 }
 
 export interface WireItemStack {
