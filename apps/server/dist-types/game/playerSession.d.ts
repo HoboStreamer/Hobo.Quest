@@ -62,6 +62,8 @@ export interface PlayerSession {
   statsDirty: boolean
   /** Container prop this player currently has open (pushed on change). */
   openContainer: EntityId | null
+  /** Most negative airborne vertical velocity (fall-damage tracking). */
+  fallVy: number
   /** Tick of the last accepted use/swing (server-side swing cooldown). */
   lastUseTick: number
   /** Stance the kinematic physics body was last built for. */

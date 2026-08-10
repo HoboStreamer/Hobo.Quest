@@ -11,7 +11,7 @@ import {
   type CollisionQueries,
   type GameEntity,
 } from '@hobo/gameplay'
-import { STARTER_ITEMS, recipeSkill, recipeXp } from '@hobo/content'
+import { STARTER_ITEMS, WATER_LEVEL, recipeSkill, recipeXp, terrainHeight } from '@hobo/content'
 import type { PersistenceStore, PlayerDto } from '@hobo/persistence'
 import { CollisionLayer, type BodyId } from '@hobo/physics'
 import {
@@ -256,6 +256,26 @@ export class GameServer {
       case 'physgun':
         this.handlePhysgun(session, msg)
         break
+      case 'drink': {
+        if (this.tick - session.lastUseTick < 15) break
+        const ground = terrainHeight(
+          this.world.content.world,
+          session.move.pos.x,
+          session.move.pos.z,
+        )
+        if (ground > WATER_LEVEL - 0.03) {
+          this.send(session, { t: 'result', action: 'consume', ok: false, error: 'no_water' })
+          break
+        }
+        session.lastUseTick = this.tick
+        session.stats.thirst = Math.min(100, session.stats.thirst + 30)
+        session.statsDirty = true
+        session.dirty = true
+        this.send(session, { t: 'result', action: 'consume', ok: true })
+        this.send(session, { t: 'stats', ...this.statsWire(session) })
+        session.statsDirty = false
+        break
+      }
       case 'consume': {
         const stack = session.inventory.get(msg.slot)
         const food = stack ? this.world.content.item(stack.defId)?.food : undefined
@@ -706,7 +726,18 @@ export class GameServer {
       return
     }
     attacker.lastUseTick = this.tick
-    const damage = tool ? 6 + tool.power * 4 : 6
+    // Swinging costs stamina; an exhausted swing lands soft.
+    const exhausted = attacker.stats.stamina < 10
+    attacker.stats.stamina = Math.max(0, attacker.stats.stamina - 12)
+    attacker.statsDirty = true
+    const damage = (tool ? 6 + tool.power * 4 : 6) * (exhausted ? 0.5 : 1)
+    // Knockback: shove the victim away (replicates through prediction).
+    const kx = victim.move.pos.x - attacker.move.pos.x
+    const kz = victim.move.pos.z - attacker.move.pos.z
+    const kl = Math.hypot(kx, kz) || 1
+    victim.move.vel.x += (kx / kl) * 4.5
+    victim.move.vel.z += (kz / kl) * 4.5
+    victim.move.vel.y += 2.2
     const died = applyDamage(victim.stats, damage)
     victim.statsDirty = true
     victim.dirty = true
@@ -924,6 +955,22 @@ export class GameServer {
       _bodyPosScratch.y = session.move.pos.y + 0.15
       _bodyPosScratch.z = session.move.pos.z
       this.world.physics.setTransform(bodyId, _bodyPosScratch)
+    }
+    // Fall damage: track the hardest downward velocity while airborne and
+    // cash it in on landing. ~13 m/s (≈2.5 story drop) is the free threshold.
+    if (!session.move.grounded) {
+      session.fallVy = Math.min(session.fallVy, session.move.vel.y)
+    } else if (session.fallVy < -13) {
+      const dmg = Math.round((-session.fallVy - 13) * 3.5)
+      session.fallVy = 0
+      if (applyDamage(session.stats, dmg)) {
+        this.log.info('fall death', { playerId: session.playerId })
+        this.respawn(session, true)
+      } else {
+        session.statsDirty = true
+      }
+    } else {
+      session.fallVy = 0
     }
     const entity = this.world.entities.get(session.entityId)
     if (entity) qfromYaw(entity.transform.rot, session.yaw)

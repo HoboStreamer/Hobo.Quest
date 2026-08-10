@@ -66,6 +66,10 @@ export class Hud {
       this.toast(`⭐ ${def?.name ?? skill} reached level ${level}!`)
     })
     state.events.on('stats', (s) => {
+      // Red flash when health drops; persistent vignette when critical.
+      if (s.hp < this.lastHp) this.flashDamage()
+      this.lastHp = s.hp
+      this.byId('vignette').style.opacity = s.hp < 40 ? String((40 - s.hp) / 55) : '0'
       this.renderVitals()
       if (s.died) this.toast('☠ You died — waking up back in Hoboville', true)
     })
@@ -86,6 +90,8 @@ export class Hud {
   private build(): void {
     this.root.innerHTML = `
       <div class="crosshair"></div>
+      <div class="hitmarker" id="hitmarker"></div>
+      <div class="vignette" id="vignette"></div>
       <div class="prompt" id="prompt"></div>
       <div class="toast-area" id="toasts"></div>
       <div class="status" id="status"></div>
@@ -150,6 +156,23 @@ export class Hud {
     slots: [],
   }
 
+  private lastHp = 100
+  private hitmarkerTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Brief crosshair X when a melee hit lands on another player. */
+  flashHitmarker(): void {
+    const el = this.byId('hitmarker')
+    el.classList.add('show')
+    if (this.hitmarkerTimer) clearTimeout(this.hitmarkerTimer)
+    this.hitmarkerTimer = setTimeout(() => el.classList.remove('show'), 160)
+  }
+
+  private flashDamage(): void {
+    const el = this.byId('vignette')
+    el.classList.add('flash')
+    setTimeout(() => el.classList.remove('flash'), 220)
+  }
+
   private renderVitals(): void {
     const s = this.state.stats
     ;(this.byId('bar-hp').style as CSSStyleDeclaration).width = `${s.hp}%`
@@ -166,6 +189,9 @@ export class Hud {
   ): void {
     this.openContainerId = id
     this.containerData = { size, slots }
+    const def = this.state.entities.get(id)?.def
+    this.byId('container-panel').querySelector('.container-title')!.textContent =
+      (def && this.content.item(def)?.name) || 'Storage'
     this.byId('container-panel').style.display = 'flex'
     this.renderContainer()
     this.onUiCaptureChange?.(true)

@@ -31,6 +31,11 @@ export declare class Hud {
   private build
   private openContainerId
   private containerData
+  private lastHp
+  private hitmarkerTimer
+  /** Brief crosshair X when a melee hit lands on another player. */
+  flashHitmarker(): void
+  private flashDamage
   private renderVitals
   /** Opens (or refreshes) the storage panel for a container entity. */
   showContainer(

@@ -80,14 +80,24 @@ export class Environment {
     this.pipeline.fxaaEnabled = true
   }
 
-  /** Snap the clock to the server's shared day fraction. */
+  private targetT: number | null = null
+
+  /** Sync toward the server's shared day fraction (smoothed, no sun jumps). */
   setDayFraction(frac: number): void {
-    this.t = frac * DAY_SECONDS
+    this.targetT = frac * DAY_SECONDS
   }
 
   /** Advance time of day; call once per frame. */
   update(dt: number, cameraPos: Vector3): void {
     this.t = (this.t + dt) % DAY_SECONDS
+    if (this.targetT !== null) {
+      let diff = this.targetT - this.t
+      if (diff > DAY_SECONDS / 2) diff -= DAY_SECONDS
+      if (diff < -DAY_SECONDS / 2) diff += DAY_SECONDS
+      if (Math.abs(diff) > 60) this.t = this.targetT
+      else this.t = (this.t + diff * Math.min(1, dt * 0.5) + DAY_SECONDS) % DAY_SECONDS
+      this.targetT += dt
+    }
     const phase = (this.t / DAY_SECONDS) * Math.PI * 2 - Math.PI / 2
     // Sun orbit: elevation follows the cycle, azimuth tilted for long shadows.
     const elevation = Math.sin(phase)

@@ -133,6 +133,11 @@ export const ClientConsumeSchema = z.object({
   slot: z.number().int().min(0).max(63),
 })
 
+/** Drink from the water the player is standing in. */
+export const ClientDrinkSchema = z.object({
+  t: z.literal('drink'),
+})
+
 /** Open a container prop (server replies with its contents). */
 export const ClientContainerOpenSchema = z.object({
   t: z.literal('container_open'),
@@ -161,6 +166,7 @@ export const ClientMessageSchema = z.union([
   ClientWeldSchema,
   ClientUnweldSchema,
   ClientConsumeSchema,
+  ClientDrinkSchema,
   ClientContainerOpenSchema,
   ClientContainerMoveSchema,
 ])
@@ -177,6 +183,7 @@ export type ClientTrust = z.infer<typeof ClientTrustSchema>
 export type ClientWeld = z.infer<typeof ClientWeldSchema>
 export type ClientUnweld = z.infer<typeof ClientUnweldSchema>
 export type ClientConsume = z.infer<typeof ClientConsumeSchema>
+export type ClientDrink = z.infer<typeof ClientDrinkSchema>
 export type ClientContainerOpen = z.infer<typeof ClientContainerOpenSchema>
 export type ClientContainerMove = z.infer<typeof ClientContainerMoveSchema>
 export type ClientMessage = z.infer<typeof ClientMessageSchema>

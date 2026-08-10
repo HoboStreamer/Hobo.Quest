@@ -1,5 +1,5 @@
 import { type PhysicsWorld } from '@hobo/physics'
-import type { ContentRegistry } from '@hobo/content'
+import { type ContentRegistry } from '@hobo/content'
 import type { Connection } from '../net/connection.js'
 import type { EntityView } from '../render/entityView.js'
 import type { ClientState } from '../state/clientState.js'
@@ -31,6 +31,8 @@ export declare class InteractionController {
   rotating: boolean
   /** Cosmetic hook: a swing was sent (viewmodel + body animation). */
   onSwing: (() => void) | null
+  /** True when the last 'use' this client sent targeted another player. */
+  lastTargetWasPlayer: boolean
   private lastSwingMs
   private pendingRotate
   private gridOn
@@ -60,5 +62,7 @@ export declare class InteractionController {
   onWheel(delta: number): void
   onHotbarChanged(): void
   private swing
+  /** Standing in water (thirst refill by drinking). */
+  standingInWater(): boolean
 }
 //# sourceMappingURL=interactionController.d.ts.map

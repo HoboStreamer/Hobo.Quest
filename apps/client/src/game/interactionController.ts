@@ -1,6 +1,6 @@
 import { CollisionLayer, type PhysicsWorld } from '@hobo/physics'
 import { v3addScaled, vec3 } from '@hobo/shared'
-import type { ContentRegistry } from '@hobo/content'
+import { WATER_LEVEL, terrainHeight, type ContentRegistry } from '@hobo/content'
 import type { Connection } from '../net/connection.js'
 import type { EntityView } from '../render/entityView.js'
 import type { ClientState } from '../state/clientState.js'
@@ -45,6 +45,8 @@ export class InteractionController {
   rotating = false
   /** Cosmetic hook: a swing was sent (viewmodel + body animation). */
   onSwing: (() => void) | null = null
+  /** True when the last 'use' this client sent targeted another player. */
+  lastTargetWasPlayer = false
 
   private lastSwingMs = 0
   private pendingRotate = { dyaw: 0, dpitch: 0 }
@@ -152,7 +154,11 @@ export class InteractionController {
           break
         }
         const target = this.aim()
-        if (!target) break
+        if (!target) {
+          if (this.standingInWater()) this.connection.send({ t: 'drink' })
+          break
+        }
+        this.lastTargetWasPlayer = target.kind === 'player'
         // Containers open on E instead of being picked up.
         if (target.def && this.content.item(target.def)?.container) {
           this.connection.send({ t: 'container_open', target: target.entityId })
@@ -234,12 +240,21 @@ export class InteractionController {
     const now = performance.now()
     if (now - this.lastSwingMs < SWING_COOLDOWN_MS) return
     this.lastSwingMs = now
-    // The swing always animates (punching air is allowed); it only DOES
-    // something when a resource is under the crosshair.
+    // The swing always animates (punching air is allowed); it DOES
+    // something when a resource or another player is under the crosshair.
     this.onSwing?.()
     const target = this.aim()
-    if (target?.kind !== 'resource') return
+    if (target?.kind !== 'resource' && target?.kind !== 'player') return
+    this.lastTargetWasPlayer = target.kind === 'player'
     this.connection.send({ t: 'use', target: target.entityId })
+  }
+
+  /** Standing in water (thirst refill by drinking). */
+  standingInWater(): boolean {
+    return (
+      terrainHeight(this.content.world, this.player.move.pos.x, this.player.move.pos.z) <
+      WATER_LEVEL - 0.03
+    )
   }
 }
 

@@ -636,7 +636,7 @@ async function main(): Promise<void> {
   // assume Alice is near the crates outside the north gate.
   await walkPath(a, [
     [-26, 26],
-    [2, 25],
+    [4, 28],
   ])
   await settle(a)
 

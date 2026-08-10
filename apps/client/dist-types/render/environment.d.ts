@@ -17,7 +17,8 @@ export declare class Environment {
   constructor(scene: Scene, engine: AbstractEngine)
   /** Attach the HDR tonemapping pipeline to the active gameplay camera. */
   attachCamera(camera: Camera): void
-  /** Snap the clock to the server's shared day fraction. */
+  private targetT
+  /** Sync toward the server's shared day fraction (smoothed, no sun jumps). */
   setDayFraction(frac: number): void
   /** Advance time of day; call once per frame. */
   update(dt: number, cameraPos: Vector3): void

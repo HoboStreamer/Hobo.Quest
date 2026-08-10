@@ -155,6 +155,12 @@ async function start(): Promise<void> {
   }
   input.onWheel = (delta) => interact.onWheel(delta)
 
+  state.events.on('actionResult', (r) => {
+    if (r.action === 'use' && r.ok && interact.lastTargetWasPlayer) {
+      interact.lastTargetWasPlayer = false
+      hud.flashHitmarker()
+    }
+  })
   connection.onMessage = (msg) => {
     state.apply(msg)
     if (msg.t === 'time') environment.setDayFraction(msg.frac)
@@ -258,7 +264,10 @@ function promptFor(
 ): string | null {
   const target = interact.aim()
   const tool = interact.equippedToolKind()
-  if (!target) return null
+  if (!target) {
+    if (interact.standingInWater()) return 'E — drink'
+    return null
+  }
   if (target.kind === 'resource') {
     const nodeType = content.nodeType(target.def ?? '')
     if (!nodeType) return null
