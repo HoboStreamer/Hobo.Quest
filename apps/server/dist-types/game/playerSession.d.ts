@@ -39,9 +39,13 @@ export interface PlayerSession {
   appearance: Appearance
   craftQueue: CraftQueue
   activeHotbar: number
+  /** Holstered: active slot's item is put away (empty hands). */
+  holstered: boolean
   held: HeldProp | null
   /** Tick of the last accepted use/swing (server-side swing cooldown). */
   lastUseTick: number
+  /** Stance the kinematic physics body was last built for. */
+  bodyStance: number
   /** For weld feedback and equipment lookups without threading the registry. */
   content: ContentRegistry
   /** Pending input commands (bounded queue: anti-speedup). */
@@ -73,8 +77,8 @@ export interface SessionInit {
   closeConnection(code: number, reason: string): void
 }
 export declare function createSession(init: SessionInit): PlayerSession
-/** Eye position for view rays — must match the client camera exactly. */
-export declare function eyePosition(session: PlayerSession, eyeOffset: number, out: Vec3): Vec3
+/** Eye position for view rays — stance-aware, matches the client camera. */
+export declare function eyePosition(session: PlayerSession, out: Vec3): Vec3
 /** View direction from authoritative yaw/pitch. */
 export declare function viewDirection(session: PlayerSession, out: Vec3): Vec3
 //# sourceMappingURL=playerSession.d.ts.map

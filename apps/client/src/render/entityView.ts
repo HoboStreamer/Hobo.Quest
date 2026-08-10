@@ -8,7 +8,7 @@ import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import type { ContentRegistry, WorldShape } from '@hobo/content'
-import { DEFAULT_MOVEMENT } from '@hobo/gameplay'
+import { hullHeightFor } from '@hobo/gameplay'
 import { CollisionLayer, type BodyId, type PhysicsWorld, type ShapeDesc } from '@hobo/physics'
 import type { ServerSnapshot, WireEntity } from '@hobo/protocol'
 import { quat, vec3, wrapAngle } from '@hobo/shared'
@@ -33,6 +33,7 @@ interface InterpSample {
   pitch?: number
   speed?: number
   grounded?: boolean
+  stance?: number
   item?: string | undefined
 }
 
@@ -183,6 +184,7 @@ export class EntityView {
         pitch: p.pitch,
         speed: Math.hypot(p.vel[0], p.vel[2]),
         grounded: p.grounded,
+        stance: p.stance,
         item: p.item,
       })
     }
@@ -225,12 +227,13 @@ export class EntityView {
           dt,
           time: localTime,
           x: _pos.x,
-          y: _pos.y - DEFAULT_MOVEMENT.capsuleHeight / 2,
+          y: _pos.y - hullHeightFor((latest.stance ?? 0) as 0 | 1 | 2) / 2,
           z: _pos.z,
           yaw,
           pitch: lerpAngle(a.pitch ?? 0, b.pitch ?? a.pitch ?? 0, alpha),
           speed: latest.speed ?? 0,
           grounded: latest.grounded ?? true,
+          stance: latest.stance ?? 0,
           itemDef: latest.item,
           beamActive,
         })
@@ -241,6 +244,15 @@ export class EntityView {
       nlerpQuat(a.rot, b.rot, alpha, _rot)
       v.mesh.position.set(_pos.x, _pos.y, _pos.z)
       v.mesh.rotationQuaternion?.set(_rot.x, _rot.y, _rot.z, _rot.w)
+      // Keep the prediction-collision mirror on the smooth interpolated pose
+      // so standing on a moving prop doesn't fight 15Hz snapshot steps.
+      if (v.bodyId !== null) {
+        this.physics.setTransform(
+          v.bodyId,
+          vec3(_pos.x, _pos.y, _pos.z),
+          quat(_rot.x, _rot.y, _rot.z, _rot.w),
+        )
+      }
       // Held props glow subtly so every player can see what's being moved.
       const mat = v.mesh.material as StandardMaterial | null
       if (mat && 'emissiveColor' in mat) {

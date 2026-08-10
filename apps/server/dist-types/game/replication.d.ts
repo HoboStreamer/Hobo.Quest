@@ -1,4 +1,4 @@
-import type { GameEntity } from '@hobo/gameplay'
+import { type GameEntity } from '@hobo/gameplay'
 import type { ServerSnapshot, WireEntity, WirePlayerState } from '@hobo/protocol'
 import { type EntityId } from '@hobo/shared'
 import type { GameWorld } from './gameWorld.js'

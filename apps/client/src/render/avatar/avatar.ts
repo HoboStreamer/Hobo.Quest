@@ -5,7 +5,7 @@ import type { Appearance } from '@hobo/protocol'
 import { defaultAppearance } from '@hobo/protocol'
 import { AvatarAnimator } from './animator.js'
 import { buildAvatarRig, type AvatarRig } from './rig.js'
-import { createToolProp, toolPropKindFor, type ToolProp } from './toolProps.js'
+import { createHeldItemNode, type HeldItemNode } from '../heldItem.js'
 
 /**
  * A complete animated player character: parametric rig + procedural
@@ -24,6 +24,8 @@ export interface AvatarUpdate {
   pitch: number
   speed: number
   grounded: boolean
+  /** Stance: 0 stand, 1 crouch, 2 prone. */
+  stance?: number
   /** Equipped item def id (drives held prop + arm pose). */
   itemDef?: string | undefined
   beamActive?: boolean
@@ -32,7 +34,7 @@ export interface AvatarUpdate {
 export class Avatar {
   private rig: AvatarRig
   private animator: AvatarAnimator
-  private toolProp: ToolProp | null = null
+  private toolProp: HeldItemNode | null = null
   private toolItemDef: string | undefined
   private headVisible = true
   private armsVisible = true
@@ -101,17 +103,17 @@ export class Avatar {
       this.toolItemDef = u.itemDef
       this.toolProp?.dispose()
       this.toolProp = null
-      const def = u.itemDef ? this.content.item(u.itemDef) : undefined
-      const kind = toolPropKindFor(u.itemDef, def?.tool?.kind)
-      if (kind) {
-        this.toolProp = createToolProp(this.scene, kind, this.name)
-        this.toolProp.root.parent = j.handR
-        // Grip: +Z of the tool points along the forearm (hand's -Y), so a
-        // raised arm aims the tool forward instead of leaving it glued flat
-        // to the wrist.
-        this.toolProp.root.position.set(0, -0.1, 0.04)
-        this.toolProp.root.rotation.set(Math.PI / 2, 0, 0)
-        this.toolProp.root.scaling.setAll(0.9)
+      if (u.itemDef) {
+        this.toolProp = createHeldItemNode(this.scene, this.content, u.itemDef, this.name)
+        if (this.toolProp) {
+          this.toolProp.root.parent = j.handR
+          // Grip: +Z of the tool points along the forearm (hand's -Y), so a
+          // raised arm aims the tool forward instead of leaving it glued
+          // flat to the wrist.
+          this.toolProp.root.position.set(0, -0.1, 0.04)
+          this.toolProp.root.rotation.set(Math.PI / 2, 0, 0)
+          this.toolProp.root.scaling.scaleInPlace(0.9)
+        }
       }
     }
 
@@ -122,6 +124,7 @@ export class Avatar {
       speed: u.speed,
       grounded: u.grounded,
       pitch: u.pitch,
+      stance: u.stance ?? 0,
       tool: def?.tool?.kind ?? null,
       beamActive: u.beamActive ?? false,
     })

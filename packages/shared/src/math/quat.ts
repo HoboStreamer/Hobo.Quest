@@ -47,6 +47,21 @@ export function qfromYaw(out: Quat, yaw: number): Quat {
   return out
 }
 
+/** Quaternion from yaw (Y), pitch (X), roll (Z) — applied yaw·pitch·roll. */
+export function qfromEuler(out: Quat, pitchX: number, yawY: number, rollZ: number): Quat {
+  const cx = Math.cos(pitchX / 2)
+  const sx = Math.sin(pitchX / 2)
+  const cy = Math.cos(yawY / 2)
+  const sy = Math.sin(yawY / 2)
+  const cz = Math.cos(rollZ / 2)
+  const sz = Math.sin(rollZ / 2)
+  out.x = sx * cy * cz + cx * sy * sz
+  out.y = cx * sy * cz - sx * cy * sz
+  out.z = cx * cy * sz - sx * sy * cz
+  out.w = cx * cy * cz + sx * sy * sz
+  return out
+}
+
 export function qmul(out: Quat, a: Quat, b: Quat): Quat {
   const ax = a.x,
     ay = a.y,

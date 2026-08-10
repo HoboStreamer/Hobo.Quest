@@ -16,6 +16,8 @@ export interface AnimatorInput {
   grounded: boolean
   /** View pitch (radians, +up) for head/torso aim. */
   pitch: number
+  /** Stance: 0 stand, 1 crouch, 2 prone. */
+  stance: number
   /** Equipped tool kind for arm posing. */
   tool: 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null
   /** Physgun beam currently latched (two-hand aim pose). */

@@ -37,6 +37,8 @@ export class ClientState {
   ack = 0
   inventory: WireInventory | null = null
   activeHotbar = 0
+  /** Mirrors the server's holster toggle (same deterministic rules). */
+  holstered = false
   craftJobs: { recipe: string; readyTick: number }[] = []
   skills: WireSkill[] = []
   /** entityId -> holder player entityId, for beam/highlight rendering. */
@@ -130,8 +132,9 @@ export class ClientState {
     return total
   }
 
-  /** Item def id in the active hotbar slot, if any. */
+  /** Item def id in the active hotbar slot (null when holstered). */
   activeItemDef(): string | null {
+    if (this.holstered) return null
     const slot = this.inventory?.slots.find((s) => s.i === this.activeHotbar)
     return slot?.stack.def ?? null
   }

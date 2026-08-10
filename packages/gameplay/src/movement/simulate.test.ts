@@ -3,7 +3,14 @@ import { vec3, type Vec3 } from '@hobo/shared'
 import { Buttons } from './buttons.js'
 import type { CollisionQueries, SweepHit } from './collision.js'
 import { DEFAULT_MOVEMENT } from './params.js'
-import { clipVelocity, createMoveState, stepMovement, type MoveInput } from './simulate.js'
+import {
+  Stance,
+  clipVelocity,
+  createMoveState,
+  hullHeightFor,
+  stepMovement,
+  type MoveInput,
+} from './simulate.js'
 
 const P = DEFAULT_MOVEMENT
 const DT = 1 / 30
@@ -156,5 +163,83 @@ describe('stepMovement', () => {
     const b = run()
     expect(a.pos).toEqual(b.pos)
     expect(a.vel).toEqual(b.vel)
+  })
+})
+
+describe('stances', () => {
+  it('crouch slows movement and prone slows it further', () => {
+    const measure = (buttons: number) => {
+      const s = spawnGrounded()
+      for (let i = 0; i < 120; i++) stepMovement(s, { ...forward(), buttons }, P, makeWorld(), DT)
+      return horizSpeed(s.vel)
+    }
+    const standSpeed = measure(0)
+    const crouchSpeed = measure(Buttons.Crouch)
+    const proneSpeed = measure(Buttons.Prone)
+    expect(crouchSpeed).toBeLessThan(standSpeed * 0.6)
+    expect(proneSpeed).toBeLessThan(crouchSpeed)
+  })
+
+  it('transitions take time and lock out spam', () => {
+    const s = spawnGrounded()
+    stepMovement(s, { ...idle(), buttons: Buttons.Crouch }, P, makeWorld(), DT)
+    expect(s.stance).toBe(Stance.Crouch)
+    expect(s.stanceT).toBeGreaterThan(0)
+    // Releasing crouch immediately must NOT stand back up mid-lockout.
+    for (let i = 0; i < 3; i++) stepMovement(s, idle(), P, makeWorld(), DT)
+    expect(s.stance).toBe(Stance.Crouch)
+    // After the transition + cooldown it recovers.
+    for (let i = 0; i < 30; i++) stepMovement(s, idle(), P, makeWorld(), DT)
+    expect(s.stance).toBe(Stance.Stand)
+  })
+
+  it('prone is a toggle on the key edge', () => {
+    const s = spawnGrounded()
+    stepMovement(s, { ...idle(), buttons: Buttons.Prone }, P, makeWorld(), DT)
+    expect(s.stance).toBe(Stance.Prone)
+    // Holding the key does not un-prone (edge, not level).
+    for (let i = 0; i < 60; i++)
+      stepMovement(s, { ...idle(), buttons: Buttons.Prone }, P, makeWorld(), DT)
+    expect(s.stance).toBe(Stance.Prone)
+    // Release, wait out cooldown, press again -> stands.
+    for (let i = 0; i < 60; i++) stepMovement(s, idle(), P, makeWorld(), DT)
+    stepMovement(s, { ...idle(), buttons: Buttons.Prone }, P, makeWorld(), DT)
+    for (let i = 0; i < 60; i++) stepMovement(s, idle(), P, makeWorld(), DT)
+    expect(s.stance).toBe(Stance.Stand)
+  })
+
+  it('cannot jump while crouched or prone', () => {
+    const s = spawnGrounded()
+    for (let i = 0; i < 30; i++) {
+      stepMovement(s, { ...idle(), buttons: Buttons.Crouch | Buttons.Jump }, P, makeWorld(), DT)
+    }
+    expect(s.pos.y).toBeLessThan(1) // never left the ground
+  })
+
+  it('standing up is blocked by a ceiling', () => {
+    // World with a ceiling at y=1.4: crouch fits (hull 1.2), standing does not.
+    const ceiling = 1.4
+    const world: ReturnType<typeof makeWorld> = {
+      sweepCapsule(from, to, radius, height) {
+        const base = makeWorld().sweepCapsule(from, to, radius, height)
+        const fromTop = from.y + height / 2
+        const toTop = to.y + height / 2
+        if (fromTop <= ceiling && toTop > ceiling) {
+          const fraction = (ceiling - fromTop) / (toTop - fromTop)
+          const hit = { fraction, normal: vec3(0, -1, 0), point: vec3(from.x, ceiling, from.z) }
+          if (!base || fraction < base.fraction) return hit
+        }
+        return base
+      },
+    }
+    const s = spawnGrounded()
+    stepMovement(s, { ...idle(), buttons: Buttons.Crouch }, P, world, DT)
+    for (let i = 0; i < 30; i++)
+      stepMovement(s, { ...idle(), buttons: Buttons.Crouch }, P, world, DT)
+    expect(s.stance).toBe(Stance.Crouch)
+    // Release crouch under the ceiling: must STAY crouched (no headroom).
+    for (let i = 0; i < 60; i++) stepMovement(s, idle(), P, world, DT)
+    expect(s.stance).toBe(Stance.Crouch)
+    expect(hullHeightFor(s.stance)).toBe(1.2)
   })
 })

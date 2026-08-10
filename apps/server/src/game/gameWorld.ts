@@ -11,6 +11,7 @@ import {
 import {
   newEntityId,
   newUid,
+  qfromEuler,
   qfromYaw,
   quat,
   vec3,
@@ -74,7 +75,7 @@ export class GameWorld {
         shape: toShapeDesc(s.shape),
         motion: 'static',
         pos: vec3(s.pos[0], s.pos[1], s.pos[2]),
-        rot: qfromYaw(quat(), s.yaw),
+        rot: s.rot ? qfromEuler(quat(), s.rot[0], s.rot[1], s.rot[2]) : qfromYaw(quat(), s.yaw),
         layer: CollisionLayer.Static,
         collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
       })

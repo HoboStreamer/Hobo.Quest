@@ -38,7 +38,11 @@ export class InputTracker {
     document.addEventListener('contextmenu', (e) => {
       if (this.locked) e.preventDefault()
     })
-    document.addEventListener('mousemove', (e) => {
+    // pointermove, NOT mousemove: canceling pointerdown (which we must do to
+    // stop native drag/selection) suppresses ALL compatibility mouse events
+    // for the rest of that press — including mousemove. Holding a button
+    // would freeze the view. Pointer events keep flowing regardless.
+    document.addEventListener('pointermove', (e) => {
       if (!this.locked || this.uiCapture) return
       if (this.captureLook?.()) {
         this.onAction?.({

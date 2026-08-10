@@ -23,6 +23,7 @@ export const Buttons = {
   Sprint: 1 << 2,
   Use: 1 << 3,
   Attack: 1 << 4,
+  Prone: 1 << 5,
 } as const
 
 /** How a wire entity should be represented client-side. */
@@ -63,6 +64,10 @@ export interface WirePlayerState {
   yaw: number
   pitch: number
   grounded: boolean
+  /** Stance: 0 stand, 1 crouch, 2 prone. */
+  stance: number
+  /** Stance transition progress 0..1 (1 = settled), for animation. */
+  stanceP: number
   /** Equipped item def id (third-person held-item display), if any. */
   item?: string
 }

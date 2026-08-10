@@ -18,6 +18,8 @@ export interface AnimatorInput {
   grounded: boolean
   /** View pitch (radians, +up) for head/torso aim. */
   pitch: number
+  /** Stance: 0 stand, 1 crouch, 2 prone. */
+  stance: number
   /** Equipped tool kind for arm posing. */
   tool: 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null
   /** Physgun beam currently latched (two-hand aim pose). */
@@ -25,6 +27,7 @@ export interface AnimatorInput {
 }
 
 interface Pose {
+  bobRX: number
   spineX: number
   spineY: number
   spineZ: number
@@ -51,6 +54,7 @@ const WALK_STRIDE = 2.15 // phase radians advanced per meter
  * legs, which is what makes the gait read as fluid instead of robotic.
  */
 const DAMP: Record<keyof ReturnType<typeof zeroPose>, number> = {
+  bobRX: 5,
   spineX: 7,
   spineY: 6,
   spineZ: 6,
@@ -71,6 +75,7 @@ const DAMP: Record<keyof ReturnType<typeof zeroPose>, number> = {
 
 function zeroPose(): Pose {
   return {
+    bobRX: 0,
     spineX: 0,
     spineY: 0,
     spineZ: 0,
@@ -162,12 +167,41 @@ export class AvatarAnimator {
       target.spineX += 0.08 * air
     }
 
+    // ── Stances ──────────────────────────────────────────────────────
+    if (input.stance === 1) {
+      // Crouch: sunk hips, bent knees, slight forward hunch; shorter strides.
+      target.bobY -= 0.34
+      target.hipLX = target.hipLX * 0.5 - 0.85
+      target.hipRX = target.hipRX * 0.5 - 0.85
+      target.kneeLX = target.kneeLX * 0.5 + 1.25
+      target.kneeRX = target.kneeRX * 0.5 + 1.25
+      target.spineX += 0.3
+    } else if (input.stance === 2) {
+      // Prone: body pitched flat, arms ahead, head craned up — army crawl
+      // when moving (limbs alternate with the crawl phase).
+      const crawl = Math.min(speedNorm * 4, 1)
+      const cs = Math.sin(this.phase) * 0.35 * crawl
+      target.bobRX = 1.35
+      target.bobY = -1.14
+      target.hipLX = -0.12 + cs
+      target.hipRX = -0.12 - cs
+      target.kneeLX = 0.2 + Math.max(0, -cs) * 0.8
+      target.kneeRX = 0.2 + Math.max(0, cs) * 0.8
+      target.shoulderLX = -2.6 - cs * 0.6
+      target.shoulderRX = -2.6 + cs * 0.6
+      target.shoulderLZ = 0.25
+      target.shoulderRZ = -0.25
+      target.elbowLX = -0.45
+      target.elbowRX = -0.45
+      target.spineX = -0.15
+    }
+
     // ── View pitch aim (body follows the eyes a little) ──────────────
-    target.headX = -input.pitch * 0.55
-    target.chestX += -input.pitch * 0.22
+    target.headX = -input.pitch * 0.55 + (input.stance === 2 ? -0.8 : 0)
+    target.chestX += input.stance === 2 ? 0 : -input.pitch * 0.22
 
     // ── Tool poses (upper-body override) ─────────────────────────────
-    if (input.tool === 'physgun') {
+    if (input.stance !== 2 && input.tool === 'physgun') {
       // Forearm ends up ~horizontal (tool aligns with the forearm).
       target.shoulderRX = -0.9 - input.pitch * 0.55
       target.elbowRX = -0.62
@@ -178,7 +212,10 @@ export class AvatarAnimator {
         target.shoulderLX = -0.8 - input.pitch * 0.5
         target.elbowLX = -0.65
       }
-    } else if (input.tool === 'axe' || input.tool === 'pickaxe' || input.tool === 'hammer') {
+    } else if (
+      input.stance !== 2 &&
+      (input.tool === 'axe' || input.tool === 'pickaxe' || input.tool === 'hammer')
+    ) {
       // Relaxed carry; chop when swinging.
       target.shoulderRX = -0.35
       target.elbowRX = -0.75
@@ -201,6 +238,7 @@ export class AvatarAnimator {
     // ── Apply to joints ──────────────────────────────────────────────
     const j = this.joints
     j.bob.position.y = p.bobY
+    j.bob.rotation.x = p.bobRX
     j.spine.rotation.x = p.spineX
     j.spine.rotation.y = p.spineY
     j.spine.rotation.z = p.spineZ

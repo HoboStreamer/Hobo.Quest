@@ -10,7 +10,7 @@ import type { Scene } from '@babylonjs/core/scene.js'
 import '@babylonjs/loaders/OBJ/objFileLoader.js'
 import type { UniversalCamera } from '@babylonjs/core/Cameras/universalCamera.js'
 import type { ContentRegistry } from '@hobo/content'
-import { createToolProp, toolPropKindFor, type ToolProp } from './avatar/toolProps.js'
+import { createHeldItemNode, type HeldItemNode } from './heldItem.js'
 
 /**
  * First-person viewmodel: the equipped tool rendered at the camera with
@@ -21,7 +21,7 @@ import { createToolProp, toolPropKindFor, type ToolProp } from './avatar/toolPro
 export class Viewmodel {
   private readonly rig: TransformNode
   private physgunMeshes: AbstractMesh[] = []
-  private toolProp: ToolProp | null = null
+  private toolProp: HeldItemNode | null = null
   private currentItem: string | null = null
   private physgunLoaded = false
 
@@ -145,13 +145,13 @@ export class Viewmodel {
     const isPhysgun = def?.tool?.kind === 'physgun'
     this.setPhysgunVisible(isPhysgun && this.physgunLoaded)
 
-    if (!isPhysgun || !this.physgunLoaded) {
-      const kind = toolPropKindFor(itemDef ?? undefined, def?.tool?.kind)
-      if (kind) {
-        this.toolProp = createToolProp(this.scene, kind, 'vm')
+    if ((!isPhysgun || !this.physgunLoaded) && itemDef) {
+      this.toolProp = createHeldItemNode(this.scene, this.content, itemDef, 'vm')
+      if (this.toolProp) {
         this.toolProp.root.parent = this.rig
-        this.toolProp.root.position.set(0, -0.06, -0.08)
-        this.toolProp.root.scaling.setAll(1.05)
+        const isTool = def?.tool !== undefined
+        this.toolProp.root.position.set(0, isTool ? -0.06 : -0.12, isTool ? -0.08 : 0)
+        this.toolProp.root.scaling.scaleInPlace(isTool ? 1.05 : 0.9)
         // Viewmodels sit in the scene's shadow side; self-illuminate them a
         // touch so their shapes read instead of silhouetting to black.
         for (const child of this.toolProp.root.getChildMeshes()) {

@@ -22,6 +22,11 @@ export declare class LocalPlayer {
   private currPos
   /** Interpolated render position (capsule center), updated each frame. */
   readonly renderPos: Vector3
+  /** Smoothed eye height so stance changes glide instead of popping. */
+  private eyeSmooth
+  /** Reconciliation error, blended away over ~100ms instead of snapping —
+   * this is what makes standing on moving props watchable. */
+  private readonly corr
   constructor(
     scene: Scene,
     physics: PhysicsWorld,
@@ -40,7 +45,7 @@ export declare class LocalPlayer {
   /** Reconcile against an authoritative snapshot. */
   onSnapshot(snap: ServerSnapshot): void
   /** Per-frame: camera follows interpolated predicted position. */
-  frameUpdate(alpha: number): void
+  frameUpdate(alpha: number, dt: number): void
   get viewYaw(): number
   get viewPitch(): number
   get eye(): Vector3

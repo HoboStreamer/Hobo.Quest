@@ -37,12 +37,27 @@ export function customizeScreen(
     camera.setTarget(new Vector3(previewPos.x, 0.85, previewPos.z))
     scene.activeCamera = camera
     const avatar = new Avatar(scene, content, appearance, 'preview')
-    let previewYaw = Math.PI
+    // Face the camera; the player can drag left/right to turn the model.
+    let previewYaw = 0
     let previewTime = 0
+    let dragging = false
+    const onDown = (e: PointerEvent): void => {
+      const target = e.target as HTMLElement
+      if (target.closest('.customize-panel')) return
+      dragging = true
+    }
+    const onMove = (e: PointerEvent): void => {
+      if (dragging) previewYaw += e.movementX * 0.012
+    }
+    const onUp = (): void => {
+      dragging = false
+    }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('pointermove', onMove)
+    document.addEventListener('pointerup', onUp)
 
     const ticker = setInterval(() => {
       previewTime += 1 / 30
-      previewYaw += 0.008
       avatar.update({
         dt: 1 / 30,
         time: previewTime,
@@ -50,7 +65,8 @@ export function customizeScreen(
         y: 0.02,
         z: previewPos.z,
         yaw: previewYaw,
-        pitch: 0,
+        // Relaxed idle: subtle breathing sway and a slow look-around.
+        pitch: Math.sin(previewTime * 0.4) * 0.07,
         speed: 0,
         grounded: true,
         itemDef: 'physgun',
@@ -73,10 +89,6 @@ export function customizeScreen(
         <div class="cust-label">Top</div><div class="cust-row" id="row-top"></div>
         <div class="cust-label">Bottom</div><div class="cust-row" id="row-bottom"></div>
         <div class="cust-label">Shoes</div><div class="cust-row" id="row-shoes"></div>
-        <div class="cust-sliders">
-          <label>Height <input id="s-height" type="range" min="0.92" max="1.08" step="0.01" /></label>
-          <label>Build <input id="s-build" type="range" min="0.85" max="1.15" step="0.01" /></label>
-        </div>
         <div class="cust-actions">
           <button id="btn-random">🎲 Randomize</button>
           <button id="btn-join" class="primary">Enter the Yard</button>
@@ -87,7 +99,7 @@ export function customizeScreen(
     const $ = (id: string) => overlay.querySelector(`#${id}`) as HTMLElement
 
     const apply = (next: Partial<Appearance>): void => {
-      appearance = { ...appearance, ...next }
+      appearance = { ...appearance, ...next, height: 1, build: 1 }
       if (appearance.body === 'female') appearance.facialHair = 'none'
       avatar.setAppearance(appearance)
       renderControls()
@@ -158,23 +170,21 @@ export function customizeScreen(
         b.addEventListener('click', () => apply({ facialHair: fh }))
         fhRow.appendChild(b)
       }
-      ;($('s-height') as HTMLInputElement).value = String(appearance.height)
-      ;($('s-build') as HTMLInputElement).value = String(appearance.build)
     }
     renderControls()
 
-    $('s-height').addEventListener('input', (e) =>
-      apply({ height: Number((e.target as HTMLInputElement).value) }),
+    // Body size is locked for combat fairness — every drifter shares one hull.
+    $('btn-random').addEventListener('click', () =>
+      apply({ ...randomAppearance(Math.random), height: 1, build: 1 }),
     )
-    $('s-build').addEventListener('input', (e) =>
-      apply({ build: Number((e.target as HTMLInputElement).value) }),
-    )
-    $('btn-random').addEventListener('click', () => apply(randomAppearance(Math.random)))
 
     const join = (): void => {
       const name = ($('cname') as HTMLInputElement).value.trim() || 'Drifter'
       localStorage.setItem('hobo.appearance', JSON.stringify(appearance))
       clearInterval(ticker)
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('pointermove', onMove)
+      document.removeEventListener('pointerup', onUp)
       avatar.dispose()
       overlay.remove()
       // The preview camera stays alive until the gameplay camera takes over —
@@ -193,7 +203,7 @@ function loadAppearance(): Appearance {
     const raw = localStorage.getItem('hobo.appearance')
     if (raw) {
       const parsed = AppearanceSchema.safeParse(JSON.parse(raw))
-      if (parsed.success) return parsed.data
+      if (parsed.success) return { ...parsed.data, height: 1, build: 1 }
     }
   } catch {
     // fall through to default

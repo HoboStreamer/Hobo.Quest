@@ -157,7 +157,7 @@ async function main(): Promise<void> {
     // Synthetic CDP moves carry no movementX; dispatch real MouseEvents so
     // the look pipeline (which reads movement deltas) is actually exercised.
     await page.evaluate(() => {
-      document.dispatchEvent(new MouseEvent('mousemove', { movementX: 30, movementY: 0 }))
+      document.dispatchEvent(new PointerEvent('pointermove', { movementX: 30, movementY: 0 }))
     })
     await page.waitForTimeout(60)
   }
@@ -189,6 +189,23 @@ async function main(): Promise<void> {
   })
   await page.waitForTimeout(700)
   await shot(page, '05-look-back-city')
+
+  // Stances: remote view can't be captured solo, but the FP camera height
+  // and body pose show in first person.
+  await page.keyboard.down('KeyC')
+  await page.waitForTimeout(900)
+  await page.evaluate(() => {
+    ;(window as unknown as { __hobo: { input: { pitch: number } } }).__hobo.input.pitch = -1.1
+  })
+  await page.waitForTimeout(400)
+  await shot(page, '09-crouch-lookdown')
+  await page.keyboard.up('KeyC')
+  await page.waitForTimeout(900)
+  await page.keyboard.press('KeyZ')
+  await page.waitForTimeout(1600)
+  await shot(page, '10-prone')
+  await page.keyboard.press('KeyZ')
+  await page.waitForTimeout(1600)
 
   // Icon factory diagnostic: dump the physgun icon to a file.
   const iconData = await page.evaluate(() => {

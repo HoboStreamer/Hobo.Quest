@@ -99,6 +99,8 @@ export function buildStaticWorld(scene: Scene, content: ContentRegistry): void {
   for (const [i, s] of world.statics.entries()) {
     const mesh = meshForShape(scene, `static:${i}`, s.shape, s.color)
     mesh.position.set(s.pos[0], s.pos[1], s.pos[2])
-    mesh.rotationQuaternion = Quaternion.FromEulerAngles(0, s.yaw, 0)
+    mesh.rotationQuaternion = s.rot
+      ? Quaternion.FromEulerAngles(s.rot[0], s.rot[1], s.rot[2])
+      : Quaternion.FromEulerAngles(0, s.yaw, 0)
   }
 }

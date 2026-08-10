@@ -18,6 +18,8 @@ export interface AvatarUpdate {
   pitch: number
   speed: number
   grounded: boolean
+  /** Stance: 0 stand, 1 crouch, 2 prone. */
+  stance?: number
   /** Equipped item def id (drives held prop + arm pose). */
   itemDef?: string | undefined
   beamActive?: boolean

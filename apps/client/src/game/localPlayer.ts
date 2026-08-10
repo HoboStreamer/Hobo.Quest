@@ -5,6 +5,7 @@ import {
   Buttons,
   DEFAULT_MOVEMENT,
   createMoveState,
+  eyeOffsetFor,
   stepMovement,
   type CollisionQueries,
   type MoveInput,
@@ -40,6 +41,11 @@ export class LocalPlayer {
   private currPos = new Vector3()
   /** Interpolated render position (capsule center), updated each frame. */
   readonly renderPos = new Vector3()
+  /** Smoothed eye height so stance changes glide instead of popping. */
+  private eyeSmooth = DEFAULT_MOVEMENT.eyeOffset
+  /** Reconciliation error, blended away over ~100ms instead of snapping —
+   * this is what makes standing on moving props watchable. */
+  private readonly corr = new Vector3()
 
   constructor(
     scene: Scene,
@@ -73,7 +79,8 @@ export class LocalPlayer {
     const buttons =
       (this.input.keyDown('Space') ? Buttons.Jump : 0) |
       (this.input.keyDown('ShiftLeft') ? Buttons.Sprint : 0) |
-      (this.input.keyDown('ControlLeft') ? Buttons.Crouch : 0)
+      (this.input.keyDown('ControlLeft') || this.input.keyDown('KeyC') ? Buttons.Crouch : 0) |
+      (this.input.keyDown('KeyZ') ? Buttons.Prone : 0)
     const moveX = (this.input.keyDown('KeyD') ? 1 : 0) - (this.input.keyDown('KeyA') ? 1 : 0)
     const moveZ = (this.input.keyDown('KeyW') ? 1 : 0) - (this.input.keyDown('KeyS') ? 1 : 0)
 
@@ -112,6 +119,10 @@ export class LocalPlayer {
     if (!mine) return
     this.pending = this.pending.filter((c) => c.seq > snap.ack)
 
+    const beforeX = this.move.pos.x
+    const beforeY = this.move.pos.y
+    const beforeZ = this.move.pos.z
+
     // Rewind to server state and replay unacked inputs.
     this.move.pos.x = mine.pos[0]
     this.move.pos.y = mine.pos[1]
@@ -120,17 +131,28 @@ export class LocalPlayer {
     this.move.vel.y = mine.vel[1]
     this.move.vel.z = mine.vel[2]
     this.move.grounded = mine.grounded
+    this.move.stance = mine.stance
     for (const cmd of this.pending) this.applyInput(cmd)
     this.currPos.set(this.move.pos.x, this.move.pos.y, this.move.pos.z)
+
+    // Fold the correction into a decaying visual offset (large errors snap).
+    this.corr.x += beforeX - this.move.pos.x
+    this.corr.y += beforeY - this.move.pos.y
+    this.corr.z += beforeZ - this.move.pos.z
+    if (this.corr.length() > 1.5) this.corr.setAll(0)
   }
 
   /** Per-frame: camera follows interpolated predicted position. */
-  frameUpdate(alpha: number): void {
+  frameUpdate(alpha: number, dt: number): void {
     const x = this.prevPos.x + (this.currPos.x - this.prevPos.x) * alpha
     const y = this.prevPos.y + (this.currPos.y - this.prevPos.y) * alpha
     const z = this.prevPos.z + (this.currPos.z - this.prevPos.z) * alpha
-    this.renderPos.set(x, y, z)
-    this.camera.position.set(x, y + MOVE.eyeOffset, z)
+    const decay = Math.exp(-dt * 12)
+    this.corr.scaleInPlace(decay)
+    this.renderPos.set(x + this.corr.x, y + this.corr.y, z + this.corr.z)
+    const targetEye = eyeOffsetFor(this.move.stance)
+    this.eyeSmooth += (targetEye - this.eyeSmooth) * Math.min(1, dt * 9)
+    this.camera.position.set(this.renderPos.x, this.renderPos.y + this.eyeSmooth, this.renderPos.z)
     this.camera.rotation.set(-this.input.pitch, this.input.yaw, 0)
   }
 

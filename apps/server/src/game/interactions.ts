@@ -6,7 +6,7 @@ import type {
   ClientWeld,
   ServerActionResult,
 } from '@hobo/protocol'
-import { DEFAULT_MOVEMENT, type GameEntity, type LevelUp } from '@hobo/gameplay'
+import type { GameEntity, LevelUp } from '@hobo/gameplay'
 import type { ItemDef } from '@hobo/content'
 import { asEntityId, qfromYaw, quat, v3dist, vec3 } from '@hobo/shared'
 import { viewDirection } from './playerSession.js'
@@ -31,6 +31,7 @@ function result(action: ServerActionResult['action'], ok: boolean, error?: strin
 
 /** The tool capability of the session's active hotbar item, if any. */
 export function equippedTool(session: PlayerSession): NonNullable<ItemDef['tool']> | undefined {
+  if (session.holstered) return undefined
   const stack = session.inventory.get(session.activeHotbar)
   if (!stack) return undefined
   return session.content.item(stack.defId)?.tool
@@ -62,7 +63,7 @@ export function handleUse(
 
   // Props carry their own item: E picks them back up into the inventory.
   if (entity?.prop) {
-    eyePosition(session, DEFAULT_MOVEMENT.eyeOffset, _eye)
+    eyePosition(session, _eye)
     if (v3dist(_eye, entity.transform.pos) > HAND_USE_RANGE + 0.5) {
       return { outcome: result('use', false, 'out_of_range'), ...none }
     }
@@ -90,7 +91,7 @@ export function handleUse(
     return { outcome: result('use', false, `requires_${nodeType.requiredTool}`), ...none }
   }
 
-  eyePosition(session, DEFAULT_MOVEMENT.eyeOffset, _eye)
+  eyePosition(session, _eye)
   const range = usingMatchingTool ? (tool?.range ?? HAND_USE_RANGE) : HAND_USE_RANGE
   if (v3dist(_eye, entity.transform.pos) > range + nodeType.bodyOffsetY + 1) {
     return { outcome: result('use', false, 'out_of_range'), ...none }
@@ -183,7 +184,7 @@ export function handleDrop(
   const removed = session.inventory.removeFromSlot(msg.slot, msg.count)
   if (!removed) return { outcome: result('drop', false, 'empty_slot'), droppedId: null }
 
-  eyePosition(session, DEFAULT_MOVEMENT.eyeOffset, _eye)
+  eyePosition(session, _eye)
   viewDirection(session, _dropDir)
   const spawnPos = vec3(
     _eye.x + _dropDir.x * 1.1,
@@ -226,7 +227,7 @@ export function handleWeld(
     return { outcome: result('weld', false, 'not_owner'), welded: null }
   }
 
-  eyePosition(session, DEFAULT_MOVEMENT.eyeOffset, _eye)
+  eyePosition(session, _eye)
   const reach = tool.range + 1.5
   if (v3dist(_eye, a.transform.pos) > reach || v3dist(_eye, b.transform.pos) > reach) {
     return { outcome: result('weld', false, 'out_of_range'), welded: null }

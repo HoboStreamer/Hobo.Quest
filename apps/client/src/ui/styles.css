@@ -88,6 +88,11 @@ input {
   border-color: #f0b040;
 }
 
+.slot.holstered {
+  border-color: #6a7420;
+  opacity: 0.75;
+}
+
 .slot.selected-src {
   border-color: #58c470;
 }
@@ -543,8 +548,8 @@ input {
 }
 
 .slot-icon {
-  width: 46px;
-  height: 46px;
+  width: 54px;
+  height: 54px;
   image-rendering: auto;
   pointer-events: none;
 }

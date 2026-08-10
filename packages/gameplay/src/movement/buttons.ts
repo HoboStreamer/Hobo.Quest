@@ -5,4 +5,5 @@ export const Buttons = {
   Sprint: 1 << 2,
   Use: 1 << 3,
   Attack: 1 << 4,
+  Prone: 1 << 5,
 } as const

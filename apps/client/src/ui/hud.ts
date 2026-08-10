@@ -167,7 +167,9 @@ export class Hud {
     const el = document.createElement('div')
     el.className = 'slot'
     el.dataset.slot = String(i)
-    if (i === this.state.activeHotbar && i < HOTBAR_SLOTS) el.classList.add('active')
+    if (i === this.state.activeHotbar && i < HOTBAR_SLOTS) {
+      el.classList.add(this.state.holstered ? 'holstered' : 'active')
+    }
     if (keyLabel) {
       const key = document.createElement('span')
       key.className = 'key'
@@ -211,7 +213,16 @@ export class Hud {
     })
     // Click hotbar slots (outside menu) to select; right-click splits half.
     el.addEventListener('click', () => {
-      if (!this.menuOpen && i < HOTBAR_SLOTS) this.connection.send({ t: 'hotbar', slot: i })
+      if (!this.menuOpen && i < HOTBAR_SLOTS) {
+        this.connection.send({ t: 'hotbar', slot: i })
+        if (i === this.state.activeHotbar) {
+          this.state.holstered = !this.state.holstered
+        } else {
+          this.state.activeHotbar = i
+          this.state.holstered = false
+        }
+        this.renderHotbar()
+      }
     })
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault()

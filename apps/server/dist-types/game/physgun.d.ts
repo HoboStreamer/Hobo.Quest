@@ -21,7 +21,6 @@ export declare function tryGrab(
   session: PlayerSession,
   world: GameWorld,
   heldByOthers: ReadonlySet<string>,
-  eyeOffset: number,
   canManipulate: (entity: GameEntity) => boolean,
 ): GameEntity | PhysgunDeny
 export declare function release(session: PlayerSession): void
@@ -35,5 +34,5 @@ export declare function rotateHeld(
 /** Freezes the held prop in place (motion -> static) and releases the beam. */
 export declare function freezeHeld(session: PlayerSession, world: GameWorld): GameEntity | null
 /** Called each tick for sessions holding a prop: drives the body toward the view target. */
-export declare function driveHeld(session: PlayerSession, world: GameWorld, eyeOffset: number): void
+export declare function driveHeld(session: PlayerSession, world: GameWorld): void
 //# sourceMappingURL=physgun.d.ts.map

@@ -70,6 +70,26 @@ export const HOBOVILLE: WorldDef = {
     // Quarry ledges
     { shape: { type: 'box', size: [8, 1.2, 6] }, pos: [-42, 0.6, -38], yaw: 0.3, color: '#75716c' },
     { shape: { type: 'box', size: [6, 2.4, 5] }, pos: [-47, 1.2, -43], yaw: 0.5, color: '#6b6762' },
+
+    // ── Surf spine (NW field): two steep ramps leaning outward — steeper
+    // than the walkable slope limit, so sliding them is pure surf physics.
+    {
+      shape: { type: 'box', size: [10, 0.6, 34] },
+      pos: [-43.4, 3.4, 45],
+      yaw: 0,
+      rot: [0, 0, 1.0],
+      color: '#5d6570',
+    },
+    {
+      shape: { type: 'box', size: [10, 0.6, 34] },
+      pos: [-36.6, 3.4, 45],
+      yaw: 0,
+      rot: [0, 0, -1.0],
+      color: '#5d6570',
+    },
+    // Launch platform at the spine's south end
+    { shape: { type: 'box', size: [4, 0.4, 4] }, pos: [-40, 6.2, 26], yaw: 0, color: '#6a727c' },
+    { shape: { type: 'box', size: [1.2, 6, 1.2] }, pos: [-40, 3, 24], yaw: 0, color: '#565e66' },
   ],
 
   resourceNodes: [

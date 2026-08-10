@@ -1,6 +1,6 @@
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { ContentRegistry } from '@hobo/content'
-import { DEFAULT_MOVEMENT } from '@hobo/gameplay'
+import { hullHeightFor } from '@hobo/gameplay'
 import type { Appearance } from '@hobo/protocol'
 import type { LocalPlayer } from '../game/localPlayer.js'
 import type { ClientState } from '../state/clientState.js'
@@ -14,7 +14,7 @@ import { Avatar } from './avatar/avatar.js'
  * behind the true eye so the chest never clips the near plane.
  */
 
-const BODY_BACK_OFFSET = 0.08
+const BODY_BACK_OFFSET = 0.15
 
 export class FirstPersonBody {
   private readonly avatar: Avatar
@@ -57,20 +57,25 @@ export class FirstPersonBody {
     const speed = Math.hypot(move.vel.x, move.vel.z)
     const yaw = this.player.viewYaw
     const pitch = this.player.viewPitch
-    const feetY = renderPos.y - DEFAULT_MOVEMENT.capsuleHeight / 2
+    const feetY = renderPos.y - hullHeightFor(this.player.move.stance) / 2
     // The camera pivots at the eyes; slide the body backward as the view
     // pitches down so looking down shows your chest and legs from above
     // instead of the inside of your own collar.
-    const back = BODY_BACK_OFFSET + Math.max(0, -pitch) * 0.12
+    const speedNorm = Math.min(speed / 7.2, 1)
+    // Prone pitches the torso forward from the hips — slide the whole body
+    // back so the chest doesn't engulf the camera.
+    const proneBack = move.stance === 2 ? 0.95 : 0
+    const back = BODY_BACK_OFFSET + Math.max(0, -pitch) * 0.12 + speedNorm * 0.06 + proneBack
     this.avatar.update({
       dt,
       time,
       x: renderPos.x - Math.sin(yaw) * back,
-      y: feetY,
+      y: feetY - 0.03,
       z: renderPos.z - Math.cos(yaw) * back,
       yaw,
       pitch: pitch * 0.3,
       speed,
+      stance: move.stance,
       grounded: move.grounded,
       // The screen-space viewmodel represents the tool in first person; a
       // second copy in the body's hand would wave in front of the camera.

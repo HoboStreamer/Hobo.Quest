@@ -4,16 +4,50 @@ import type { CollisionQueries, SweepHit } from './collision.js'
 import type { MovementParams } from './params.js'
 
 /**
- * Source/Quake-style kinematic character movement.
+ * Source/Quake-style kinematic character movement with stances.
  *
  * The player is NOT a dynamic rigid body: each fixed tick we integrate an
  * explicit velocity, sweep the player capsule through the collision world,
- * clip velocity against contact planes and slide along them, with step-up
- * for stairs/ledges. This is deliberately deterministic and side-effect
- * free so the same function serves server authority and client prediction.
+ * clip velocity against contact planes and slide along them (which is also
+ * exactly what makes surf ramps work), with step-up for stairs. This is
+ * deliberately deterministic and side-effect free so the same function
+ * serves server authority and client prediction.
  *
- * Position convention: `pos` is the CAPSULE CENTER. Eye = pos.y + eyeOffset.
+ * Stances (stand / crouch / prone) change the collision hull, eye height
+ * and speed cap. Transitions take real time and are followed by a lockout,
+ * so stance spam can't be exploited; growing stances require headroom.
+ *
+ * Position convention: `pos` is the CAPSULE CENTER. Eye = pos.y + eye offset.
  */
+
+export enum Stance {
+  Stand = 0,
+  Crouch = 1,
+  Prone = 2,
+}
+
+/** Hull heights per stance (capsule total height, m). */
+export const STANCE_HULL: readonly number[] = [1.8, 1.2, 0.7]
+/** Eye offset above the capsule CENTER per stance. */
+export const STANCE_EYE: readonly number[] = [0.65, 0.38, 0.14]
+/** Ground-speed multiplier per stance. */
+export const STANCE_SPEED: readonly number[] = [1, 0.45, 0.22]
+/** Transition durations [from][to] in seconds. */
+const STANCE_DUR: readonly (readonly number[])[] = [
+  [0, 0.25, 0.9],
+  [0.25, 0, 0.6],
+  [1.0, 0.7, 0],
+]
+/** Lockout after a completed transition (anti spam/peek abuse). */
+const STANCE_COOLDOWN = 0.25
+
+export function hullHeightFor(stance: Stance): number {
+  return STANCE_HULL[stance] ?? 1.8
+}
+
+export function eyeOffsetFor(stance: Stance): number {
+  return STANCE_EYE[stance] ?? 0.65
+}
 
 export interface MoveInput {
   /** Strafe axis [-1,1], +X right. */
@@ -31,6 +65,16 @@ export interface PlayerMoveState {
   grounded: boolean
   /** Edge detection for non-autobhop jumping. */
   jumpHeld: boolean
+  stance: Stance
+  /** Prone is a toggle; this latches the key edge. */
+  proneHeld: boolean
+  proneActive: boolean
+  /** Seconds remaining in the current stance transition (anim + lockout). */
+  stanceT: number
+  /** Total duration of the running transition (for progress reporting). */
+  stanceDur: number
+  /** Post-transition lockout remaining. */
+  stanceCooldown: number
 }
 
 export function createMoveState(spawn: Vec3): PlayerMoveState {
@@ -39,7 +83,19 @@ export function createMoveState(spawn: Vec3): PlayerMoveState {
     vel: vec3(),
     grounded: false,
     jumpHeld: false,
+    stance: Stance.Stand,
+    proneHeld: false,
+    proneActive: false,
+    stanceT: 0,
+    stanceDur: 0,
+    stanceCooldown: 0,
   }
+}
+
+/** 0..1 progress of the current stance transition (1 = settled). */
+export function stanceProgress(state: PlayerMoveState): number {
+  if (state.stanceT <= 0 || state.stanceDur <= 0) return 1
+  return 1 - state.stanceT / state.stanceDur
 }
 
 const MAX_CLIP_PLANES = 5
@@ -68,12 +124,13 @@ function checkGround(
   state: PlayerMoveState,
   world: CollisionQueries,
   params: MovementParams,
+  hull: number,
 ): SweepHit | null {
   // Never grounded while moving up fast (start of a jump).
   if (state.vel.y > 1.0) return null
   v3copy(_end, state.pos)
   _end.y -= params.skin + 0.06
-  const hit = world.sweepCapsule(state.pos, _end, params.capsuleRadius, params.capsuleHeight)
+  const hit = world.sweepCapsule(state.pos, _end, params.capsuleRadius, hull)
   if (hit && hit.normal.y >= params.groundNormalY) return hit
   return null
 }
@@ -117,6 +174,7 @@ function slideMove(
   state: PlayerMoveState,
   world: CollisionQueries,
   params: MovementParams,
+  hull: number,
   dt: number,
 ): boolean {
   let timeLeft = dt
@@ -133,7 +191,7 @@ function slideMove(
     _end.y = state.pos.y + _delta.y
     _end.z = state.pos.z + _delta.z
 
-    const hit = world.sweepCapsule(state.pos, _end, params.capsuleRadius, params.capsuleHeight)
+    const hit = world.sweepCapsule(state.pos, _end, params.capsuleRadius, hull)
     if (!hit) {
       v3copy(state.pos, _end)
       break
@@ -189,6 +247,7 @@ function tryStepMove(
   state: PlayerMoveState,
   world: CollisionQueries,
   params: MovementParams,
+  hull: number,
   dt: number,
   startPos: Vec3,
   startVel: Vec3,
@@ -201,16 +260,16 @@ function tryStepMove(
   v3copy(state.vel, startVel)
   v3copy(_end, state.pos)
   _end.y += params.stepHeight
-  const upHit = world.sweepCapsule(state.pos, _end, params.capsuleRadius, params.capsuleHeight)
+  const upHit = world.sweepCapsule(state.pos, _end, params.capsuleRadius, hull)
   const upFrac = upHit ? Math.max(upHit.fraction - params.skin / params.stepHeight, 0) : 1
   state.pos.y += params.stepHeight * upFrac
 
-  slideMove(state, world, params, dt)
+  slideMove(state, world, params, hull, dt)
 
   // Settle back down onto the step surface.
   v3copy(_down, state.pos)
   _down.y -= params.stepHeight * upFrac + params.skin
-  const downHit = world.sweepCapsule(state.pos, _down, params.capsuleRadius, params.capsuleHeight)
+  const downHit = world.sweepCapsule(state.pos, _down, params.capsuleRadius, hull)
   if (downHit) {
     v3addScaled(state.pos, state.pos, { x: 0, y: _down.y - state.pos.y, z: 0 }, downHit.fraction)
     state.pos.y += params.skin
@@ -239,6 +298,53 @@ function tryStepMove(
   }
 }
 
+/** Stance state machine: desires, timed transitions, headroom, lockout. */
+function updateStance(
+  state: PlayerMoveState,
+  input: MoveInput,
+  params: MovementParams,
+  world: CollisionQueries,
+  dt: number,
+): void {
+  if (state.stanceT > 0) state.stanceT = Math.max(0, state.stanceT - dt)
+  if (state.stanceCooldown > 0) state.stanceCooldown = Math.max(0, state.stanceCooldown - dt)
+
+  // Prone toggles on key edge.
+  const proneDown = (input.buttons & Buttons.Prone) !== 0
+  if (proneDown && !state.proneHeld) state.proneActive = !state.proneActive
+  state.proneHeld = proneDown
+
+  const crouchHeld = (input.buttons & Buttons.Crouch) !== 0
+  const desired: Stance = state.proneActive
+    ? Stance.Prone
+    : crouchHeld
+      ? Stance.Crouch
+      : Stance.Stand
+  if (desired === state.stance || state.stanceT > 0 || state.stanceCooldown > 0) return
+
+  const oldHull = hullHeightFor(state.stance)
+  const newHull = hullHeightFor(desired)
+  if (newHull > oldHull) {
+    // Growing needs headroom: sweep the current hull upward by the delta.
+    v3copy(_end, state.pos)
+    _end.y += newHull - oldHull + params.skin
+    if (world.sweepCapsule(state.pos, _end, params.capsuleRadius, oldHull)) {
+      // Blocked — cancel a prone->up desire so it doesn't retry forever
+      // against a ceiling (the player can toggle again).
+      if (state.stance === Stance.Prone && desired !== Stance.Prone) state.proneActive = true
+      return
+    }
+  }
+
+  // Commit: hull changes now, feet stay planted, timers gate the next change.
+  state.pos.y += (newHull - oldHull) / 2
+  const dur = STANCE_DUR[state.stance]?.[desired] ?? 0.3
+  state.stance = desired
+  state.stanceT = dur
+  state.stanceDur = dur
+  state.stanceCooldown = dur + STANCE_COOLDOWN
+}
+
 /**
  * Advances one fixed tick. Deterministic: same state + input + world =>
  * same result, on server and predicting client alike.
@@ -250,7 +356,10 @@ export function stepMovement(
   world: CollisionQueries,
   dt: number,
 ): void {
-  const groundHit = checkGround(state, world, params)
+  updateStance(state, input, params, world, dt)
+  const hull = hullHeightFor(state.stance)
+
+  const groundHit = checkGround(state, world, params, hull)
   state.grounded = groundHit !== null
 
   // Wish direction from yaw + move axes (horizontal only).
@@ -266,13 +375,15 @@ export function stepMovement(
     _wishdir.x /= wishLen
     _wishdir.z /= wishLen
   }
-  const sprinting = (input.buttons & Buttons.Sprint) !== 0
-  const maxSpeed = sprinting ? params.maxSprintSpeed : params.maxGroundSpeed
+  const sprinting = (input.buttons & Buttons.Sprint) !== 0 && state.stance === Stance.Stand
+  const maxSpeed =
+    (sprinting ? params.maxSprintSpeed : params.maxGroundSpeed) * (STANCE_SPEED[state.stance] ?? 1)
   const wishSpeed = Math.min(wishLen, 1) * maxSpeed
 
+  // Jumping only from a standing, settled stance.
   const wantJump = (input.buttons & Buttons.Jump) !== 0
-  const jumpPressed = wantJump && (params.autoBhop || !state.jumpHeld)
-
+  const jumpPressed =
+    wantJump && (params.autoBhop || !state.jumpHeld) && state.stance === Stance.Stand
   if (state.grounded && jumpPressed) {
     state.vel.y = params.jumpSpeed
     state.grounded = false
@@ -288,15 +399,18 @@ export function stepMovement(
     }
     state.vel.y = Math.min(state.vel.y, 0.1)
   } else {
+    // Air control (air-strafing) + gravity: on steep ramps checkGround finds
+    // no floor, slideMove clips velocity along the surface — that pair IS
+    // surf physics.
     accelerate(state, _wishdir, Math.min(wishSpeed, params.airSpeedCap), params.airAccel, dt)
     state.vel.y -= params.gravity * dt
   }
 
   v3copy(_stepPos, state.pos)
   const startVel = { x: state.vel.x, y: state.vel.y, z: state.vel.z }
-  const blocked = slideMove(state, world, params, dt)
+  const blocked = slideMove(state, world, params, hull, dt)
   if (blocked && state.grounded) {
-    tryStepMove(state, world, params, dt, _stepPos, startVel)
+    tryStepMove(state, world, params, hull, dt, _stepPos, startVel)
   }
 
   // Terminal velocity guard.

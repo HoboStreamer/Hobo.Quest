@@ -53,10 +53,9 @@ export function tryGrab(
   session: PlayerSession,
   world: GameWorld,
   heldByOthers: ReadonlySet<string>,
-  eyeOffset: number,
   canManipulate: (entity: GameEntity) => boolean,
 ): GameEntity | PhysgunDeny {
-  eyePosition(session, eyeOffset, _eye)
+  eyePosition(session, _eye)
   viewDirection(session, _dir)
   v3addScaled(_to, _eye, _dir, PHYSGUN_MAX_RANGE)
   const hit = world.physics.raycast(_eye, _to, CollisionLayer.Prop)
@@ -133,7 +132,7 @@ export function freezeHeld(session: PlayerSession, world: GameWorld): GameEntity
 }
 
 /** Called each tick for sessions holding a prop: drives the body toward the view target. */
-export function driveHeld(session: PlayerSession, world: GameWorld, eyeOffset: number): void {
+export function driveHeld(session: PlayerSession, world: GameWorld): void {
   const held = session.held
   if (!held) return
   const entity = world.entities.get(held.entityId)
@@ -143,7 +142,7 @@ export function driveHeld(session: PlayerSession, world: GameWorld, eyeOffset: n
     return
   }
 
-  eyePosition(session, eyeOffset, _eye)
+  eyePosition(session, _eye)
   viewDirection(session, _dir)
   v3addScaled(_target, _eye, _dir, held.dist)
   if (held.grid) {

@@ -63,6 +63,8 @@ export declare class ClientState {
   ack: number
   inventory: WireInventory | null
   activeHotbar: number
+  /** Mirrors the server's holster toggle (same deterministic rules). */
+  holstered: boolean
   craftJobs: {
     recipe: string
     readyTick: number
@@ -72,7 +74,7 @@ export declare class ClientState {
   readonly heldBy: Map<string, string>
   apply(msg: ServerMessage): void
   countOf(defId: string): number
-  /** Item def id in the active hotbar slot, if any. */
+  /** Item def id in the active hotbar slot (null when holstered). */
   activeItemDef(): string | null
   skillLevel(id: string): number
   isFriend(playerId: string): boolean

@@ -51,7 +51,7 @@ export class IconFactory {
       const prop = createToolProp(this.scene, toolVisualKind(def.tool.kind), `icon:${defId}`)
       root = prop.root
       prop.root.position.copyFrom(STAGE)
-      radius = def.tool.kind === 'physgun' ? 0.3 : 0.38
+      radius = def.tool.kind === 'physgun' ? 0.23 : 0.3
       if (def.tool.kind !== 'physgun') prop.root.position.y -= 0.22
     } else {
       const rep = this.content.worldRepOf(defId)
@@ -69,7 +69,7 @@ export class IconFactory {
 
     // Three-quarter view, looking slightly down so no world geometry can
     // appear behind the model (nothing exists below the stage).
-    const dist = radius * 2.2
+    const dist = radius * 1.9
     const focus = new Vector3(STAGE.x, STAGE.y + radius * 0.1, STAGE.z + (def?.tool ? 0.12 : 0))
     const camera = new FreeCamera(
       `icon-cam:${defId}`,

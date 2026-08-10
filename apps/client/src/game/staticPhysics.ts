@@ -1,6 +1,6 @@
 import type { ContentRegistry } from '@hobo/content'
 import { CollisionLayer, type PhysicsWorld } from '@hobo/physics'
-import { qfromYaw, quat, vec3 } from '@hobo/shared'
+import { qfromEuler, qfromYaw, quat, vec3 } from '@hobo/shared'
 
 /**
  * Mirrors the server's static collision geometry into the client physics
@@ -27,7 +27,7 @@ export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegist
             : { type: 'sphere', radius: s.shape.radius },
       motion: 'static',
       pos: vec3(s.pos[0], s.pos[1], s.pos[2]),
-      rot: qfromYaw(quat(), s.yaw),
+      rot: s.rot ? qfromEuler(quat(), s.rot[0], s.rot[1], s.rot[2]) : qfromYaw(quat(), s.yaw),
       layer: CollisionLayer.Static,
       collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
     })

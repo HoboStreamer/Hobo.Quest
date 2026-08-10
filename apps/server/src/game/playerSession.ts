@@ -1,7 +1,7 @@
 import type { Appearance, ClientInput } from '@hobo/protocol'
 import type { ContentRegistry } from '@hobo/content'
 import type { Inventory, SkillSet } from '@hobo/gameplay'
-import { CraftQueue, createMoveState, type PlayerMoveState } from '@hobo/gameplay'
+import { CraftQueue, createMoveState, eyeOffsetFor, type PlayerMoveState } from '@hobo/gameplay'
 import type { EntityId, PlayerId, Vec3 } from '@hobo/shared'
 
 export const INVENTORY_SIZE = 24
@@ -42,9 +42,13 @@ export interface PlayerSession {
   appearance: Appearance
   craftQueue: CraftQueue
   activeHotbar: number
+  /** Holstered: active slot's item is put away (empty hands). */
+  holstered: boolean
   held: HeldProp | null
   /** Tick of the last accepted use/swing (server-side swing cooldown). */
   lastUseTick: number
+  /** Stance the kinematic physics body was last built for. */
+  bodyStance: number
   /** For weld feedback and equipment lookups without threading the registry. */
   content: ContentRegistry
   /** Pending input commands (bounded queue: anti-speedup). */
@@ -93,8 +97,10 @@ export function createSession(init: SessionInit): PlayerSession {
     appearance: init.appearance,
     craftQueue: new CraftQueue(),
     activeHotbar: 0,
+    holstered: false,
     held: null,
     lastUseTick: 0,
+    bodyStance: 0,
     content: init.content,
     inputQueue: [],
     lastInput: null,
@@ -107,10 +113,10 @@ export function createSession(init: SessionInit): PlayerSession {
   }
 }
 
-/** Eye position for view rays — must match the client camera exactly. */
-export function eyePosition(session: PlayerSession, eyeOffset: number, out: Vec3): Vec3 {
+/** Eye position for view rays — stance-aware, matches the client camera. */
+export function eyePosition(session: PlayerSession, out: Vec3): Vec3 {
   out.x = session.move.pos.x
-  out.y = session.move.pos.y + eyeOffset
+  out.y = session.move.pos.y + eyeOffsetFor(session.move.stance)
   out.z = session.move.pos.z
   return out
 }

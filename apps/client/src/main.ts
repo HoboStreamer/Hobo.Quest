@@ -44,6 +44,11 @@ async function start(): Promise<void> {
     if (scene.activeCamera) scene.render()
   })
   window.addEventListener('resize', () => engine.resize())
+  // Ctrl+W while crouching would close the tab; the browser won't let us
+  // block the shortcut itself, but it will show a leave confirmation.
+  window.addEventListener('beforeunload', (e) => {
+    e.preventDefault()
+  })
 
   const { name, appearance, releaseCamera } = await customizeScreen(
     scene,
@@ -118,7 +123,13 @@ async function start(): Promise<void> {
       case 'hotbar6': {
         const slot = Number(action.kind.slice(-1)) - 1
         connection.send({ t: 'hotbar', slot })
-        state.activeHotbar = slot // optimistic; server echoes via inventory msg
+        // Mirror the server's toggle rules: same slot = holster/unholster.
+        if (slot === state.activeHotbar) {
+          state.holstered = !state.holstered
+        } else {
+          state.activeHotbar = slot
+          state.holstered = false
+        }
         interact.onHotbarChanged()
         hud.renderHotbar()
         return
@@ -165,7 +176,7 @@ async function start(): Promise<void> {
       interact.flushTick()
     }
     physics.step(0) // query-only world: refresh broadphase, no dynamics
-    player.frameUpdate(timestep.alpha)
+    player.frameUpdate(timestep.alpha, elapsed)
     view.update(now / 1000)
 
     // First-person presentation: body, viewmodel, beams.

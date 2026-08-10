@@ -2,6 +2,7 @@ import {
   DEFAULT_MOVEMENT,
   Inventory,
   SkillSet,
+  hullHeightFor,
   stepMovement,
   type CollisionQueries,
   type GameEntity,
@@ -223,7 +224,13 @@ export class GameServer {
       }
       case 'hotbar':
         if (msg.slot < HOTBAR_SIZE) {
-          session.activeHotbar = msg.slot
+          // Re-pressing the active slot holsters/unholsters (empty hands).
+          if (msg.slot === session.activeHotbar) {
+            session.holstered = !session.holstered
+          } else {
+            session.activeHotbar = msg.slot
+            session.holstered = false
+          }
           // Switching away from the physgun drops anything it was holding.
           if (session.held && equippedTool(session)?.kind !== 'physgun') {
             this.releaseHeld(session)
@@ -298,8 +305,9 @@ export class GameServer {
       : new SkillSet(this.world.content)
     const friends = new Set(existing?.friends ?? [])
     // The client's customization is authoritative for looks (validated by
-    // the protocol schema); it persists so other tools can rely on it.
-    const appearance = msg.appearance
+    // the protocol schema) — EXCEPT body size: everyone shares one hull and
+    // silhouette so combat stays fair.
+    const appearance = { ...msg.appearance, height: 1, build: 1 }
 
     // Starter kit: every drifter carries a physgun. Also grants it to
     // players from before the tool system existed.
@@ -387,7 +395,7 @@ export class GameServer {
     }
     if (msg.a === 'grab') {
       if (session.held) return
-      const grabbed = tryGrab(session, this.world, this.heldEntityIds, MOVE.eyeOffset, (e) =>
+      const grabbed = tryGrab(session, this.world, this.heldEntityIds, (e) =>
         this.canManipulate(session, e),
       )
       if (typeof grabbed === 'string') {
@@ -436,7 +444,7 @@ export class GameServer {
         this.send(session, { t: 'result', action: 'physgun', ok: false, error: 'not_owner' })
         return
       }
-      eyePosition(session, MOVE.eyeOffset, _eyeScratch)
+      eyePosition(session, _eyeScratch)
       if (
         Math.hypot(
           entity.transform.pos.x - _eyeScratch.x,
@@ -501,7 +509,7 @@ export class GameServer {
 
     // 2. Physgun drives held bodies via velocity control.
     for (const session of this.sessions.values()) {
-      if (session.held) driveHeld(session, this.world, MOVE.eyeOffset)
+      if (session.held) driveHeld(session, this.world)
     }
 
     // 3. Fixed-step physics.
@@ -601,7 +609,25 @@ export class GameServer {
           : { ...session.lastInput, moveX: 0, moveZ: 0, buttons: 0 }
       stepMovement(session.move, input, MOVE, this.moveQueries, 1 / this.config.tickRate)
     }
-    const bodyId = this.playerBodies.get(session.playerId)
+    let bodyId = this.playerBodies.get(session.playerId)
+    if (bodyId !== undefined && session.bodyStance !== session.move.stance) {
+      // Stance changed: swap the kinematic hull to match the new posture.
+      this.world.physics.removeBody(bodyId)
+      const hull = hullHeightFor(session.move.stance)
+      bodyId = this.world.physics.addBody({
+        shape: {
+          type: 'capsule',
+          radius: MOVE.capsuleRadius,
+          height: Math.max(hull - 0.3, 0.4),
+        },
+        motion: 'kinematic',
+        pos: vec3(session.move.pos.x, session.move.pos.y + 0.15, session.move.pos.z),
+        layer: CollisionLayer.Player,
+        collidesWith: CollisionLayer.Static | CollisionLayer.Prop,
+      })
+      this.playerBodies.set(session.playerId, bodyId)
+      session.bodyStance = session.move.stance
+    }
     if (bodyId !== undefined) {
       _bodyPosScratch.x = session.move.pos.x
       _bodyPosScratch.y = session.move.pos.y + 0.15

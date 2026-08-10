@@ -13,8 +13,10 @@ const vec3 = z.tuple([z.number(), z.number(), z.number()])
 export const StaticBodySchema = z.object({
   shape: WorldShapeSchema,
   pos: vec3,
-  /** Yaw rotation only for statics; full quats when we need them. */
+  /** Yaw rotation; ignored when `rot` is present. */
   yaw: z.number().default(0),
+  /** Full [pitchX, yawY, rollZ] euler rotation (surf ramps, tilted geometry). */
+  rot: vec3.optional(),
   color: z.string().regex(/^#[0-9a-f]{6}$/),
 })
 

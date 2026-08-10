@@ -4,4 +4,4 @@
  * for a reload. Never derive wire formats from runtime class names or other
  * implementation details.
  */
-export const PROTOCOL_VERSION = 4
+export const PROTOCOL_VERSION = 5

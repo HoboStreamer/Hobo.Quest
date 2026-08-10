@@ -1,4 +1,4 @@
-import type { GameEntity } from '@hobo/gameplay'
+import { stanceProgress, type GameEntity } from '@hobo/gameplay'
 import type { ServerSnapshot, WireBodyState, WireEntity, WirePlayerState } from '@hobo/protocol'
 import { v3distSq, type EntityId } from '@hobo/shared'
 import type { GameWorld } from './gameWorld.js'
@@ -43,7 +43,7 @@ export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity 
 
 export function wirePlayerFor(session: PlayerSession): WirePlayerState {
   const { pos, vel } = session.move
-  const item = session.inventory.get(session.activeHotbar)?.defId
+  const item = session.holstered ? undefined : session.inventory.get(session.activeHotbar)?.defId
   return {
     id: session.entityId as string,
     pos: [pos.x, pos.y, pos.z],
@@ -51,6 +51,8 @@ export function wirePlayerFor(session: PlayerSession): WirePlayerState {
     yaw: session.yaw,
     pitch: session.pitch,
     grounded: session.move.grounded,
+    stance: session.move.stance,
+    stanceP: stanceProgress(session.move),
     ...(item !== undefined ? { item } : {}),
   }
 }
