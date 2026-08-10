@@ -73,7 +73,7 @@ export class Viewmodel {
     const arm = new TransformNode(name, this.scene)
     // The chain grows DOWNWARD from the fist; tilting the arm node makes the
     // sleeve recede toward the bottom of the screen like a raised guard.
-    arm.rotation.set(1.05, 0.28 * m, 0)
+    arm.rotation.set(-1.05, 0.28 * m, 0)
 
     // Fist: one tapered mitt — slightly narrower at the fingers, like the
     // avatar's hands. Knuckle edge faces up-forward.
@@ -171,9 +171,9 @@ export class Viewmodel {
       // is mirrored, so PLUS moves left... i.e. toward screen center).
       this.hands.position.set(0.26, 0.05, 0.08)
       this.rightArm.position.set(-0.24, 0, 0)
-      this.rightArm.rotation.set(1.05, -0.28, 0)
+      this.rightArm.rotation.set(-1.05, -0.28, 0)
       this.leftFist.position.set(0.24, 0, 0)
-      this.leftFist.rotation.set(1.05, 0.28, 0)
+      this.leftFist.rotation.set(-1.05, 0.28, 0)
       this.leftFist.setEnabled(true)
     } else {
       this.hands.position.set(0.02, -0.06, -0.04)
@@ -272,8 +272,8 @@ export class Viewmodel {
       const thrust = this.currentItem === null ? swing : 0
       this.punchingFist.position.z = -thrust * 0.45
       this.punchingFist.position.y = thrust * 0.04
-      // Base guard tilt is 1.05; the jab levels the fist toward the target.
-      this.punchingFist.rotation.x = 1.05 - thrust * 0.55
+      // Base guard tilt is -1.05; the jab levels the fist toward the target.
+      this.punchingFist.rotation.x = -1.05 + thrust * 0.55
       if (this.swingT <= 0) {
         this.punchingFist.position.z = 0
         this.punchingFist.position.y = 0
