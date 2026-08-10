@@ -227,7 +227,7 @@ export const ITEMS: ItemDef[] = [
     maxStack: 10,
     world: {
       shape: { type: 'box', size: [2, 2.4, 0.15] },
-      massKg: 40,
+      massKg: 55,
       color: '#8a6238',
       physgun: true,
     },
@@ -241,7 +241,7 @@ export const ITEMS: ItemDef[] = [
     maxStack: 10,
     world: {
       shape: { type: 'box', size: [2, 0.12, 2] },
-      massKg: 30,
+      massKg: 50,
       color: '#96703f',
       physgun: true,
     },
@@ -255,7 +255,7 @@ export const ITEMS: ItemDef[] = [
     maxStack: 20,
     world: {
       shape: { type: 'box', size: [0.15, 0.15, 2.4] },
-      massKg: 12,
+      massKg: 25,
       color: '#7a5631',
       physgun: true,
     },
@@ -299,7 +299,7 @@ export const ITEMS: ItemDef[] = [
     container: { slots: 12 },
     world: {
       shape: { type: 'box', size: [0.9, 0.8, 0.6] },
-      massKg: 30,
+      massKg: 45,
       color: '#6d5a3e',
       physgun: true,
     },
@@ -330,7 +330,7 @@ export const ITEMS: ItemDef[] = [
     maxStack: 4,
     world: {
       shape: { type: 'box', size: [0.7, 0.7, 0.7] },
-      massKg: 25,
+      massKg: 35,
       color: '#a5713a',
       physgun: true,
     },
@@ -344,7 +344,7 @@ export const ITEMS: ItemDef[] = [
     maxStack: 2,
     world: {
       shape: { type: 'cylinder', radius: 0.3, height: 0.9 },
-      massKg: 35,
+      massKg: 85,
       color: '#5b6b73',
       physgun: true,
     },
@@ -358,7 +358,7 @@ export const ITEMS: ItemDef[] = [
     maxStack: 1,
     world: {
       shape: { type: 'box', size: [1.2, 0.9, 0.7] },
-      massKg: 60,
+      massKg: 90,
       color: '#7a5c3e',
       physgun: true,
     },

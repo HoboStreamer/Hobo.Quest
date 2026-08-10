@@ -311,16 +311,18 @@ export class Viewmodel {
     this.setPhysgunVisible(isPhysgun && this.physgunLoaded)
 
     if ((!isPhysgun || !this.physgunLoaded) && itemDef) {
-      this.toolProp = createHeldItemNode(this.scene, this.content, itemDef, 'vm')
+      // Viewmodel grip is much smaller than the third-person hand — a
+      // crate at 0.34m half a meter from the lens fills the screen.
+      this.toolProp = createHeldItemNode(this.scene, this.content, itemDef, 'vm', 0.17)
       if (this.toolProp) {
         this.toolProp.root.parent = this.rig
         const isTool = def?.tool !== undefined
-        this.toolProp.root.position.set(0, isTool ? -0.06 : -0.12, isTool ? -0.08 : 0)
+        this.toolProp.root.position.set(0, isTool ? -0.06 : -0.02, isTool ? -0.08 : 0.02)
         // The rig is yawed PI (see update()); cancel it on the prop so its
         // +z (muzzle) points AWAY from the camera. Without this the muzzle
         // sat BETWEEN gun and camera and the beam projected wildly off-tip.
         this.toolProp.root.rotation.y = Math.PI
-        this.toolProp.root.scaling.scaleInPlace(isTool ? 1.05 : 0.9)
+        this.toolProp.root.scaling.scaleInPlace(isTool ? 1.05 : 1)
         // Viewmodels sit in the scene's shadow side; self-illuminate them a
         // touch so their shapes read instead of silhouetting to black.
         for (const child of this.toolProp.root.getChildMeshes()) {

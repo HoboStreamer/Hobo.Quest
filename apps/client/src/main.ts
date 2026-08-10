@@ -234,10 +234,13 @@ async function start(): Promise<void> {
       const heldPos = heldTarget
         ? view.grabPointOf(heldTarget, state.heldGrab.get(state.myEntityId))
         : null
+      player.viewDir(_viewFwd)
+      _viewFwdV.set(_viewFwd.x, _viewFwd.y, _viewFwd.z)
       if (heldPos) {
         activeBeams.set(state.myEntityId, {
           from: viewmodel.beamOrigin(),
           to: heldPos,
+          tangent: _viewFwdV,
           latched: true,
         })
       } else {
@@ -246,6 +249,7 @@ async function start(): Promise<void> {
         activeBeams.set(state.myEntityId, {
           from: viewmodel.beamOrigin(),
           to: _beamEndV,
+          tangent: _viewFwdV,
           latched: false,
         })
       }
@@ -274,6 +278,8 @@ async function start(): Promise<void> {
 
 const _beamEnd = { x: 0, y: 0, z: 0 }
 const _beamEndV = new Vector3()
+const _viewFwd = { x: 0, y: 0, z: 0 }
+const _viewFwdV = new Vector3()
 
 /** Context-sensitive crosshair prompt based on aim target + equipped tool. */
 function promptFor(

@@ -1,27 +1,34 @@
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
-import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
-import { CreateBox } from '@babylonjs/core/Meshes/Builders/boxBuilder.js'
+import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { CreateTube } from '@babylonjs/core/Meshes/Builders/tubeBuilder.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 
 /**
- * Physgun beam visuals. The beam always fires while the trigger is held —
- * a dim searching ray when nothing is latched, a bright thick beam plus a
- * muzzle flare once a prop is held (GMod). One beam per firing player.
+ * Physgun beam visuals, GMod-style: the beam leaves the muzzle ALONG THE
+ * BARREL and bends toward the held point on a cubic Bezier — carrying a
+ * prop off to the side visibly flexes the beam instead of pivoting a
+ * straight stick. Idle (unlatched) beams are a dim, nearly-straight ray.
+ * Tubes are updatable meshes: same point count every frame, zero realloc.
  */
 
 export interface BeamState {
   from: Vector3
   to: Vector3
+  /** Direction the beam LEAVES the muzzle (usually the view/barrel axis). */
+  tangent?: Vector3
   /** A prop is latched: bright beam + flare; otherwise dim searching ray. */
   latched: boolean
 }
 
+const SEGMENTS = 24
+
 interface BeamMeshes {
-  beam: Mesh
+  tube: Mesh
   flare: Mesh
+  path: Vector3[]
 }
 
 export class BeamRenderer {
@@ -55,7 +62,7 @@ export class BeamRenderer {
     this.time += dt
     for (const [key, meshes] of this.beams) {
       if (!active.has(key)) {
-        meshes.beam.dispose()
+        meshes.tube.dispose()
         meshes.flare.dispose()
         this.beams.delete(key)
       }
@@ -63,41 +70,73 @@ export class BeamRenderer {
     for (const [key, state] of active) {
       let meshes = this.beams.get(key)
       if (!meshes) {
-        const beam = CreateBox(`beam:${key}`, { size: 1 }, this.scene)
-        beam.isPickable = false
+        const path = Array.from({ length: SEGMENTS + 1 }, () => new Vector3())
+        this.fillPath(path, state)
+        const tube = CreateTube(
+          `beam:${key}`,
+          { path, radius: 0.02, tessellation: 6, updatable: true, cap: 2 },
+          this.scene,
+        )
+        tube.isPickable = false
         const flare = CreateSphere(`beamflare:${key}`, { diameter: 1, segments: 6 }, this.scene)
         flare.isPickable = false
         flare.material = this.flareMat
-        meshes = { beam, flare }
+        meshes = { tube, flare, path }
         this.beams.set(key, meshes)
+      } else {
+        this.fillPath(meshes.path, state)
+        CreateTube(`beam:${key}`, {
+          path: meshes.path,
+          radius: state.latched ? 0.024 : 0.011,
+          instance: meshes.tube,
+        })
       }
-      const { from: muzzle, to, latched } = state
-      // Start slightly ahead of the muzzle so the beam emerges from the tip
-      // instead of overlapping the gun body.
-      const dir = to.subtract(muzzle)
-      const total = Math.max(dir.length(), 0.01)
-      const from = muzzle.add(dir.scale(Math.min(0.07 / total, 0.5)))
-      const mid = from.add(to).scale(0.5)
-      const len = Math.max(to.subtract(from).length(), 0.01)
-      const pulse = 1 + Math.sin(this.time * 14) * 0.25
-      const girth = latched ? 0.026 : 0.011
-      meshes.beam.material = latched ? this.strongMat : this.idleMat
-      meshes.beam.position.copyFrom(mid)
-      meshes.beam.scaling.set(girth * pulse, girth * pulse, len)
-      meshes.beam.lookAt(to)
+      meshes.tube.material = state.latched ? this.strongMat : this.idleMat
       // Muzzle flare: the gun visibly energizes once something is held.
-      meshes.flare.setEnabled(latched)
-      if (latched) {
-        meshes.flare.position.copyFrom(from)
+      meshes.flare.setEnabled(state.latched)
+      if (state.latched) {
+        meshes.flare.position.copyFrom(state.from)
         const s = 0.07 * (1 + Math.sin(this.time * 11) * 0.3)
         meshes.flare.scaling.set(s, s, s)
       }
     }
   }
 
+  /**
+   * Cubic Bezier from the muzzle: P0 at the tip, P1 pushed along the barrel
+   * tangent (so the beam LEAVES straight out of the gun), P2 eased back
+   * toward the target's approach, P3 at the grab point. Control lengths
+   * scale with distance, giving a taut short beam and a lazy long arc.
+   */
+  private fillPath(path: Vector3[], state: BeamState): void {
+    const { from, to, tangent } = state
+    _dir.copyFrom(to).subtractInPlace(from)
+    const dist = Math.max(_dir.length(), 0.01)
+    _dir.scaleInPlace(1 / dist)
+    _tan.copyFrom(tangent ?? _dir).normalize()
+    const lead = Math.min(dist * 0.45, 3.2)
+    _p1.copyFrom(from).addInPlace(_tan.scale(lead))
+    // P2: pull back from the target along the chord for a smooth arrival,
+    // with a slight sag so long beams droop like a loaded cable.
+    _p2.copyFrom(to).subtractInPlace(_dir.scale(Math.min(dist * 0.3, 2.2)))
+    _p2.y -= Math.min(dist * 0.04, 0.35)
+    for (let i = 0; i <= SEGMENTS; i++) {
+      const t = i / SEGMENTS
+      const u = 1 - t
+      const a = u * u * u
+      const b = 3 * u * u * t
+      const c = 3 * u * t * t
+      const d = t * t * t
+      const p = path[i] as Vector3
+      p.x = a * from.x + b * _p1.x + c * _p2.x + d * to.x
+      p.y = a * from.y + b * _p1.y + c * _p2.y + d * to.y
+      p.z = a * from.z + b * _p1.z + c * _p2.z + d * to.z
+    }
+  }
+
   dispose(): void {
     for (const meshes of this.beams.values()) {
-      meshes.beam.dispose()
+      meshes.tube.dispose()
       meshes.flare.dispose()
     }
     this.beams.clear()
@@ -106,3 +145,8 @@ export class BeamRenderer {
     this.flareMat.dispose()
   }
 }
+
+const _dir = new Vector3()
+const _tan = new Vector3()
+const _p1 = new Vector3()
+const _p2 = new Vector3()

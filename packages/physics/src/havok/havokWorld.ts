@@ -409,7 +409,7 @@ function setupWorld(scene: Scene, havok: unknown, ownsScene: boolean): HavokWorl
   const plugin = new HavokPlugin(false, havok)
   // Source-engine gravity (sv_gravity 600 ≈ 15.24 m/s²) — real-world 9.81
   // reads floaty at game scale.
-  scene.enablePhysics(new Vector3(0, -15.24, 0), plugin)
+  scene.enablePhysics(new Vector3(0, -16.5, 0), plugin)
   // All stepping goes through HavokWorld.step(); never the render loop.
   scene.physicsEnabled = false
   return new HavokWorld(scene, plugin, ownsScene)

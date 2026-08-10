@@ -365,14 +365,25 @@ export class EntityView {
       // authoritative pose), NOT here — prediction must compare against the
       // freshest server state, not the ~130ms-delayed visual interpolation.
       // Interpolated mirrors made standing on props mispredict every tick.
-      // Held highlight is PER-MESH overlay: materials are shared per color,
-      // so touching material emissive lit up every same-colored prop on the
-      // map.
+    }
+
+    // Held highlight: a temporary OUTLINE on the held prop only — cleared
+    // the moment it's released/frozen, even if the prop has settled out of
+    // snapshots (the old overlay could stick because settled visuals skip
+    // the interpolation loop above).
+    for (const v of this.visuals.values()) {
+      if (!v.mesh || v.entity.kind !== 'prop') continue
       const held = this.state.heldBy.has(v.entity.id)
-      if (v.mesh.renderOverlay !== held) {
-        v.mesh.renderOverlay = held
-        v.mesh.overlayColor = HELD_OVERLAY
-        v.mesh.overlayAlpha = 0.32
+      if (v.mesh.renderOutline !== held) {
+        v.mesh.renderOutline = held
+        v.mesh.outlineColor = HELD_OVERLAY
+        v.mesh.outlineWidth = 0.03
+        for (const child of v.mesh.getChildMeshes()) {
+          const c = child as Mesh
+          c.renderOutline = held
+          c.outlineColor = HELD_OVERLAY
+          c.outlineWidth = 0.03
+        }
       }
     }
   }

@@ -821,7 +821,21 @@ export class GameServer {
     // Wake the released body: if it was driven into a sleeping neighbor,
     // the depenetration solver needs it active to push them apart.
     const bodyId = this.world.bodyOf(session.held.entityId)
-    if (bodyId !== undefined) this.world.physics.wake(bodyId)
+    if (bodyId !== undefined) {
+      this.world.physics.wake(bodyId)
+      // Source-feel throw cap: the drive can move props at 45 m/s, but a
+      // LET-GO should toss, not rocket-launch. Clamp exit velocity.
+      this.world.physics.getLinearVelocity(bodyId, _relVel)
+      const speed = Math.hypot(_relVel.x, _relVel.y, _relVel.z)
+      const cap = 9
+      if (speed > cap) {
+        const k = cap / speed
+        _relVel.x *= k
+        _relVel.y *= k
+        _relVel.z *= k
+        this.world.physics.setLinearVelocity(bodyId, _relVel)
+      }
+    }
     this.heldEntityIds.delete(session.held.entityId)
     release(session)
     this.broadcastAll({ t: 'physgun_state', player: session.entityId, target: null })
@@ -1278,4 +1292,5 @@ export class GameServer {
 }
 
 const _eyeScratch = vec3()
+const _relVel = vec3()
 const _bodyPosScratch = vec3()
