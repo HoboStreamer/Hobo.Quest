@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { createContent, mapFileToOverride, setMapOverride } from '@hobo/content'
+import { createContent, mapFileToOverride, setMapOverride, type MapFile } from '@hobo/content'
 import { openSqliteStore } from '@hobo/persistence/sqlite'
 import { createHeadlessHavokWorld } from '@hobo/physics/havok'
 import { createConsoleLogger } from '@hobo/shared'
@@ -32,8 +32,7 @@ async function main(): Promise<void> {
   // same file over /map.json).
   if (existsSync(config.mapPath)) {
     try {
-      const raw = JSON.parse(readFileSync(config.mapPath, 'utf8')) as
-        import('@hobo/content').MapFile | null
+      const raw = JSON.parse(readFileSync(config.mapPath, 'utf8')) as MapFile | null
       if (raw && raw.v === 1) {
         setMapOverride(mapFileToOverride(raw))
         content.world.statics.push(...raw.statics)
