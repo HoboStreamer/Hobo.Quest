@@ -82,6 +82,24 @@ export class GameWorld {
       layer: CollisionLayer.Static,
       collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
     })
+    // Invisible boundary walls: past the terrain edge there is only ocean
+    // and an endless fall — the island's edge is the end of the world.
+    const b = world.groundHalfExtent + 0.5
+    const wallLen = b * 2 + 4
+    for (const [px, pz, sx, sz] of [
+      [0, b, wallLen, 1],
+      [0, -b, wallLen, 1],
+      [b, 0, 1, wallLen],
+      [-b, 0, 1, wallLen],
+    ] as const) {
+      this.physics.addBody({
+        shape: { type: 'box', size: [sx, 30, sz] },
+        motion: 'static',
+        pos: vec3(px, 10, pz),
+        layer: CollisionLayer.Static,
+        collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+      })
+    }
     for (const s of world.statics) {
       this.physics.addBody({
         shape: toShapeDesc(s.shape),

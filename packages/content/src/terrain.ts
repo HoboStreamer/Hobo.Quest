@@ -13,6 +13,10 @@ import type { WorldDef } from './schema/world.js'
 /** Grid cell size in meters (physics + render resolution). */
 export const TERRAIN_CELL = 1.25
 
+/** Water surface height — terrain dips below this become lakes; beyond the
+ * map edge the same sheet reads as the ocean around the island. */
+export const WATER_LEVEL = -0.42
+
 // ── Value noise (deterministic, no RNG state) ────────────────────────
 
 function hash2(ix: number, iz: number): number {

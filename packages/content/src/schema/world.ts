@@ -20,6 +20,8 @@ export const StaticBodySchema = z.object({
   color: z.string().regex(/^#[0-9a-f]{6}$/),
   /** Optional tiling texture (client rendering only; by asset basename). */
   tex: z.string().optional(),
+  /** Optional client-side decoration kind (roofs, doors, fountain...). */
+  decor: z.string().optional(),
 })
 
 export const ResourceNodeSpawnSchema = z.object({

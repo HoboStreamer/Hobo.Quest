@@ -593,7 +593,24 @@ export class GameServer {
       }
     }
 
-    // 6. Resource respawn sweep (once a second).
+    // 6. Void rescue: anyone below the world (physics escape, glitch)
+    // respawns at the city rather than falling forever.
+    if (this.tick % this.config.tickRate === 0) {
+      const spawn = this.world.content.world.spawnPoint
+      for (const session of this.sessions.values()) {
+        if (session.move.pos.y < -25) {
+          session.move.pos.x = spawn[0]
+          session.move.pos.y = spawn[1]
+          session.move.pos.z = spawn[2]
+          session.move.vel.x = 0
+          session.move.vel.y = 0
+          session.move.vel.z = 0
+          this.log.info('void rescue', { playerId: session.playerId })
+        }
+      }
+    }
+
+    // 7. Resource respawn sweep (once a second).
     if (this.tick % this.config.tickRate === 0) {
       for (const entity of this.world.respawnDueResources(Date.now())) {
         if (entity.resource) {

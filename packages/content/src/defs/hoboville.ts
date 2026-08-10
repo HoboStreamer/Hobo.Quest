@@ -39,6 +39,7 @@ export const HOBOVILLE: WorldDef = {
       pos: [0, 0.45, 0],
       yaw: 0,
       color: FOUNTAIN,
+      decor: 'fountain',
     },
 
     // ── City walls (N wall at z=20, S at z=-20, E at x=20, W at x=-20) ─
@@ -163,6 +164,7 @@ export const HOBOVILLE: WorldDef = {
       yaw: 0.2,
       color: BUILDING_A,
       tex: 'red_brick',
+      decor: 'building',
     },
     {
       shape: { type: 'box', size: [5, 4, 6] },
@@ -170,6 +172,7 @@ export const HOBOVILLE: WorldDef = {
       yaw: -0.15,
       color: BUILDING_B,
       tex: 'red_brick',
+      decor: 'building',
     },
     {
       shape: { type: 'box', size: [7, 4, 5] },
@@ -177,6 +180,7 @@ export const HOBOVILLE: WorldDef = {
       yaw: 0.1,
       color: BUILDING_A,
       tex: 'red_brick',
+      decor: 'building',
     },
     {
       shape: { type: 'box', size: [5, 4, 5] },
@@ -184,6 +188,7 @@ export const HOBOVILLE: WorldDef = {
       yaw: -0.25,
       color: BUILDING_B,
       tex: 'red_brick',
+      decor: 'building',
     },
     // Market awning posts near plaza (small props-to-be; statics for now)
     {
