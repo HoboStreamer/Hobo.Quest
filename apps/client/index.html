@@ -1,14 +1,509 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Hobo.Quest</title>
-    <link rel="stylesheet" href="/src/ui/styles.css" />
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HOBO.QUEST — physics sandbox survival in your browser</title>
+    <meta
+      name="description"
+      content="A persistent multiplayer physics sandbox: physgun everything, build anywhere, survive the wilds, chase supply drops. Free, in your browser."
+    />
+    <style>
+      * {
+        margin: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        color: #e8ecf1;
+        background: #0a0e14;
+        overflow-x: hidden;
+      }
+      /* animated sky backdrop */
+      .sky {
+        position: fixed;
+        inset: 0;
+        z-index: -2;
+        background: linear-gradient(180deg, #0b1830 0%, #16314f 35%, #7a4d2e 78%, #d98e4a 100%);
+        background-size: 100% 220%;
+        animation: daycycle 26s ease-in-out infinite alternate;
+      }
+      @keyframes daycycle {
+        0% {
+          background-position: 0 0;
+        }
+        100% {
+          background-position: 0 88%;
+        }
+      }
+      .stars {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        opacity: 0.8;
+        animation: twinkle 7s ease-in-out infinite alternate;
+      }
+      @keyframes twinkle {
+        from {
+          opacity: 0.35;
+        }
+        to {
+          opacity: 0.85;
+        }
+      }
+      #floaters {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        pointer-events: none;
+      }
+      .floater {
+        position: absolute;
+        border-radius: 6px;
+        opacity: 0.85;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+        animation: floaty var(--dur) ease-in-out infinite alternate;
+      }
+      @keyframes floaty {
+        from {
+          transform: translateY(0) rotate(var(--r1));
+        }
+        to {
+          transform: translateY(-46px) rotate(var(--r2));
+        }
+      }
+      .beam {
+        position: fixed;
+        z-index: -1;
+        height: 3px;
+        border-radius: 3px;
+        transform-origin: left center;
+        background: linear-gradient(
+          90deg,
+          rgba(90, 190, 255, 0),
+          rgba(120, 210, 255, 0.9),
+          rgba(90, 190, 255, 0)
+        );
+        filter: drop-shadow(0 0 8px rgba(100, 200, 255, 0.8));
+        animation: beampulse 2.2s ease-in-out infinite alternate;
+      }
+      @keyframes beampulse {
+        from {
+          opacity: 0.5;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      header {
+        min-height: 92vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 24px;
+        gap: 22px;
+      }
+      .logo {
+        font-size: clamp(46px, 9vw, 110px);
+        font-weight: 900;
+        letter-spacing: 0.06em;
+        line-height: 0.95;
+        background: linear-gradient(180deg, #ffe9b0, #e8b54a 55%, #b06a2a);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 6px 30px rgba(232, 181, 74, 0.35));
+        animation: rise 1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+      .tag {
+        font-size: clamp(16px, 2.6vw, 24px);
+        color: #cfd8e3;
+        max-width: 760px;
+        animation: rise 1s 0.15s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+      }
+      .tag b {
+        color: #7fd0ff;
+      }
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(26px);
+        }
+        to {
+          opacity: 1;
+          transform: none;
+        }
+      }
+      .cta-row {
+        display: flex;
+        gap: 14px;
+        flex-wrap: wrap;
+        justify-content: center;
+        animation: rise 1s 0.3s both;
+      }
+      .cta {
+        display: inline-block;
+        padding: 16px 38px;
+        border-radius: 12px;
+        font-size: 20px;
+        font-weight: 800;
+        text-decoration: none;
+        letter-spacing: 0.04em;
+        transition:
+          transform 0.15s ease,
+          box-shadow 0.15s ease;
+      }
+      .cta.play {
+        color: #14202e;
+        background: linear-gradient(180deg, #ffe9b0, #e8b54a);
+        box-shadow: 0 8px 34px rgba(232, 181, 74, 0.45);
+        animation: pulse 2.4s ease-in-out infinite;
+      }
+      .cta.play:hover {
+        transform: translateY(-3px) scale(1.03);
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          box-shadow: 0 8px 34px rgba(232, 181, 74, 0.45);
+        }
+        50% {
+          box-shadow: 0 8px 54px rgba(232, 181, 74, 0.8);
+        }
+      }
+      .cta.sso {
+        color: #dfe8f2;
+        background: rgba(28, 38, 52, 0.85);
+        border: 1px solid #3a5878;
+      }
+      .cta.sso:hover {
+        background: rgba(40, 56, 76, 0.95);
+        transform: translateY(-2px);
+      }
+      .guest-note {
+        font-size: 13px;
+        color: #93a3b5;
+        animation: rise 1s 0.45s both;
+      }
+      .scroll-hint {
+        margin-top: 10px;
+        color: #7f8ea0;
+        font-size: 22px;
+        animation: bob 1.6s ease-in-out infinite;
+      }
+      @keyframes bob {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+        50% {
+          transform: translateY(9px);
+        }
+      }
+
+      section.features {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 60px 20px 80px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 18px;
+      }
+      .card {
+        background: rgba(16, 22, 30, 0.82);
+        border: 1px solid #263344;
+        border-radius: 16px;
+        padding: 26px;
+        backdrop-filter: blur(4px);
+        transition:
+          transform 0.2s ease,
+          border-color 0.2s ease;
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      .card.show {
+        opacity: 1;
+        transform: none;
+        transition:
+          opacity 0.6s ease,
+          transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1),
+          border-color 0.2s;
+      }
+      .card:hover {
+        transform: translateY(-6px);
+        border-color: #e8b54a;
+      }
+      .card .emoji {
+        font-size: 40px;
+      }
+      .card h3 {
+        margin: 10px 0 8px;
+        color: #ffdf9a;
+        letter-spacing: 0.03em;
+      }
+      .card p {
+        color: #aab8c8;
+        font-size: 15px;
+        line-height: 1.5;
+      }
+
+      .account {
+        max-width: 760px;
+        margin: 0 auto 90px;
+        padding: 34px;
+        text-align: center;
+        background: linear-gradient(180deg, rgba(30, 42, 58, 0.9), rgba(18, 26, 36, 0.9));
+        border: 1px solid #34506e;
+        border-radius: 18px;
+      }
+      .account h2 {
+        color: #7fd0ff;
+        margin-bottom: 10px;
+      }
+      .account p {
+        color: #b8c6d6;
+        line-height: 1.6;
+      }
+      .network {
+        max-width: 1100px;
+        margin: 0 auto 80px;
+        padding: 0 20px;
+        text-align: center;
+      }
+      .network h2 {
+        color: #ffdf9a;
+        letter-spacing: 0.12em;
+        margin-bottom: 18px;
+      }
+      .net-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 18px;
+      }
+      .net-card {
+        display: block;
+        text-decoration: none;
+        background: rgba(16, 22, 30, 0.82);
+        border: 1px solid #263344;
+        border-radius: 16px;
+        padding: 24px;
+        transition:
+          transform 0.2s ease,
+          border-color 0.2s ease;
+      }
+      .net-card:hover {
+        transform: translateY(-5px);
+        border-color: #7fd0ff;
+      }
+      .net-card .emoji {
+        font-size: 34px;
+      }
+      .net-card h3 {
+        color: #7fd0ff;
+        margin: 8px 0 6px;
+      }
+      .net-card p {
+        color: #aab8c8;
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      footer {
+        text-align: center;
+        color: #5d6b7a;
+        padding: 26px;
+        font-size: 13px;
+      }
+      footer a {
+        color: #8fa8c0;
+      }
+    </style>
   </head>
   <body>
-    <canvas id="game"></canvas>
-    <div id="ui"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <div class="sky"></div>
+    <canvas class="stars" id="stars"></canvas>
+    <div id="floaters"></div>
+
+    <header>
+      <div class="logo">HOBO.QUEST</div>
+      <div class="tag">
+        A <b>persistent multiplayer physics sandbox</b> in your browser. Physgun anything. Build
+        anywhere. Survive the wilds, raid supply drops, and haul your loot back to Hoboville before
+        someone takes it off your corpse.
+      </div>
+      <div class="cta-row">
+        <a class="cta play" href="/play.html">▶ PLAY FREE — NO DOWNLOAD</a>
+        <a
+          class="cta sso"
+          href="https://hobo.tools/login?redirect=https%3A%2F%2Fhobo.quest%2Fplay.html"
+          id="sso-btn"
+          >Sign in with hobo.tools</a
+        >
+      </div>
+      <div class="guest-note">
+        No account needed — jump in as a guest and your drifter is saved to this connection.
+      </div>
+      <div class="scroll-hint">▼</div>
+    </header>
+
+    <section class="features">
+      <div class="card">
+        <div class="emoji">🔫</div>
+        <h3>THE PHYSGUN</h3>
+        <p>
+          Grab, swing, rotate and freeze anything with a bending gravity beam — grid snapping and
+          angle snapping included. Every building in the world is built from real physical objects.
+        </p>
+      </div>
+      <div class="card">
+        <div class="emoji">🏕</div>
+        <h3>SURVIVE THE ISLAND</h3>
+        <p>
+          Hunger, thirst, stamina, fall damage. Chop trees that really fall, mine, forage berries,
+          farm planters, cook stew over a campfire — or starve like a true hobo.
+        </p>
+      </div>
+      <div class="card">
+        <div class="emoji">🧱</div>
+        <h3>BUILD FREELY</h3>
+        <p>
+          Craft walls, doors that swing, storage boxes with real inventories — drop them into the
+          world and freeze them in place. Trust your friends; everyone else keeps their hands off.
+        </p>
+      </div>
+      <div class="card">
+        <div class="emoji">📦</div>
+        <h3>SUPPLY DROPS</h3>
+        <p>
+          Every few minutes a cache of salvage cores and bottle caps lands somewhere in the wilds —
+          announced to everyone. PvP is legal out there. First come, first served.
+        </p>
+      </div>
+      <div class="card">
+        <div class="emoji">🥊</div>
+        <h3>FIGHT DIRTY</h3>
+        <p>
+          Swing an axe, a log, a rock — anything in your hand is a weapon. Source-style movement:
+          bunnyhop, air-strafe, surf the ramps. The city walls are the only law.
+        </p>
+      </div>
+      <div class="card">
+        <div class="emoji">🌆</div>
+        <h3>HOBOVILLE</h3>
+        <p>
+          A walled safe city with a merchant economy, street lamps that flicker on at dusk, and a
+          live day/night cycle shared by every player on the island.
+        </p>
+      </div>
+    </section>
+
+    <div class="account">
+      <h2>One drifter free. Three with an account.</h2>
+      <p>
+        Guests get a single character tied to their connection. Sign in with your
+        <b>hobo.tools</b> account to unlock <b>3 character slots</b>, keep your progress safe across
+        devices and IP changes, and carry your name across the whole Hobo network.
+      </p>
+    </div>
+
+    <section class="network">
+      <h2>THE HOBO NETWORK</h2>
+      <div class="net-row">
+        <a class="net-card" href="https://hobostreamer.com" target="_blank" rel="noopener">
+          <div class="emoji">📺</div>
+          <h3>hobostreamer.com</h3>
+          <p>Live streams, clips and VODs — watch the chaos, clip the highlights, join the chat.</p>
+        </a>
+        <a class="net-card" href="https://hobo.tools" target="_blank" rel="noopener">
+          <div class="emoji">🛠</div>
+          <h3>hobo.tools</h3>
+          <p>
+            Your one account for the whole network — sign in here to unlock 3 character slots in
+            Hobo.Quest.
+          </p>
+        </a>
+      </div>
+    </section>
+
+    <footer>
+      Hobo.Quest · part of the Hobo network ·
+      <a href="https://hobostreamer.com">hobostreamer.com</a> ·
+      <a href="https://hobo.tools">hobo.tools</a> ·
+      <a href="https://github.com/HoboStreamer/Hobo.Quest">source on GitHub</a>
+    </footer>
+
+    <script>
+      // Starfield
+      const c = document.getElementById('stars')
+      const ctx = c.getContext('2d')
+      function size() {
+        c.width = innerWidth
+        c.height = innerHeight
+      }
+      size()
+      addEventListener('resize', size)
+      const stars = Array.from({ length: 140 }, () => [
+        Math.random(),
+        Math.random() * 0.6,
+        Math.random() * 1.4 + 0.3,
+      ])
+      ctx.fillStyle = '#fff'
+      function drawStars() {
+        ctx.clearRect(0, 0, c.width, c.height)
+        for (const [x, y, r] of stars) {
+          ctx.globalAlpha = 0.3 + Math.random() * 0.5
+          ctx.beginPath()
+          ctx.arc(x * c.width, y * c.height, r, 0, 7)
+          ctx.fill()
+        }
+      }
+      drawStars()
+      setInterval(drawStars, 900)
+
+      // Floating props + a physgun beam that tracks one of them
+      const fl = document.getElementById('floaters')
+      const props = []
+      const colors = ['#8a6a42', '#6d5a3e', '#5d707e', '#8c4f2f', '#83878b']
+      for (let i = 0; i < 8; i++) {
+        const d = document.createElement('div')
+        d.className = 'floater'
+        const s = 26 + Math.random() * 52
+        d.style.cssText = `width:${s}px;height:${s}px;background:${colors[i % colors.length]};left:${6 + Math.random() * 88}%;top:${12 + Math.random() * 70}%;--dur:${5 + Math.random() * 6}s;--r1:${(Math.random() * 40 - 20) | 0}deg;--r2:${(Math.random() * 80 - 40) | 0}deg;animation-delay:${-Math.random() * 6}s`
+        fl.appendChild(d)
+        props.push(d)
+      }
+      const beam = document.createElement('div')
+      beam.className = 'beam'
+      document.body.appendChild(beam)
+      function aimBeam() {
+        const t = props[(Math.random() * props.length) | 0].getBoundingClientRect()
+        const x0 = innerWidth * 0.5,
+          y0 = innerHeight * 0.96
+        const dx = t.left + t.width / 2 - x0,
+          dy = t.top + t.height / 2 - y0
+        beam.style.left = x0 + 'px'
+        beam.style.top = y0 + 'px'
+        beam.style.width = Math.hypot(dx, dy) + 'px'
+        beam.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`
+      }
+      aimBeam()
+      setInterval(aimBeam, 2600)
+
+      // Scroll-reveal cards
+      const io = new IntersectionObserver(
+        (es) => es.forEach((e) => e.isIntersecting && e.target.classList.add('show')),
+        { threshold: 0.2 },
+      )
+      document.querySelectorAll('.card').forEach((el) => io.observe(el))
+    </script>
   </body>
 </html>

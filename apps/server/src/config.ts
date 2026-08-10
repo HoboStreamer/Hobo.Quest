@@ -7,6 +7,8 @@ export interface ServerConfig {
   mapPath: string
   editorKey: string | null
   hoboToolsAuthUrl: string | null
+  /** Bind fresh guest tokens to client IPs (off in tests: peers share an IP). */
+  guestIpBinding: boolean
   tickRate: number
   /** Send a snapshot every N ticks. */
   snapshotEvery: number
@@ -28,6 +30,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
     editorKey: env.EDITOR_KEY ?? null,
     /** hobo.tools auth endpoint; when set, editor tokens validate there. */
     hoboToolsAuthUrl: env.HOBO_TOOLS_AUTH_URL ?? null,
+    guestIpBinding: env.GUEST_IP_BINDING !== 'off',
     tickRate: 30,
     snapshotEvery: 2,
     interestRadius: intEnv(env, 'INTEREST_RADIUS', 80),

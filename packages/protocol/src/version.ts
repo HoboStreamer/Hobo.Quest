@@ -1,2 +1,2 @@
 /** Wire protocol version — bump on ANY breaking message change. */
-export const PROTOCOL_VERSION = 12
+export const PROTOCOL_VERSION = 13

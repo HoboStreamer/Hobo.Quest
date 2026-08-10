@@ -7,6 +7,8 @@ import type { GameWorld } from './gameWorld.js'
 import { type PlayerSession } from './playerSession.js'
 /** A network connection as the game sees it — transport-agnostic. */
 export interface GameConnection {
+  /** Real client IP (Cloudflare-aware) — guest identity hangs off this. */
+  ip: string
   send(text: string): void
   close(code: number, reason: string): void
 }

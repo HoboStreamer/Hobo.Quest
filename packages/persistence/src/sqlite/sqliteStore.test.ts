@@ -129,7 +129,7 @@ describe('sqlite store', () => {
       { id: 'c1', type: 'weld', entityA: 'x', entityB: 'y', updatedAt: 1 },
     ])
     expect(store.constraints.loadAll()).toHaveLength(1)
-    expect(store.meta.get('schema_version')).toBe('6')
+    expect(store.meta.get('schema_version')).toBe('7')
     store.close()
   })
 

@@ -59,7 +59,10 @@ export function createHttpServer(
   mapPath?: string,
   editorAuth?: EditorAuth,
   onMapSaved?: (body: string) => void,
-  listCharacters?: (token: string) => { slot: number; name: string; appearance: unknown }[],
+  listCharacters?: (
+    token: string,
+    auth: string | undefined,
+  ) => Promise<{ slot: number; name: string; appearance: unknown }[]>,
 ): Server {
   const root = staticDir ? resolve(staticDir) : null
   return createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -109,9 +112,15 @@ export function createHttpServer(
       return
     }
     if (url === '/api/characters' && listCharacters) {
-      const token = new URL(req.url ?? '/', 'http://x').searchParams.get('token') ?? ''
-      res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' })
-      res.end(JSON.stringify(token.length >= 8 ? listCharacters(token) : []))
+      const params = new URL(req.url ?? '/', 'http://x').searchParams
+      const token = params.get('token') ?? ''
+      const auth = params.get('auth') ?? undefined
+      void (token.length >= 8 || auth ? listCharacters(token, auth) : Promise.resolve([])).then(
+        (chars) => {
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' })
+          res.end(JSON.stringify(chars))
+        },
+      )
       return
     }
     if (url === '/healthz') {

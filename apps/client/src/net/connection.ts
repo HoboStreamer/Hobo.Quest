@@ -22,6 +22,7 @@ export class Connection {
     name: string,
     appearance: Appearance,
     slot = 0,
+    auth?: string,
   ): Promise<void> {
     const ws = new WebSocket(url)
     this.ws = ws
@@ -34,7 +35,15 @@ export class Connection {
       if (msg) this.onMessage?.(msg)
     }
     ws.onclose = () => this.onClose?.()
-    this.send({ t: 'hello', v: PROTOCOL_VERSION, token, slot, name, appearance })
+    this.send({
+      t: 'hello',
+      v: PROTOCOL_VERSION,
+      token,
+      slot,
+      name,
+      appearance,
+      ...(auth ? { auth } : {}),
+    })
   }
 
   send(msg: ClientMessage): void {

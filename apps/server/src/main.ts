@@ -9,6 +9,7 @@ import { GameServer } from './game/gameServer.js'
 import { GameWorld } from './game/gameWorld.js'
 import { loadHavok } from './havokLoader.js'
 import { createHttpServer } from './net/httpServer.js'
+import { resolveHoboToolsUser } from './net/hoboToolsAuth.js'
 import { attachWebSocket } from './net/wsTransport.js'
 import { ServerMetrics } from './observability/metrics.js'
 
@@ -85,11 +86,20 @@ async function main(): Promise<void> {
         log.warn('live map apply failed', { error: String(err) })
       }
     },
-    (token) =>
-      store.players
-        .listByToken(token)
+    async (token, auth) => {
+      // Signed-in accounts list by their hobo.tools identity; guests by
+      // their browser token.
+      let account = token
+      if (auth) {
+        const user = await resolveHoboToolsUser(config.hoboToolsAuthUrl, auth)
+        if (!user) return []
+        account = `hobotools:${user.id}`.slice(0, 64)
+      }
+      return store.players
+        .listByToken(account)
         .slice(0, 3)
-        .map((p) => ({ slot: p.charSlot, name: p.name, appearance: p.appearance })),
+        .map((p) => ({ slot: p.charSlot, name: p.name, appearance: p.appearance }))
+    },
   )
   attachWebSocket(http, game, log.child({ system: 'ws' }))
   http.listen(config.port, config.host, () => {

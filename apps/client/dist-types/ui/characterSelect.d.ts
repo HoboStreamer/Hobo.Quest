@@ -13,6 +13,7 @@ export interface CharacterInfo {
 export declare function characterSelect(
   uiRoot: HTMLElement,
   characters: CharacterInfo[],
+  authed: boolean,
 ): Promise<{
   slot: number
   existing: CharacterInfo | null

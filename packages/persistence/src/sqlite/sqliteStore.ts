@@ -5,6 +5,7 @@ import type {
   ConstraintRepository,
   MetaRepository,
   PersistenceStore,
+  GuestRepository,
   PlayerRepository,
   WorldEntityRepository,
 } from '../repositories.js'
@@ -18,7 +19,7 @@ import type {
  * a database is upgraded step by step inside a transaction per step.
  */
 
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_entities (
@@ -53,6 +54,10 @@ CREATE TABLE IF NOT EXISTS constraints (
   entity_a TEXT NOT NULL,
   entity_b TEXT NOT NULL,
   updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS guest_ips (
+  ip TEXT PRIMARY KEY,
+  token TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -106,6 +111,14 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
         SELECT id, token, 0, name, pos_x, pos_y, pos_z, yaw, inventory, skills, friends, appearance, stats, updated_at FROM players_old;
       DROP TABLE players_old;
       CREATE UNIQUE INDEX idx_players_token_slot ON players (token, char_slot);
+    `)
+  },
+  6: (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS guest_ips (
+        ip TEXT PRIMARY KEY,
+        token TEXT NOT NULL
+      );
     `)
   },
 }
@@ -373,9 +386,31 @@ export function openSqliteStore(path: string): PersistenceStore {
     },
   }
 
+  const guests: GuestRepository = {
+    // Guest identity: the browser token is primary; the IP is the recovery
+    // path. A token that already owns a character keeps it (and re-binds its
+    // IP after a network change); a FRESH token from a known IP inherits
+    // that IP's existing drifter (cleared cookies / new browser at home).
+    resolve(ip: string, token: string): string {
+      const hasCharacter = db.prepare('SELECT 1 FROM players WHERE token = ? LIMIT 1').get(token)
+      if (hasCharacter) {
+        db.prepare(
+          'INSERT INTO guest_ips (ip, token) VALUES (?, ?) ON CONFLICT(ip) DO UPDATE SET token = excluded.token',
+        ).run(ip, token)
+        return token
+      }
+      const mapped = db.prepare('SELECT token FROM guest_ips WHERE ip = ?').get(ip) as
+        { token: string } | undefined
+      if (mapped) return mapped.token
+      db.prepare('INSERT OR REPLACE INTO guest_ips (ip, token) VALUES (?, ?)').run(ip, token)
+      return token
+    },
+  }
+
   return {
     worldEntities,
     players,
+    guests,
     constraints,
     meta,
     close(): void {

@@ -17,11 +17,21 @@ export function attachWebSocket(http: Server, game: GameServer, log: Logger): We
   const wss = new WebSocketServer({ server: http, path: '/ws', maxPayload: MAX_MESSAGE_BYTES })
 
   wss.on('connection', (ws: WebSocket, req) => {
-    const remote = req.socket.remoteAddress ?? 'unknown'
+    // Real client IP: Cloudflare/nginx headers first (we sit behind both in
+    // prod), socket address in dev. Guest identity hangs off this.
+    const fwd = req.headers['x-forwarded-for']
+    const remote =
+      (typeof req.headers['cf-connecting-ip'] === 'string'
+        ? req.headers['cf-connecting-ip']
+        : undefined) ??
+      (typeof fwd === 'string' ? (fwd.split(',')[0] ?? '').trim() : undefined) ??
+      req.socket.remoteAddress ??
+      'unknown'
     let msgCount = 0
     let windowStart = Date.now()
 
     const conn: GameConnection = {
+      ip: remote,
       send: (text) => {
         if (ws.readyState === ws.OPEN) ws.send(text)
       },

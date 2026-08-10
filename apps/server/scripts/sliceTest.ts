@@ -38,7 +38,7 @@ let server: ChildProcess | null = null
 function startServer(): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     server = spawn(process.execPath, ['--import', 'tsx', 'apps/server/src/main.ts'], {
-      env: { ...process.env, PORT: String(PORT), DB_PATH: dbPath },
+      env: { ...process.env, PORT: String(PORT), DB_PATH: dbPath, GUEST_IP_BINDING: 'off' },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const timer = setTimeout(() => reject(new Error('server did not start')), 30000)

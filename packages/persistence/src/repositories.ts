@@ -28,6 +28,11 @@ export interface PlayerRepository {
   resetAllPositions(pos: [number, number, number], yaw: number): void
 }
 
+export interface GuestRepository {
+  /** Resolve a guest connection (ip + browser token) to its canonical account token. */
+  resolve(ip: string, token: string): string
+}
+
 export interface ConstraintRepository {
   loadAll(): ConstraintDto[]
   upsertMany(constraints: readonly ConstraintDto[]): void
@@ -42,6 +47,7 @@ export interface MetaRepository {
 export interface PersistenceStore {
   readonly worldEntities: WorldEntityRepository
   readonly players: PlayerRepository
+  guests: GuestRepository
   readonly constraints: ConstraintRepository
   readonly meta: MetaRepository
   close(): void

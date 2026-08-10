@@ -872,3 +872,21 @@ input {
   color: #78828e;
   font-size: 12px;
 }
+
+.char-locked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.char-upsell {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: rgba(40, 60, 86, 0.55);
+  border: 1px solid #34506e;
+  border-radius: 10px;
+  font-size: 13px;
+  color: #b8c6d6;
+  line-height: 1.5;
+}
+.char-upsell a {
+  color: #7fd0ff;
+}

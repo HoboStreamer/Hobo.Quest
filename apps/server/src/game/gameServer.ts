@@ -43,6 +43,7 @@ import {
   type PlayerId,
 } from '@hobo/shared'
 import type { ServerConfig } from '../config.js'
+import { resolveHoboToolsUser } from '../net/hoboToolsAuth.js'
 import type { ServerMetrics } from '../observability/metrics.js'
 import type { GameWorld } from './gameWorld.js'
 import {
@@ -66,6 +67,8 @@ import { buildSnapshot, updateInterest, wireEntityFor } from './replication.js'
 
 /** A network connection as the game sees it — transport-agnostic. */
 export interface GameConnection {
+  /** Real client IP (Cloudflare-aware) — guest identity hangs off this. */
+  ip: string
   send(text: string): void
   close(code: number, reason: string): void
 }
@@ -138,7 +141,7 @@ export class GameServer {
   onMessage(conn: GameConnection, msg: ClientMessage): void {
     const session = this.sessionsByConn.get(conn)
     if (!session) {
-      if (msg.t === 'hello') this.handleHello(conn, msg)
+      if (msg.t === 'hello') void this.handleHello(conn, msg)
       else conn.close(4001, 'hello_first')
       return
     }
@@ -569,7 +572,7 @@ export class GameServer {
     this.log.info('player disconnected', { playerId: session.playerId, name: session.name })
   }
 
-  private handleHello(conn: GameConnection, msg: ClientHello): void {
+  private async handleHello(conn: GameConnection, msg: ClientHello): Promise<void> {
     if (msg.v !== PROTOCOL_VERSION) {
       conn.send(encodeServerMessage({ t: 'reject', reason: 'protocol_mismatch' }))
       conn.close(4002, 'protocol_mismatch')
@@ -582,12 +585,35 @@ export class GameServer {
     }
 
     const slot = msg.slot ?? 0
-    const existing = this.store.players.findByTokenSlot(msg.token, slot)
+    // Account resolution. hobo.tools sign-in keys the account on the SSO
+    // identity (3 slots, follows you across devices). Guests get ONE
+    // character bound to their connection: browser token first, IP as the
+    // recovery path when the token is gone.
+    let token = msg.token
+    if (msg.auth) {
+      const user = await resolveHoboToolsUser(this.config.hoboToolsAuthUrl, msg.auth)
+      if (!user) {
+        conn.send(encodeServerMessage({ t: 'reject', reason: 'auth_failed' }))
+        conn.close(4009, 'auth_failed')
+        return
+      }
+      token = `hobotools:${user.id}`.slice(0, 64)
+    } else {
+      if (slot > 0) {
+        conn.send(encodeServerMessage({ t: 'reject', reason: 'guest_one_character' }))
+        conn.close(4010, 'guest_one_character')
+        return
+      }
+      if (this.config.guestIpBinding && conn.ip !== 'unknown') {
+        token = this.store.guests.resolve(conn.ip, msg.token)
+      }
+    }
+    const existing = this.store.players.findByTokenSlot(token, slot)
     // One live session per CHARACTER; other characters of the same account
     // may stay online (an account still only plays one at a time in
     // practice — same token kicks apply per slot).
     for (const s of this.sessions.values()) {
-      if (s.token === msg.token && s.charSlot === slot) {
+      if (s.token === token && s.charSlot === slot) {
         s.closeConnection(4004, 'session_superseded')
       }
     }
@@ -624,7 +650,7 @@ export class GameServer {
       playerId,
       charSlot: slot,
       entityId: newEntityId(),
-      token: msg.token,
+      token,
       name: msg.name,
       spawn,
       yaw: existing?.yaw ?? world.spawnYaw,

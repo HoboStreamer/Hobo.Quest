@@ -11,7 +11,8 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        main: 'index.html',
+        home: 'index.html',
+        main: 'play.html',
         editor: 'editor.html',
       },
     },

@@ -7,6 +7,8 @@ export interface ServerConfig {
   mapPath: string
   editorKey: string | null
   hoboToolsAuthUrl: string | null
+  /** Bind fresh guest tokens to client IPs (off in tests: peers share an IP). */
+  guestIpBinding: boolean
   tickRate: number
   /** Send a snapshot every N ticks. */
   snapshotEvery: number

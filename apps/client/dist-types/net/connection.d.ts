@@ -13,6 +13,7 @@ export declare class Connection {
     name: string,
     appearance: Appearance,
     slot?: number,
+    auth?: string,
   ): Promise<void>
   send(msg: ClientMessage): void
   get open(): boolean

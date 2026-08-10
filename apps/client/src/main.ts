@@ -84,15 +84,22 @@ async function start(): Promise<void> {
   })
 
   // MMO-style character select: pick an existing drifter or claim a slot.
+  // hobo.tools SSO: a session token can arrive via ?hobo_token= (redirect
+  // back from hobo.tools) and is remembered; guests play without one.
+  const ssoParam = new URLSearchParams(location.search).get('hobo_token')
+  if (ssoParam) {
+    localStorage.setItem('hq_sso', ssoParam)
+    history.replaceState(null, '', location.pathname)
+  }
+  const sso = localStorage.getItem('hq_sso') ?? undefined
   let characters: CharacterInfo[] = []
   try {
-    characters = (await (
-      await fetch(`/api/characters?token=${encodeURIComponent(identity.token)}`)
-    ).json()) as CharacterInfo[]
+    const q = `token=${encodeURIComponent(identity.token)}${sso ? `&auth=${encodeURIComponent(sso)}` : ''}`
+    characters = (await (await fetch(`/api/characters?${q}`)).json()) as CharacterInfo[]
   } catch {
     characters = []
   }
-  const choice = await characterSelect(uiRoot, characters)
+  const choice = await characterSelect(uiRoot, characters, Boolean(sso))
   let name: string
   let appearance: Appearance
   let releaseCamera: () => void
@@ -223,7 +230,14 @@ async function start(): Promise<void> {
       player.onSnapshot(msg)
       view.onSnapshot(msg, performance.now() / 1000)
     } else if (msg.t === 'reject') {
-      hud.setStatus(`rejected: ${msg.reason} — refresh the page`)
+      if (msg.reason === 'guest_one_character') {
+        hud.setStatus('guests get one character — sign in with hobo.tools for 3 slots')
+      } else if (msg.reason === 'auth_failed') {
+        localStorage.removeItem('hq_sso')
+        hud.setStatus('hobo.tools sign-in expired — refresh to continue as guest or sign in again')
+      } else {
+        hud.setStatus(`rejected: ${msg.reason} — refresh the page`)
+      }
     }
   }
   connection.onClose = () => {
@@ -233,7 +247,7 @@ async function start(): Promise<void> {
 
   hud.setStatus('connecting…')
   try {
-    await connection.connect(gameSocketUrl(), identity.token, name, appearance, slot)
+    await connection.connect(gameSocketUrl(), identity.token, name, appearance, slot, sso)
   } catch {
     hud.setStatus('could not reach server — is it running?')
     return

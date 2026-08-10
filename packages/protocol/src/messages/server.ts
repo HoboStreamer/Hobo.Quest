@@ -25,7 +25,8 @@ export interface ServerWelcome {
 
 export interface ServerReject {
   t: 'reject'
-  reason: 'protocol_mismatch' | 'server_full' | 'invalid_hello'
+  reason:
+    'protocol_mismatch' | 'server_full' | 'invalid_hello' | 'guest_one_character' | 'auth_failed'
 }
 
 /** Entities that became relevant to this client (full state). */
