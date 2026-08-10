@@ -147,6 +147,10 @@ class TestClient {
           if (msg.pos) e.pos = msg.pos
           if (msg.rot) e.rot = msg.rot
           if (msg.remaining !== undefined) e.remaining = msg.remaining
+          if (msg.plant !== undefined) {
+            if (msg.plant === null) delete e.plant
+            else e.plant = msg.plant
+          }
         }
         break
       }
@@ -729,6 +733,55 @@ async function main(): Promise<void> {
   assert(pickup.ok, 'picked the dropped stones back up')
   await sleep(150)
   assert(a.count('stone') === stonesBefore, 'both stones recovered from one prop')
+
+  console.log('phase: merchant trades + farming (plant in a planter)')
+  // Into the city through the north gate, to the trading post.
+  await walkPath(a, [
+    [0, 22],
+    [0, 17],
+    [12, 14.6],
+  ])
+  await settle(a)
+  a.results.length = 0
+  a.send({ t: 'trade', trade: 'sell_stone' })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
+  assert(a.results.at(-1)?.ok === true, `sold stone to the merchant`)
+  await a.waitFor((m) => m.t === 'inventory' && a.count('coin') >= 2, 5000)
+  a.send({ t: 'trade', trade: 'buy_seeds' })
+  await a.waitFor((m) => m.t === 'inventory' && a.count('berry_seeds') >= 3, 5000)
+  assert(a.count('berry_seeds') >= 3, 'bought seeds with coins')
+
+  await craftAndWait(a, 'craft_planks', 'wood_plank')
+  await craftAndWait(a, 'craft_planter_box', 'planter_box')
+  a.send({ t: 'drop', slot: a.slotOf('planter_box'), count: 1 })
+  const planterSpawn = await a.waitFor(
+    (m) => m.t === 'spawn' && m.entities.some((e) => e.def === 'planter_box'),
+    5000,
+  )
+  const planterId =
+    planterSpawn.t === 'spawn'
+      ? (planterSpawn.entities.find((e) => e.def === 'planter_box')?.id ?? '')
+      : ''
+  assert(planterId, 'planter placed')
+  await sleep(800)
+  await a.equip('berry_seeds')
+  await sleep(200)
+  const plantRes = await a.use(planterId)
+  assert(plantRes.ok, 'seeds planted')
+  {
+    const start = Date.now()
+    while (!a.entities.get(planterId)?.plant && Date.now() - start < 5000) await sleep(100)
+  }
+  assert(a.entities.get(planterId)?.plant, 'plant state replicated')
+  await sleep(400) // swing cooldown
+  const growing = await a.use(planterId)
+  assert(growing.error === 'still_growing', 'crop needs time to grow')
+  // Back out the north gate for the build phase.
+  await walkPath(a, [
+    [0, 17],
+    [4, 28],
+  ])
+  await settle(a)
 
   // Build flow: grab the wall, freeze it in the air — it must stay put.
   await a.equip('physgun')

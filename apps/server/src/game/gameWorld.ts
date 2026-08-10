@@ -460,7 +460,8 @@ export class GameWorld {
           prop.pos[2],
         ),
         rot: qfromYaw(quat(), prop.yaw),
-        motion: 'dynamic',
+        // Fixtures (shops) are part of the town; everything else tumbles in.
+        motion: this.content.item(prop.item)?.shop ? 'static' : 'dynamic',
       })
     }
   }
@@ -502,6 +503,12 @@ export class GameWorld {
       })
       if (entity.prop && typeof row.state?.doorOpen === 'boolean') {
         entity.prop.doorOpen = row.state.doorOpen
+      }
+      if (entity.prop && row.state?.plant && typeof row.state.plant === 'object') {
+        const plant = row.state.plant as { seedId?: string; plantedAt?: number }
+        if (plant.seedId && typeof plant.plantedAt === 'number') {
+          entity.prop.plant = { seedId: plant.seedId, plantedAt: plant.plantedAt }
+        }
       }
       if (entity.prop?.container && Array.isArray(row.state?.container)) {
         const stored = row.state.container as ({ defId: string; count: number } | null)[]
@@ -579,6 +586,7 @@ function entityToDto(entity: GameEntity, now: number): WorldEntityDto {
             lootCount: entity.prop.lootCount,
             ...(entity.prop.container ? { container: entity.prop.container } : {}),
             ...(entity.prop.doorOpen !== undefined ? { doorOpen: entity.prop.doorOpen } : {}),
+            ...(entity.prop.plant ? { plant: entity.prop.plant } : {}),
           }
         : null,
     updatedAt: now,

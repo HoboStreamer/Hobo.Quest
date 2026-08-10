@@ -36,6 +36,13 @@ export declare class Hud {
   /** Brief crosshair X when a melee hit lands on another player. */
   flashHitmarker(): void
   private flashDamage
+  private shopOpen
+  /** Merchant trade sheet (content-driven; server validates every trade). */
+  openShop(): void
+  closeShop(): void
+  private renderShop
+  private announceTimer
+  private showAnnounce
   private renderVitals
   /** Opens (or refreshes) the storage panel for a container entity. */
   showContainer(

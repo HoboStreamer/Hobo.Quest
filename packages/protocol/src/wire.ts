@@ -29,6 +29,12 @@ export const Buttons = {
 /** How a wire entity should be represented client-side. */
 export type WireEntityKind = 'player' | 'prop' | 'resource'
 
+export interface WirePlant {
+  seed: string
+  plantedAt: number
+  growSeconds: number
+}
+
 export interface WireEntity {
   id: string
   kind: WireEntityKind
@@ -48,6 +54,8 @@ export interface WireEntity {
   owner?: string
   /** Remaining units, when kind === 'resource'. */
   remaining?: number
+  /** Growing crop (clients derive the stage from timestamps). */
+  plant?: WirePlant
 }
 
 /** Per-tick dynamic state for an awake, relevant entity. */

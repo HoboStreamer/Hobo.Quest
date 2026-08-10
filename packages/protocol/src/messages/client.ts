@@ -138,6 +138,12 @@ export const ClientDrinkSchema = z.object({
   t: z.literal('drink'),
 })
 
+/** Execute a merchant trade by id (validated against content). */
+export const ClientTradeSchema = z.object({
+  t: z.literal('trade'),
+  trade: z.string().max(32),
+})
+
 /** Open a container prop (server replies with its contents). */
 export const ClientContainerOpenSchema = z.object({
   t: z.literal('container_open'),
@@ -167,6 +173,7 @@ export const ClientMessageSchema = z.union([
   ClientUnweldSchema,
   ClientConsumeSchema,
   ClientDrinkSchema,
+  ClientTradeSchema,
   ClientContainerOpenSchema,
   ClientContainerMoveSchema,
 ])
@@ -184,6 +191,7 @@ export type ClientWeld = z.infer<typeof ClientWeldSchema>
 export type ClientUnweld = z.infer<typeof ClientUnweldSchema>
 export type ClientConsume = z.infer<typeof ClientConsumeSchema>
 export type ClientDrink = z.infer<typeof ClientDrinkSchema>
+export type ClientTrade = z.infer<typeof ClientTradeSchema>
 export type ClientContainerOpen = z.infer<typeof ClientContainerOpenSchema>
 export type ClientContainerMove = z.infer<typeof ClientContainerMoveSchema>
 export type ClientMessage = z.infer<typeof ClientMessageSchema>

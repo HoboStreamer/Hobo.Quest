@@ -28,6 +28,15 @@ export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity 
       def: entity.prop.defId,
       motion: entity.prop.motion,
       ...(entity.owner !== undefined ? { owner: entity.owner as string } : {}),
+      ...(entity.prop.plant
+        ? {
+            plant: {
+              seed: entity.prop.plant.seedId,
+              plantedAt: entity.prop.plant.plantedAt,
+              growSeconds: world.content.item(entity.prop.plant.seedId)?.seed?.growSeconds ?? 240,
+            },
+          }
+        : {}),
     }
   }
   if (entity.resource) {

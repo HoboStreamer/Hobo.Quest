@@ -30,6 +30,8 @@ export interface PropComponent {
   container?: ({ defId: string; count: number } | null)[]
   /** Hinged door state (frozen doors toggle with E). */
   doorOpen?: boolean
+  /** Growing crop on planter props (timestamp-based; no per-tick sim). */
+  plant?: { seedId: string; plantedAt: number }
 }
 
 export interface ResourceComponent {

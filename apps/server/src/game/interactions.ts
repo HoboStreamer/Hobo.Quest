@@ -73,6 +73,48 @@ export function handleUse(
     if (!canManipulate(entity)) {
       return { outcome: result('use', false, 'not_owner'), ...none }
     }
+    // Planters: E plants equipped seeds / harvests a mature crop.
+    const planterDef = world.content.item(entity.prop.defId)
+    if (planterDef?.planter) {
+      const plant = entity.prop.plant
+      if (plant) {
+        const seedDef = world.content.item(plant.seedId)?.seed
+        const mature = seedDef && nowMs - plant.plantedAt >= seedDef.growSeconds * 1000
+        if (!mature) return { outcome: result('use', false, 'still_growing'), ...none }
+        const leftover = session.inventory.add(seedDef.yieldItem, seedDef.yieldCount)
+        if (leftover === seedDef.yieldCount) {
+          return { outcome: result('use', false, 'inventory_full'), ...none }
+        }
+        delete entity.prop.plant
+        entity.dirty = true
+        session.dirty = true
+        const levelUps = session.skills.addXp('farming', 8)
+        return {
+          outcome: result('use', true),
+          ...none,
+          changed: entity,
+          levelUps,
+          xpChanged: true,
+        }
+      }
+      const stack = session.inventory.get(session.activeHotbar)
+      const seed = stack ? world.content.item(stack.defId)?.seed : undefined
+      if (stack && seed && !session.holstered) {
+        session.inventory.removeFromSlot(session.activeHotbar, 1)
+        entity.prop.plant = { seedId: stack.defId, plantedAt: nowMs }
+        entity.dirty = true
+        session.dirty = true
+        const levelUps = session.skills.addXp('farming', 3)
+        return {
+          outcome: result('use', true),
+          ...none,
+          changed: entity,
+          levelUps,
+          xpChanged: true,
+        }
+      }
+      // Empty planter without seeds equipped: fall through to pickup.
+    }
     // Installed (frozen) doors swing on E instead of being picked up.
     if (
       world.content.item(entity.prop.defId)?.door &&

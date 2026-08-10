@@ -61,6 +61,8 @@ export interface ServerEntityUpdate {
   pos?: [number, number, number]
   rot?: [number, number, number, number]
   remaining?: number
+  /** Planter crop changed (null clears after harvest). */
+  plant?: import('../wire.js').WirePlant | null
 }
 
 export interface ServerInventory {
@@ -88,6 +90,7 @@ export interface ServerActionResult {
     | 'trust'
     | 'consume'
     | 'container'
+    | 'trade'
   ok: boolean
   error?: string
 }
@@ -153,6 +156,12 @@ export interface ServerTime {
   frac: number
 }
 
+/** World-event banner shown to everyone (supply drops etc.). */
+export interface ServerAnnounce {
+  t: 'announce'
+  text: string
+}
+
 /** Contents of an opened container (and pushed while it stays open). */
 export interface ServerContainer {
   t: 'container'
@@ -179,3 +188,4 @@ export type ServerMessage =
   | ServerStats
   | ServerTime
   | ServerContainer
+  | ServerAnnounce

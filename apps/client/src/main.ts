@@ -153,6 +153,7 @@ async function start(): Promise<void> {
         interact.handle(action)
     }
   }
+  interact.onShopOpen = () => hud.openShop()
   input.onWheel = (delta) => interact.onWheel(delta)
 
   state.events.on('actionResult', (r) => {
@@ -288,6 +289,18 @@ function promptFor(
     }
     if (target.def && content.item(target.def)?.door && target.frozen) {
       return 'E — open / close door'
+    }
+    if (target.def && content.item(target.def)?.shop) {
+      return 'E — trade with the merchant'
+    }
+    if (target.def && content.item(target.def)?.planter) {
+      const entity = state.entities.get(target.entityId)
+      if (entity?.plant) {
+        const done = Date.now() - entity.plant.plantedAt >= entity.plant.growSeconds * 1000
+        return done ? 'E — harvest' : '🌱 growing…'
+      }
+      const held = state.activeItemDef()
+      if (held && content.item(held)?.seed) return 'E — plant seeds'
     }
     if (interact.physgunActive)
       return 'RMB — freeze · E — rotate · Shift — grid · wheel — push/pull'

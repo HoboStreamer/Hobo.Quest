@@ -66,6 +66,21 @@ export const ItemDefSchema = z.object({
     })
     .optional(),
 
+  /** Present iff planting this item in a planter grows a crop. */
+  seed: z
+    .object({
+      growSeconds: z.number().positive(),
+      yieldItem: z.string(),
+      yieldCount: z.number().int().positive(),
+    })
+    .optional(),
+
+  /** Present iff the placed prop accepts seeds (E with seeds plants). */
+  planter: z.object({}).optional(),
+
+  /** Present iff the placed prop is an NPC trading post (E opens the shop). */
+  shop: z.object({}).optional(),
+
   /** Present iff the placed prop is a hinged door (E toggles when frozen). */
   door: z.object({ openAngle: z.number().default(1.75) }).optional(),
 

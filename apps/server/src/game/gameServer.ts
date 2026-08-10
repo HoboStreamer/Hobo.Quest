@@ -11,7 +11,16 @@ import {
   type CollisionQueries,
   type GameEntity,
 } from '@hobo/gameplay'
-import { STARTER_ITEMS, WATER_LEVEL, recipeSkill, recipeXp, terrainHeight } from '@hobo/content'
+import {
+  DROP_LOOT,
+  DROP_SITES,
+  STARTER_ITEMS,
+  TRADES,
+  WATER_LEVEL,
+  recipeSkill,
+  recipeXp,
+  terrainHeight,
+} from '@hobo/content'
 import type { PersistenceStore, PlayerDto } from '@hobo/persistence'
 import { CollisionLayer, type BodyId } from '@hobo/physics'
 import {
@@ -164,13 +173,21 @@ export class GameServer {
         }
         if (gather.spawned) this.broadcastSpawn(gather.spawned)
         if (gather.changed?.prop) {
-          // Door swing: pin the new authoritative pose on every client.
+          // Door swing / plant change: pin authoritative state everywhere.
           const e = gather.changed
+          const plant = e.prop?.plant
           this.broadcastToKnowing(e.id, {
             t: 'entity',
             id: e.id,
             pos: [e.transform.pos.x, e.transform.pos.y, e.transform.pos.z],
             rot: [e.transform.rot.x, e.transform.rot.y, e.transform.rot.z, e.transform.rot.w],
+            plant: plant
+              ? {
+                  seed: plant.seedId,
+                  plantedAt: plant.plantedAt,
+                  growSeconds: this.world.content.item(plant.seedId)?.seed?.growSeconds ?? 240,
+                }
+              : null,
           })
         }
         if (gather.changed?.resource) {
@@ -301,6 +318,50 @@ export class GameServer {
         this.sendInventory(session)
         break
       }
+      case 'trade': {
+        const trade = TRADES.find((t) => t.id === msg.trade)
+        if (!trade) {
+          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'no_such_trade' })
+          break
+        }
+        // Must be standing at a trading post.
+        let nearShop = false
+        for (const e of this.world.entities.ofKind('prop')) {
+          if (!e.prop || !this.world.content.item(e.prop.defId)?.shop) continue
+          const d = Math.hypot(
+            e.transform.pos.x - session.move.pos.x,
+            e.transform.pos.z - session.move.pos.z,
+          )
+          if (d < 5) {
+            nearShop = true
+            break
+          }
+        }
+        if (!nearShop) {
+          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'no_merchant' })
+          break
+        }
+        if (session.inventory.countOf(trade.give.item) < trade.give.count) {
+          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'missing_items' })
+          break
+        }
+        if (!session.inventory.canFit(trade.get.item, trade.get.count)) {
+          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'inventory_full' })
+          break
+        }
+        const consumed = session.inventory.consume([
+          { item: trade.give.item, count: trade.give.count },
+        ])
+        if (!consumed.ok) {
+          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'missing_items' })
+          break
+        }
+        session.inventory.add(trade.get.item, trade.get.count)
+        session.dirty = true
+        this.send(session, { t: 'result', action: 'trade', ok: true })
+        this.sendInventory(session)
+        break
+      }
       case 'container_open': {
         const entity = this.world.entities.get(msg.target as EntityId)
         const denied = this.containerAccessDenied(session, entity)
@@ -418,6 +479,62 @@ export class GameServer {
       size: box.length,
       slots: box.flatMap((slot, i) => (slot ? [{ i, def: slot.defId, count: slot.count }] : [])),
     })
+  }
+
+  /** Live supply crate (one at a time), plus its expiry tick. */
+  private supplyCrateId: EntityId | null = null
+  private supplyExpiresTick = 0
+  private nextDropTick = 0
+
+  /**
+   * Extraction events v1: every few minutes a supply crate lands at a random
+   * wilderness site, announced to everyone. First to loot it wins; the
+   * crate despawns once emptied (or after 6 minutes).
+   */
+  private tickSupplyDrops(): void {
+    const rate = this.config.tickRate
+    if (this.nextDropTick === 0) this.nextDropTick = this.tick + 150 * rate
+    // Expire or clean up the live crate.
+    if (this.supplyCrateId) {
+      const crate = this.world.entities.get(this.supplyCrateId)
+      const emptied = !crate?.prop?.container?.some((s) => s !== null)
+      if (!crate || emptied || this.tick >= this.supplyExpiresTick) {
+        if (crate) {
+          this.world.despawn(crate.id)
+          this.broadcastDespawn(crate.id)
+        }
+        this.supplyCrateId = null
+      }
+      return
+    }
+    if (this.tick < this.nextDropTick || this.sessions.size === 0) return
+    this.nextDropTick = this.tick + 360 * rate
+    const site = DROP_SITES[Math.floor(Math.random() * DROP_SITES.length)]!
+    const world = this.world.content.world
+    const crate = this.world.spawnProp({
+      defId: 'supply_crate',
+      pos: vec3(site[0], terrainHeight(world, site[0], site[2]) + 0.6, site[2]),
+      rot: qfromYaw(quat(), Math.random() * 6.28),
+      motion: 'static',
+    })
+    crate.persistent = false
+    if (crate.prop?.container) {
+      let slot = 0
+      for (const [item, min, max] of DROP_LOOT) {
+        const count = min + Math.floor(Math.random() * (max - min + 1))
+        if (count > 0 && slot < crate.prop.container.length) {
+          crate.prop.container[slot++] = { defId: item, count }
+        }
+      }
+    }
+    this.supplyCrateId = crate.id
+    this.supplyExpiresTick = this.tick + 360 * rate
+    this.broadcastSpawn(crate)
+    this.broadcastAll({
+      t: 'announce',
+      text: '📦 Supply drop spotted in the wilds — first come, first served!',
+    })
+    this.log.info('supply drop spawned', { site: site.join(',') })
   }
 
   private dayFraction(): number {
@@ -882,6 +999,7 @@ export class GameServer {
       if (this.tick % (this.config.tickRate * 10) === 0) {
         this.broadcastAll({ t: 'time', frac: this.dayFraction() })
       }
+      this.tickSupplyDrops()
     }
 
     // 7. Resource respawn sweep (once a second).

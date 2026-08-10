@@ -28,3 +28,4 @@ export function createContent(): ContentRegistry {
   })
 }
 export * from './terrain.js'
+export * from './defs/economy.js'

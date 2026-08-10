@@ -48,6 +48,16 @@ export declare class GameServer {
   /** Adds to a container with stacking; returns how many items fit. */
   private containerAdd
   private sendContainer
+  /** Live supply crate (one at a time), plus its expiry tick. */
+  private supplyCrateId
+  private supplyExpiresTick
+  private nextDropTick
+  /**
+   * Extraction events v1: every few minutes a supply crate lands at a random
+   * wilderness site, announced to everyone. First to loot it wins; the
+   * crate despawns once emptied (or after 6 minutes).
+   */
+  private tickSupplyDrops
   private dayFraction
   onDisconnect(conn: GameConnection): void
   private handleHello

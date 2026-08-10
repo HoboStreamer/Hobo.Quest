@@ -252,6 +252,27 @@ export class EntityView {
     const renderTime = localTime + this.clockOffset - INTERP_DELAY
 
     for (const v of this.visuals.values()) {
+      // Growing crops: a sprout scales up with timestamp progress (pure
+      // client-side derivation — no per-stage network traffic).
+      if (v.entity.kind === 'prop' && v.mesh) {
+        const plant = v.entity.plant
+        let crop = v.mesh.getChildMeshes().find((m) => m.name.endsWith(':crop')) as Mesh | undefined
+        if (plant) {
+          if (!crop) {
+            crop = CreateBox(`${v.mesh.name}:crop`, { size: 1 }, this.scene)
+            crop.parent = v.mesh
+            crop.position.y = 0.3
+            crop.material = materialFor(this.scene, '#3f7a34')
+          }
+          const t = Math.min(1, (Date.now() - plant.plantedAt) / (plant.growSeconds * 1000))
+          const h = 0.1 + t * 0.75
+          crop.scaling.set(0.16 + t * 0.5, h, 0.16 + t * 0.5)
+          crop.position.y = 0.15 + h / 2
+          crop.material = materialFor(this.scene, t >= 1 ? '#6a2a5a' : '#3f7a34')
+        } else if (crop) {
+          crop.dispose()
+        }
+      }
       // Chop/mine feedback: brief wobble on the hit node.
       if (v.shakeT > 0 && v.mesh) {
         v.shakeT = Math.max(0, v.shakeT - dt)

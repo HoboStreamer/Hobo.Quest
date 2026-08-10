@@ -23,6 +23,7 @@ export interface ClientStateEvents {
   stats: { hp: number; hunger: number; thirst: number; stamina: number; died?: boolean }
   timeSync: number
   container: { id: string; size: number; slots: { i: number; def: string; count: number }[] }
+  announce: string
   disconnected: undefined
   [key: string]: unknown
 }
@@ -86,6 +87,10 @@ export class ClientState {
         if (msg.pos) e.pos = msg.pos
         if (msg.rot) e.rot = msg.rot
         if (msg.remaining !== undefined) e.remaining = msg.remaining
+        if (msg.plant !== undefined) {
+          if (msg.plant === null) delete e.plant
+          else e.plant = msg.plant
+        }
         this.events.emit('entityUpdated', e)
         break
       }
@@ -126,6 +131,9 @@ export class ClientState {
       case 'time':
         this.dayFraction = msg.frac
         this.events.emit('timeSync', msg.frac)
+        break
+      case 'announce':
+        this.events.emit('announce', msg.text)
         break
       case 'container':
         this.events.emit('container', { id: msg.id, size: msg.size, slots: msg.slots })

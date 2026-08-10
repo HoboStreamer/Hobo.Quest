@@ -1,3 +1,4 @@
+import { TRADES } from '@hobo/content'
 import type { ContentRegistry } from '@hobo/content'
 import { HOTBAR_SLOTS } from '../constants.js'
 import type { Connection } from '../net/connection.js'
@@ -82,6 +83,13 @@ export class Hud {
     state.events.on('entityRemoved', (id) => {
       if (this.openContainerId === id) this.closeContainer()
     })
+    state.events.on('announce', (text) => this.showAnnounce(text))
+    state.events.on('actionResult', (r) => {
+      if (r.action === 'trade' && r.ok) this.toast('🤝 Deal!')
+    })
+    state.events.on('inventory', () => {
+      if (this.shopOpen) this.renderShop()
+    })
     state.events.on('inventory', () => {
       if (this.openContainerId) this.renderContainer()
     })
@@ -105,6 +113,12 @@ export class Hud {
         <div class="vital"><span>FOOD</span><div class="vital-bar"><div id="bar-hunger" class="vital-fill hunger"></div></div></div>
         <div class="vital"><span>H2O</span><div class="vital-bar"><div id="bar-thirst" class="vital-fill thirst"></div></div></div>
         <div class="vital"><span>STAM</span><div class="vital-bar"><div id="bar-stamina" class="vital-fill stamina"></div></div></div>
+      </div>
+      <div class="announce" id="announce"></div>
+      <div class="container-panel" id="shop-panel" style="display:none">
+        <div class="container-title">Goose's Trading Post</div>
+        <div class="shop-list" id="shop-list"></div>
+        <div class="cust-actions"><button id="shop-close" class="cust-btn">Close</button></div>
       </div>
       <div class="container-panel" id="container-panel" style="display:none">
         <div class="container-title">Storage</div>
@@ -140,6 +154,7 @@ export class Hud {
     this.renderHotbar()
 
     this.byId('container-close').addEventListener('click', () => this.closeContainer())
+    this.byId('shop-close').addEventListener('click', () => this.closeShop())
     this.byId('container-pickup').addEventListener('click', () => {
       if (this.openContainerId) {
         this.connection.send({ t: 'use', target: this.openContainerId })
@@ -171,6 +186,54 @@ export class Hud {
     const el = this.byId('vignette')
     el.classList.add('flash')
     setTimeout(() => el.classList.remove('flash'), 220)
+  }
+
+  private shopOpen = false
+
+  /** Merchant trade sheet (content-driven; server validates every trade). */
+  openShop(): void {
+    this.shopOpen = true
+    this.byId('shop-panel').style.display = 'flex'
+    this.renderShop()
+    this.onUiCaptureChange?.(true)
+  }
+
+  closeShop(): void {
+    if (!this.shopOpen) return
+    this.shopOpen = false
+    this.byId('shop-panel').style.display = 'none'
+    if (!this.menuOpen) this.onUiCaptureChange?.(false)
+  }
+
+  private renderShop(): void {
+    const list = this.byId('shop-list')
+    list.replaceChildren()
+    for (const trade of TRADES) {
+      const giveName = this.content.item(trade.give.item)?.name ?? trade.give.item
+      const getName = this.content.item(trade.get.item)?.name ?? trade.get.item
+      const row = document.createElement('button')
+      row.className = 'shop-row'
+      const have = this.state.countOf(trade.give.item)
+      const afford = have >= trade.give.count
+      row.disabled = !afford
+      row.innerHTML = `
+        <img src="${this.icons.iconFor(trade.get.item)}" draggable="false" />
+        <span class="shop-get">${trade.get.count}× ${getName}</span>
+        <span class="shop-cost ${afford ? '' : 'missing'}">${trade.give.count}× ${giveName} (${have})</span>
+      `
+      row.addEventListener('click', () => this.connection.send({ t: 'trade', trade: trade.id }))
+      list.appendChild(row)
+    }
+  }
+
+  private announceTimer: ReturnType<typeof setTimeout> | null = null
+
+  private showAnnounce(text: string): void {
+    const el = this.byId('announce')
+    el.textContent = text
+    el.classList.add('show')
+    if (this.announceTimer) clearTimeout(this.announceTimer)
+    this.announceTimer = setTimeout(() => el.classList.remove('show'), 8000)
   }
 
   private renderVitals(): void {
@@ -493,6 +556,15 @@ export class Hud {
         this.connection.send({ t: 'craft', recipe: recipe.id }),
       )
       el.appendChild(button)
+      // Batch craft: queue five at once (server validates each).
+      const batch = document.createElement('button')
+      batch.className = 'craft-btn'
+      batch.textContent = '×5'
+      batch.disabled = !craftable
+      batch.addEventListener('click', () => {
+        for (let i = 0; i < 5; i++) this.connection.send({ t: 'craft', recipe: recipe.id })
+      })
+      el.appendChild(batch)
       list.appendChild(el)
     }
     this.menuBodyEl.appendChild(list)

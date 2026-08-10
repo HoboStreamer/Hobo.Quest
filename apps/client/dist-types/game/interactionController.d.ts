@@ -33,6 +33,8 @@ export declare class InteractionController {
   onSwing: (() => void) | null
   /** True when the last 'use' this client sent targeted another player. */
   lastTargetWasPlayer: boolean
+  /** Hook: player pressed E on a trading post. */
+  onShopOpen: (() => void) | null
   private lastSwingMs
   private pendingRotate
   private gridOn

@@ -47,6 +47,8 @@ export class InteractionController {
   onSwing: (() => void) | null = null
   /** True when the last 'use' this client sent targeted another player. */
   lastTargetWasPlayer = false
+  /** Hook: player pressed E on a trading post. */
+  onShopOpen: (() => void) | null = null
 
   private lastSwingMs = 0
   private pendingRotate = { dyaw: 0, dpitch: 0 }
@@ -159,6 +161,10 @@ export class InteractionController {
           break
         }
         this.lastTargetWasPlayer = target.kind === 'player'
+        if (target.def && this.content.item(target.def)?.shop) {
+          this.onShopOpen?.()
+          break
+        }
         // Containers open on E instead of being picked up.
         if (target.def && this.content.item(target.def)?.container) {
           this.connection.send({ t: 'container_open', target: target.entityId })

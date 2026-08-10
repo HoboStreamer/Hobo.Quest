@@ -20,6 +20,12 @@ export const SKILLS: SkillDef[] = [
     maxLevel: 50,
   },
   {
+    id: 'farming',
+    name: 'Farming',
+    description: 'Planting, tending and harvesting crops.',
+    maxLevel: 50,
+  },
+  {
     id: 'crafting',
     name: 'Crafting',
     description: 'Turning materials into useful things.',

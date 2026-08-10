@@ -61,6 +61,7 @@ export interface ClientStateEvents {
       count: number
     }[]
   }
+  announce: string
   disconnected: undefined
   [key: string]: unknown
 }
