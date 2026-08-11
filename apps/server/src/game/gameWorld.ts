@@ -1,4 +1,10 @@
-import { buildTerrainGrid, getMapOverride, terrainHeight } from '@hobo/content'
+import {
+  buildPatchGrid,
+  buildTerrainGrid,
+  getMapOverride,
+  terrainHeight,
+  worldSpawn,
+} from '@hobo/content'
 import type { ContentRegistry, WorldShape } from '@hobo/content'
 import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
 import type { ConstraintDto, PersistenceStore, WorldEntityDto } from '@hobo/persistence'
@@ -78,6 +84,7 @@ export class GameWorld {
     // Heightfield terrain — the SAME grid the client builds for prediction
     // and rendering (see @hobo/content buildTerrainGrid).
     this.terrainBody = this.buildTerrainBody()
+    this.patchBodies = this.buildPatchBodies()
     // Invisible boundary walls: past the terrain edge there is only ocean
     // and an endless fall — the island's edge is the end of the world.
     const b = world.groundHalfExtent + 0.5
@@ -109,6 +116,27 @@ export class GameWorld {
   }
 
   private terrainBody: BodyId | null = null
+  private patchBodies: BodyId[] = []
+
+  /** Trimesh bodies for the map's extra terrain patches (world-space verts). */
+  private buildPatchBodies(): BodyId[] {
+    const bodies: BodyId[] = []
+    for (const patch of getMapOverride()?.terrains ?? []) {
+      const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
+      const rot = patch.rot ? qfromEuler(quat(), patch.rot[0], patch.rot[1], patch.rot[2]) : quat()
+      bodies.push(
+        this.physics.addBody({
+          shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
+          motion: 'static',
+          pos: vec3(patch.origin[0], patch.origin[1], patch.origin[2]),
+          rot,
+          layer: CollisionLayer.Static,
+          collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+        }),
+      )
+    }
+    return bodies
+  }
 
   private buildTerrainBody(): BodyId {
     const grid = buildTerrainGrid(this.content.world)
@@ -121,10 +149,12 @@ export class GameWorld {
     })
   }
 
-  /** Live map edit: swap the terrain collision for the new heightfield. */
+  /** Live map edit: swap terrain + patch collision for the new map. */
   rebuildTerrain(): void {
     if (this.terrainBody !== null) this.physics.removeBody(this.terrainBody)
     this.terrainBody = this.buildTerrainBody()
+    for (const b of this.patchBodies) this.physics.removeBody(b)
+    this.patchBodies = this.buildPatchBodies()
   }
 
   bodyOf(id: EntityId): BodyId | undefined {
@@ -444,10 +474,7 @@ export class GameWorld {
       // player constructions persist, players go back to spawn.
       store.worldEntities.deleteByKind('resource')
       this.seedResources(store)
-      store.players.resetAllPositions(
-        [world.spawnPoint[0], world.spawnPoint[1], world.spawnPoint[2]],
-        world.spawnYaw,
-      )
+      store.players.resetAllPositions(worldSpawn(world).pos, worldSpawn(world).yaw)
       store.meta.set('world_id', world.id)
       this.flushDirty(store)
       this.log.info('world definition changed — resources re-seeded, players respawned', {

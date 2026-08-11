@@ -27,8 +27,11 @@ export declare class GameWorld {
   /** Static level geometry — mirrored by the client from the same world def. */
   private buildStaticWorld
   private terrainBody
+  private patchBodies
+  /** Trimesh bodies for the map's extra terrain patches (world-space verts). */
+  private buildPatchBodies
   private buildTerrainBody
-  /** Live map edit: swap the terrain collision for the new heightfield. */
+  /** Live map edit: swap terrain + patch collision for the new map. */
   rebuildTerrain(): void
   bodyOf(id: EntityId): BodyId | undefined
   entityOfBody(body: BodyId): GameEntity | undefined

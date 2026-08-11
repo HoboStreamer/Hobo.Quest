@@ -20,6 +20,9 @@ import {
   buildStaticWorld,
   createEngine,
   createScene,
+  buildTerrainPatches,
+  rebuildTerrainPatchVisuals,
+  registerMapAssets,
   rebuildTerrainVisual,
 } from './render/sceneSetup.js'
 import { Viewmodel } from './render/viewmodel.js'
@@ -46,6 +49,7 @@ async function start(): Promise<void> {
   let mapMix: string | undefined
   try {
     const map = (await (await fetch('/map.json')).json()) as MapFile | null
+    registerMapAssets(map)
     if (map && map.v === 1) {
       setMapOverride(mapFileToOverride(map))
       content.world.statics.push(...map.statics)
@@ -57,6 +61,7 @@ async function start(): Promise<void> {
   const engine = await createEngine(canvas)
   const scene = createScene(engine)
   buildStaticWorld(scene, content, mapMix)
+  buildTerrainPatches(scene, content)
 
   // Havok loads while the player customizes their character.
   const havokPromise = HavokPhysics({ locateFile: () => havokWasmUrl })
@@ -221,10 +226,12 @@ async function start(): Promise<void> {
       void (async () => {
         try {
           const map = (await (await fetch('/map.json')).json()) as MapFile | null
+          registerMapAssets(map)
           if (map && map.v === 1) {
             setMapOverride(mapFileToOverride(map))
             rebuildTerrainPhysics(physics, content)
             rebuildTerrainVisual(scene, content, map.mix)
+            rebuildTerrainPatchVisuals(scene, content)
           }
         } catch {
           // keep the old terrain if the fetch fails

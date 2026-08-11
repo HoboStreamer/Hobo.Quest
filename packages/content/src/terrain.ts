@@ -113,11 +113,26 @@ export interface MapPropSpawn {
   yaw?: number
 }
 
+export interface TerrainPatchData {
+  id: string
+  origin: [number, number, number]
+  halfExtent: number
+  sub: number
+  heights: Float32Array
+  /** Euler rotation — tilt patches into overhangs and cave roofs. */
+  rot?: [number, number, number]
+}
+
 export interface MapOverride {
   /** Editor-placed resource nodes (trees, deposits…) merged into seeding. */
   nodes?: MapNodeSpawn[]
   /** Editor-placed initial props merged into fresh-world seeding. */
   props?: MapPropSpawn[]
+  /** Extra sculptable terrain meshes (mountains, cave shells…). */
+  terrains?: TerrainPatchData[]
+  /** Editor-placed spawn point (overrides the world def). */
+  spawn?: [number, number, number]
+  spawnYaw?: number
 
   halfExtent: number
   /** Grid points per side (sub+1 columns). */
@@ -230,4 +245,58 @@ export function buildTerrainGrid(world: WorldDef): TerrainGrid {
     }
   }
   return { positions, indices, uvs, sub, halfExtent: half }
+}
+
+/**
+ * Grid for a free-floating terrain patch, in PATCH-LOCAL space (origin at
+ * the patch center, unrotated) — same layout/winding as the main ground so
+ * rendering and trimesh physics reuse it on both sides of the wire.
+ */
+export function buildPatchGrid(
+  halfExtent: number,
+  sub: number,
+  heights: Float32Array,
+): TerrainGrid {
+  const verts = (sub + 1) * (sub + 1)
+  const positions = new Float32Array(verts * 3)
+  const uvs = new Float32Array(verts * 2)
+  const indices = new Uint32Array(sub * sub * 6)
+  let p = 0
+  let u = 0
+  for (let row = 0; row <= sub; row++) {
+    for (let col = 0; col <= sub; col++) {
+      const x = (col * (halfExtent * 2)) / sub - halfExtent
+      const z = ((sub - row) * (halfExtent * 2)) / sub - halfExtent
+      const j = Math.round((z + halfExtent) / ((halfExtent * 2) / sub))
+      positions[p++] = x
+      positions[p++] = heights[j * (sub + 1) + col] ?? 0
+      positions[p++] = z
+      uvs[u++] = col / sub
+      uvs[u++] = 1 - row / sub
+    }
+  }
+  let t = 0
+  for (let row = 0; row < sub; row++) {
+    for (let col = 0; col < sub; col++) {
+      indices[t++] = col + 1 + (row + 1) * (sub + 1)
+      indices[t++] = col + 1 + row * (sub + 1)
+      indices[t++] = col + row * (sub + 1)
+      indices[t++] = col + (row + 1) * (sub + 1)
+      indices[t++] = col + 1 + (row + 1) * (sub + 1)
+      indices[t++] = col + row * (sub + 1)
+    }
+  }
+  return { positions, indices, uvs, sub, halfExtent }
+}
+
+/** Spawn point honoring the edited map (blank worlds place their own). */
+export function worldSpawn(world: WorldDef): {
+  pos: [number, number, number]
+  yaw: number
+} {
+  const o = mapOverride
+  return {
+    pos: o?.spawn ?? [world.spawnPoint[0], world.spawnPoint[1], world.spawnPoint[2]],
+    yaw: o?.spawnYaw ?? world.spawnYaw,
+  }
 }

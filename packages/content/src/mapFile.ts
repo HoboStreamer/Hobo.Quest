@@ -1,5 +1,5 @@
 import type { StaticBody } from './schema/world.js'
-import type { MapNodeSpawn, MapOverride, MapPropSpawn } from './terrain.js'
+import type { MapNodeSpawn, MapOverride, MapPropSpawn, TerrainPatchData } from './terrain.js'
 
 /**
  * The edited-map artifact produced by the /editor tool and consumed by the
@@ -22,6 +22,22 @@ export interface MapFile {
   nodes?: MapNodeSpawn[]
   /** Props seeded into FRESH worlds (crates, barrels, merchant stalls). */
   props?: MapPropSpawn[]
+  /** Extra sculptable terrain patches (mountains, cave shells…). */
+  terrains?: {
+    id: string
+    origin: [number, number, number]
+    halfExtent: number
+    sub: number
+    heights: string
+    rot?: [number, number, number]
+  }[]
+  /** Imported glTF models (data URLs) placeable as statics via `model`. */
+  models?: { id: string; name: string; glb: string; bounds: [number, number, number] }[]
+  /** Uploaded custom textures usable on statics as `custom:<name>`. */
+  textures?: { name: string; dataUrl: string }[]
+  /** Player spawn point + facing. */
+  spawn?: [number, number, number]
+  spawnYaw?: number
 }
 
 export function decodeHeights(b64: string): Float32Array {
@@ -45,5 +61,11 @@ export function mapFileToOverride(map: MapFile): MapOverride {
     heights: decodeHeights(map.heights),
     nodes: map.nodes ?? [],
     props: map.props ?? [],
+    terrains: (map.terrains ?? []).map((t): TerrainPatchData => ({
+      ...t,
+      heights: decodeHeights(t.heights),
+    })),
+    ...(map.spawn ? { spawn: map.spawn } : {}),
+    ...(map.spawnYaw !== undefined ? { spawnYaw: map.spawnYaw } : {}),
   }
 }

@@ -18,7 +18,9 @@ import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { Color4 as BColor4 } from '@babylonjs/core/Maths/math.color.js'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import {
+  buildPatchGrid,
   buildTerrainGrid,
+  getMapOverride,
   type ContentRegistry,
   type WorldShape,
   type StaticBody,
@@ -92,6 +94,81 @@ export function meshForShape(scene: Scene, name: string, shape: WorldShape, colo
 }
 
 /** Builds render meshes for the static level (mirrors the server's physics statics). */
+/** Uploaded custom textures + imported models from the edited map. */
+const customTextures = new Map<string, string>()
+const mapModels = new Map<string, { glb: string; bounds: [number, number, number] }>()
+
+export function registerMapAssets(
+  map: {
+    textures?: { name: string; dataUrl: string }[]
+    models?: { id: string; name: string; glb: string; bounds: [number, number, number] }[]
+  } | null,
+): void {
+  customTextures.clear()
+  mapModels.clear()
+  for (const t of map?.textures ?? []) customTextures.set(t.name, t.dataUrl)
+  for (const m of map?.models ?? []) mapModels.set(m.id, { glb: m.glb, bounds: m.bounds })
+}
+
+/**
+ * Imported-model static: the box shape stays the (invisible) physics
+ * proxy; the glb renders in its place, centered on the proxy.
+ */
+function attachModel(scene: Scene, proxy: Mesh, modelId: string): void {
+  const model = mapModels.get(modelId)
+  if (!model) return
+  void import('@babylonjs/loaders/glTF/2.0/glTFLoader.js')
+    .then(() => import('@babylonjs/core/Loading/sceneLoader.js'))
+    .then(({ SceneLoader }) =>
+      SceneLoader.ImportMeshAsync('', '', model.glb, scene, undefined, '.glb'),
+    )
+    .then((result) => {
+      const root = result.meshes[0]
+      if (!root) return
+      root.parent = proxy
+      proxy.visibility = 0
+      for (const m of result.meshes) m.isPickable = false
+    })
+    .catch(() => {
+      // Model failed to load — the proxy box stays visible as a stand-in.
+    })
+}
+
+/** Extra terrain patches (mountains, cave shells) from the edited map. */
+export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mesh[] {
+  const meshes: Mesh[] = []
+  for (const patch of getMapOverride()?.terrains ?? []) {
+    const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
+    const mesh = new Mesh(`patch:${patch.id}`, scene)
+    const vd = new VertexData()
+    vd.positions = grid.positions
+    vd.indices = grid.indices
+    vd.uvs = grid.uvs
+    const norms: number[] = []
+    VertexData.ComputeNormals(grid.positions, grid.indices, norms)
+    vd.normals = norms
+    vd.applyToMesh(mesh, false)
+    mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
+    if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
+    const mat = new StandardMaterial(`patchmat:${patch.id}`, scene)
+    mat.diffuseTexture = tiled(scene, 'leafy_grass', Math.max(4, patch.halfExtent / 2))
+    mat.specularColor = new Color3(0.02, 0.02, 0.02)
+    mat.maxSimultaneousLights = 8
+    mesh.material = mat
+    mesh.receiveShadows = true
+    meshes.push(mesh)
+  }
+  void content
+  return meshes
+}
+
+export function rebuildTerrainPatchVisuals(scene: Scene, content: ContentRegistry): void {
+  for (const m of [...scene.meshes]) {
+    if (m.name.startsWith('patch:')) m.dispose(false, true)
+  }
+  buildTerrainPatches(scene, content)
+}
+
 export function buildStaticWorld(scene: Scene, content: ContentRegistry, mapMix?: string): void {
   const world = content.world
   const water = new Water(scene)
@@ -101,6 +178,7 @@ export function buildStaticWorld(scene: Scene, content: ContentRegistry, mapMix?
   for (const [i, s] of world.statics.entries()) {
     const mesh = meshForShape(scene, `static:${i}`, s.shape, s.color)
     if (s.tex) applyStaticTexture(scene, mesh, s)
+    if (s.model) attachModel(scene, mesh, s.model)
     mesh.position.set(s.pos[0], s.pos[1], s.pos[2])
     mesh.rotationQuaternion = s.rot
       ? Quaternion.FromEulerAngles(s.rot[0], s.rot[1], s.rot[2])
@@ -385,7 +463,8 @@ function applyStaticTexture(
 ): void {
   if (!s.tex) return
   const mat = new StandardMaterial(`static-tex:${mesh.name}`, scene)
-  const tex = new Texture(`/assets/tex/${s.tex}.jpg`, scene)
+  const custom = s.tex.startsWith('custom:') ? customTextures.get(s.tex.slice(7)) : undefined
+  const tex = new Texture(custom ?? `/assets/tex/${s.tex}.jpg`, scene)
   // Tile roughly every 2m using the mesh's dominant dimensions.
   const dims =
     s.shape.type === 'box'

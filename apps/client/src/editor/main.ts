@@ -18,6 +18,7 @@ import { GizmoManager } from '@babylonjs/core/Gizmos/gizmoManager.js'
 import { TerrainMaterial } from '@babylonjs/materials/terrain/terrainMaterial.js'
 import '@babylonjs/core/Culling/ray.js'
 import {
+  buildPatchGrid,
   buildTerrainGrid,
   createContent,
   decodeHeights,
@@ -46,68 +47,67 @@ const HALF = world.groundHalfExtent
 const SUB = 128
 const MIX = 512
 
-type Tool = 'sculpt' | 'smooth' | 'flatten' | 'paint' | 'place' | 'select'
+type Tool = 'sculpt' | 'smooth' | 'flatten' | 'paint' | 'entity' | 'mesh' | 'select'
+
+/** Blender-flavored, user-configurable hotkeys (settings ⚙). */
+const DEFAULT_KEYS: Record<string, string> = {
+  sculpt: '1',
+  smooth: '2',
+  flatten: '3',
+  paint: '4',
+  entity: '5',
+  mesh: '6',
+  select: 'q',
+  grab: 'g',
+  rotate: 'r',
+  scale: 's',
+  freelook: 'z',
+}
+function loadKeys(): Record<string, string> {
+  try {
+    return {
+      ...DEFAULT_KEYS,
+      ...(JSON.parse(localStorage.getItem('hobo.editor.keys') ?? '{}') as Record<string, string>),
+    }
+  } catch {
+    return { ...DEFAULT_KEYS }
+  }
+}
 
 interface Placeable {
   name: string
-  kind: 'static' | 'node'
+  kind: 'static' | 'node' | 'spawn' | 'model'
   shape?: StaticBody['shape']
   color?: string
   tex?: string
   decor?: string
   node?: string
+  modelId?: string
 }
 
+/** Mesh tool: primitive shapes the user builds everything from (plus
+ *  imported glb models, appended at runtime). No prefab world props —
+ *  buildings, ramps and furniture are authored, not picked. */
 const PLACEABLES: Placeable[] = [
+  { name: '⬛ Box', kind: 'static', shape: { type: 'box', size: [2, 2, 2] }, color: '#8a8d90' },
   {
-    name: 'Stone block',
+    name: '▬ Panel / wall',
     kind: 'static',
-    shape: { type: 'box', size: [2, 2, 2] },
-    color: '#8a8d90',
-    tex: 'gray_rocks',
-  },
-  {
-    name: 'Wall 4m',
-    kind: 'static',
-    shape: { type: 'box', size: [4, 3, 0.4] },
+    shape: { type: 'box', size: [4, 3, 0.3] },
     color: '#9a9187',
-    tex: 'plastered_wall_02',
   },
   {
-    name: 'Brick block',
+    name: '⚫ Cylinder',
     kind: 'static',
-    shape: { type: 'box', size: [3, 3, 3] },
-    color: '#8d5f4d',
-    tex: 'red_brick',
-  },
-  {
-    name: 'Wood platform',
-    kind: 'static',
-    shape: { type: 'box', size: [4, 0.4, 4] },
-    color: '#8a6a42',
-    tex: 'wood_planks',
-  },
-  {
-    name: 'Ramp 6m',
-    kind: 'static',
-    shape: { type: 'box', size: [4, 0.4, 6] },
-    color: '#8f8a82',
-    tex: 'gray_rocks',
-  },
-  {
-    name: 'Pillar',
-    kind: 'static',
-    shape: { type: 'cylinder', radius: 0.5, height: 4 },
+    shape: { type: 'cylinder', radius: 1, height: 2 },
     color: '#8f8a82',
   },
-  { name: 'Boulder', kind: 'static', shape: { type: 'sphere', radius: 1.4 }, color: '#7b7f83' },
-  {
-    name: 'Street lamp',
-    kind: 'static',
-    shape: { type: 'box', size: [0.16, 3.4, 0.16] },
-    color: '#3a3f45',
-    decor: 'lamp',
-  },
+  { name: '🔘 Sphere', kind: 'static', shape: { type: 'sphere', radius: 1 }, color: '#7b7f83' },
+]
+
+/** Entity tool: gameplay spawns — not geometry. */
+const ENTITY_DEFS: Placeable[] = [
+  { name: '🚩 Spawn point', kind: 'spawn' },
   { name: '🌳 Oak tree (chop)', kind: 'node', node: 'oak_tree' },
   { name: '🫐 Berry bush', kind: 'node', node: 'berry_bush' },
   { name: '🪨 Stone deposit (pick)', kind: 'node', node: 'stone_deposit' },
@@ -141,11 +141,23 @@ const NODE_LOOKS: Record<string, { color: string; shape: StaticBody['shape'] }> 
 }
 
 type UndoOp =
-  | { kind: 'terrain'; before: Float32Array; after: Float32Array }
+  | { kind: 'terrain'; target: string; before: Float32Array; after: Float32Array }
   | { kind: 'paint'; before: ImageData; after: ImageData }
   | { kind: 'place'; body?: StaticBody; node?: MapNodeSpawn }
   | { kind: 'delete'; body?: StaticBody; node?: MapNodeSpawn }
   | { kind: 'edit'; body: StaticBody; before: StaticBody; after: StaticBody }
+  | {
+      kind: 'nodemove'
+      node: MapNodeSpawn
+      before: [number, number, number]
+      after: [number, number, number]
+    }
+  | {
+      kind: 'patchedit'
+      id: string
+      before: { origin: [number, number, number]; rot?: [number, number, number] }
+      after: { origin: [number, number, number]; rot?: [number, number, number] }
+    }
 
 async function boot(): Promise<void> {
   const canvas = document.getElementById('game') as HTMLCanvasElement
@@ -172,10 +184,27 @@ async function boot(): Promise<void> {
   document.addEventListener('pointerlockchange', () => {
     freeLook = document.pointerLockElement === canvas
   })
+  let mmb: 'orbit' | 'pan' | null = null
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button === 1) {
+      e.preventDefault()
+      mmb = e.shiftKey ? 'pan' : 'orbit'
+    }
+  })
+  window.addEventListener('pointerup', (e) => {
+    if (e.button === 1) mmb = null
+  })
   canvas.addEventListener('mousemove', (e) => {
-    if (!freeLook) return
-    camera.rotation.y += e.movementX * 0.0032
-    camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x + e.movementY * 0.0032))
+    if (mmb === 'orbit' || freeLook) {
+      camera.rotation.y += e.movementX * 0.0032
+      camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x + e.movementY * 0.0032))
+    } else if (mmb === 'pan') {
+      // Truck/pedestal along the camera's local axes, model-editor style.
+      const right = camera.getDirection(new Vector3(1, 0, 0))
+      const up = camera.getDirection(new Vector3(0, 1, 0))
+      camera.position.addInPlace(right.scale(-e.movementX * 0.05))
+      camera.position.addInPlace(up.scale(e.movementY * 0.05))
+    }
   })
 
   // ── Load map (or blank floor) ───────────────────────────────────────
@@ -280,6 +309,24 @@ async function boot(): Promise<void> {
     const mesh = meshForShape(scene, `s:${Math.random()}`, s.shape, s.color)
     applyBodyToMesh(mesh, s)
     staticMeshes.set(mesh, s)
+    if (s.model) {
+      const model = mapModels.find((mm) => mm.id === s.model)
+      if (model) {
+        void import('@babylonjs/core/Loading/sceneLoader.js')
+          .then(async ({ SceneLoader }) => {
+            await import('@babylonjs/loaders/glTF/2.0/glTFLoader.js')
+            return SceneLoader.ImportMeshAsync('', '', model.glb, scene, undefined, '.glb')
+          })
+          .then((result) => {
+            const root = result.meshes[0]
+            if (!root || !staticMeshes.has(mesh)) return
+            root.parent = mesh
+            mesh.visibility = 0.12 // faint proxy so it stays selectable
+            for (const m of result.meshes) m.isPickable = false
+          })
+          .catch(() => undefined)
+      }
+    }
     return mesh
   }
   const renderNode = (n: MapNodeSpawn): Mesh => {
@@ -316,12 +363,14 @@ async function boot(): Promise<void> {
   const $e = (id: string) => document.getElementById(id) as HTMLElement
   let tool: Tool = 'sculpt'
   const toolsEl = $e('tools')
+  const keys = loadKeys()
   const TOOLS: [Tool, string][] = [
     ['sculpt', '⛰ Raise/Lower'],
     ['smooth', '〰 Smooth'],
     ['flatten', '▭ Flatten'],
     ['paint', '🖌 Paint'],
-    ['place', '📦 Place'],
+    ['entity', '🌱 Entity'],
+    ['mesh', '🧱 Mesh'],
     ['select', '🖱 Select'],
   ]
   const setTool = (id: Tool): void => {
@@ -330,24 +379,29 @@ async function boot(): Promise<void> {
       .querySelectorAll('button')
       .forEach((x) => x.classList.toggle('active', x.dataset['tool'] === id))
     $e('paint-row').style.display = id === 'paint' ? 'flex' : 'none'
-    $e('place-row').style.display = id === 'place' ? 'flex' : 'none'
-    $e('snap-row').style.display = id === 'place' || id === 'select' ? 'flex' : 'none'
+    $e('mesh-row').style.display = id === 'mesh' ? 'flex' : 'none'
+    $e('entity-row').style.display = id === 'entity' ? 'flex' : 'none'
+    $e('snap-row').style.display =
+      id === 'mesh' || id === 'entity' || id === 'select' ? 'flex' : 'none'
     if (id !== 'select') deselect()
-    if (id !== 'place') ghost?.setEnabled(false)
+    if (id !== 'mesh' && id !== 'entity') ghost?.setEnabled(false)
   }
   for (const [id, label] of TOOLS) {
     const b = document.createElement('button')
-    b.textContent = label
     b.dataset['tool'] = id
+    const icon = label.slice(0, label.indexOf(' '))
+    b.innerHTML = `${icon} <span class="tool-label">${label.slice(label.indexOf(' ') + 1)}</span><span class="hk">${(keys[id] ?? '').toUpperCase()}</span>`
+    b.title = label
     b.addEventListener('click', () => setTool(id))
     toolsEl.appendChild(b)
   }
-  const placeSel = document.getElementById('place') as HTMLSelectElement
-  PLACEABLES.forEach((p, i) => {
+  const placeSel = document.getElementById('mesh-sel') as HTMLSelectElement
+  const entitySel = document.getElementById('entity-sel') as HTMLSelectElement
+  ENTITY_DEFS.forEach((pp, i) => {
     const o = document.createElement('option')
     o.value = String(i)
-    o.textContent = p.name
-    placeSel.appendChild(o)
+    o.textContent = pp.name
+    entitySel.appendChild(o)
   })
   const texSel = document.getElementById('p-tex') as HTMLSelectElement
   for (const t of TEXTURES) {
@@ -370,10 +424,20 @@ async function boot(): Promise<void> {
   // ── Undo/redo ───────────────────────────────────────────────────────
   const undoStack: UndoOp[] = []
   const redoStack: UndoOp[] = []
+  let dirty = false
+  const saveBtn = document.getElementById('save') as HTMLButtonElement
+  const markDirty = (): void => {
+    dirty = true
+    saveBtn.textContent = '💾 Save map ● (unsaved changes)'
+  }
+  window.addEventListener('beforeunload', (e) => {
+    if (dirty) e.preventDefault()
+  })
   const pushUndo = (op: UndoOp): void => {
     undoStack.push(op)
     if (undoStack.length > 40) undoStack.shift()
     redoStack.length = 0
+    markDirty()
   }
   const findMesh = (body?: StaticBody, node?: MapNodeSpawn): Mesh | null => {
     if (body) for (const [m, b] of staticMeshes) if (b === body) return m
@@ -382,8 +446,32 @@ async function boot(): Promise<void> {
   }
   const applyOp = (op: UndoOp, dir: 'undo' | 'redo'): void => {
     if (op.kind === 'terrain') {
-      heights.set(dir === 'undo' ? op.before : op.after)
-      refreshTerrainMesh()
+      const t = terrainTargets.find((tt) => tt.id === op.target)
+      if (t) {
+        t.heights.set(dir === 'undo' ? op.before : op.after)
+        refreshTarget(t)
+      }
+    } else if (op.kind === 'nodemove') {
+      const src = dir === 'undo' ? op.before : op.after
+      op.node.pos = [src[0], src[1], src[2]]
+      const m = findMesh(undefined, op.node)
+      if (m) m.position.set(src[0], src[1] + sampleH(src[0], src[2]) + 0.4, src[2])
+    } else if (op.kind === 'patchedit') {
+      const patch = patches.find((pp) => pp.id === op.id)
+      if (patch) {
+        const src = dir === 'undo' ? op.before : op.after
+        patch.origin = [...src.origin]
+        if (src.rot) patch.rot = [...src.rot]
+        else delete patch.rot
+        for (const [m, pp] of patchMeshes) {
+          if (pp === patch) {
+            m.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
+            m.rotationQuaternion = null
+            const r = patch.rot ?? [0, 0, 0]
+            m.rotation.set(r[0], r[1], r[2])
+          }
+        }
+      }
     } else if (op.kind === 'paint') {
       mixCtx.putImageData(dir === 'undo' ? op.before : op.after, 0, 0)
       mixTex.update()
@@ -433,57 +521,160 @@ async function boot(): Promise<void> {
     status.textContent = '↷ redo'
   }
 
+  // ── Terrain targets: the main ground plus free-floating patches ─────
+  interface PatchState {
+    id: string
+    origin: [number, number, number]
+    halfExtent: number
+    sub: number
+    heights: Float32Array
+    rot?: [number, number, number]
+  }
+  interface TerrainTarget {
+    id: string
+    mesh: Mesh
+    heights: Float32Array
+    sub: number
+    half: number
+    patch: PatchState | null
+  }
+  const terrainTargets: TerrainTarget[] = []
+  const patchMeshes = new Map<Mesh, PatchState>()
+  const extras = (await (await fetch('/map.json')).json().catch(() => null)) as MapFile | null
+  let patches: PatchState[] = (extras?.terrains ?? []).map((t) => ({
+    ...t,
+    heights: decodeHeights(t.heights),
+  }))
+  let mapModels: { id: string; name: string; glb: string; bounds: [number, number, number] }[] =
+    extras?.models ?? []
+  let mapTextures: { name: string; dataUrl: string }[] = extras?.textures ?? []
+  let spawnPos: [number, number, number] | null = extras?.spawn ?? null
+  let spawnYaw = extras?.spawnYaw ?? 0
+
+  // Spawn flag marker (pole + pennant), moved by the Spawn placeable.
+  const spawnFlag = new TransformNode('spawnflag', scene)
+  {
+    const pole = CreateCylinder('spawnpole', { diameter: 0.12, height: 3 }, scene)
+    pole.parent = spawnFlag
+    pole.position.y = 1.5
+    const flag = meshForShape(
+      scene,
+      'spawnpennant',
+      { type: 'box', size: [1.2, 0.5, 0.06] },
+      '#e8b54a',
+    )
+    flag.parent = spawnFlag
+    flag.position.set(0.65, 2.6, 0)
+    for (const m of [pole, flag]) m.isPickable = false
+  }
+  const placeSpawnFlag = (): void => {
+    if (spawnPos) {
+      spawnFlag.setEnabled(true)
+      spawnFlag.position.set(spawnPos[0], spawnPos[1], spawnPos[2])
+      spawnFlag.rotation.y = spawnYaw
+    } else spawnFlag.setEnabled(false)
+  }
+  placeSpawnFlag()
+
+  const buildPatchMesh = (patch: PatchState): Mesh => {
+    const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
+    const mesh = new Mesh(`patch:${patch.id}`, scene)
+    const pvd = new VertexData()
+    pvd.positions = grid.positions.slice()
+    pvd.indices = grid.indices
+    pvd.uvs = grid.uvs
+    const pn: number[] = []
+    VertexData.ComputeNormals(pvd.positions, grid.indices, pn)
+    pvd.normals = pn
+    pvd.applyToMesh(mesh, true)
+    mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
+    if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
+    const pm = new StandardMaterial(`patchmat:${patch.id}`, scene)
+    pm.diffuseColor = new Color3(0.45, 0.58, 0.35)
+    pm.specularColor = new Color3(0.02, 0.02, 0.02)
+    pm.backFaceCulling = false
+    mesh.material = pm
+    patchMeshes.set(mesh, patch)
+    terrainTargets.push({
+      id: patch.id,
+      mesh,
+      heights: patch.heights,
+      sub: patch.sub,
+      half: patch.halfExtent,
+      patch,
+    })
+    return mesh
+  }
+  for (const patch of patches) buildPatchMesh(patch)
+
+  const refreshTarget = (t: TerrainTarget): void => {
+    const buf = t.mesh.getVerticesData(VertexBuffer.PositionKind) as Float32Array
+    const n = t.sub
+    for (let j = 0; j <= n; j++) {
+      for (let i = 0; i <= n; i++) {
+        buf[((n - j) * (n + 1) + i) * 3 + 1] = t.heights[j * (n + 1) + i] ?? 0
+      }
+    }
+    t.mesh.updateVerticesData(VertexBuffer.PositionKind, buf, true)
+    const idx = t.mesh.getIndices() as Uint32Array
+    const nn: number[] = []
+    VertexData.ComputeNormals(buf, idx, nn)
+    t.mesh.updateVerticesData(VertexBuffer.NormalKind, nn, true)
+    if (t.id === 'main') wire.updateVerticesData(VertexBuffer.PositionKind, buf, true)
+  }
+
   // ── Sculpt core ─────────────────────────────────────────────────────
   const posBuf = terrain.getVerticesData(VertexBuffer.PositionKind) as Float32Array
+  terrainTargets.push({ id: 'main', mesh: terrain, heights, sub: SUB, half: HALF, patch: null })
   let shift = false
   let strokeBefore: Float32Array | null = null
+  let strokeTarget: TerrainTarget | null = null
   let paintBefore: ImageData | null = null
 
-  function sculpt(px: number, pz: number, sign: number): void {
+  function sculpt(target: TerrainTarget, px: number, pz: number, sign: number): void {
     const radius = Number($('radius').value)
     const strength = Number($('strength').value) * sign
     const feather = Number($('feather').value)
     const mode = tool
+    const n = target.sub
+    const half = target.half
+    const tcell = (half * 2) / n
+    const hs = target.heights
     let flatH = 0
     if (mode === 'flatten') {
-      const ci = Math.round((px + HALF) / cell)
-      const cj = Math.round((pz + HALF) / cell)
-      flatH = heights[cj * (SUB + 1) + ci] ?? 0
+      const ci = Math.round((px + half) / tcell)
+      const cj = Math.round((pz + half) / tcell)
+      flatH = hs[cj * (n + 1) + ci] ?? 0
     }
-    const iMin = Math.max(0, Math.floor((px - radius + HALF) / cell))
-    const iMax = Math.min(SUB, Math.ceil((px + radius + HALF) / cell))
-    const jMin = Math.max(0, Math.floor((pz - radius + HALF) / cell))
-    const jMax = Math.min(SUB, Math.ceil((pz + radius + HALF) / cell))
+    const iMin = Math.max(0, Math.floor((px - radius + half) / tcell))
+    const iMax = Math.min(n, Math.ceil((px + radius + half) / tcell))
+    const jMin = Math.max(0, Math.floor((pz - radius + half) / tcell))
+    const jMax = Math.min(n, Math.ceil((pz + radius + half) / tcell))
     for (let j = jMin; j <= jMax; j++) {
       for (let i = iMin; i <= iMax; i++) {
-        const x = -HALF + i * cell
-        const z = -HALF + j * cell
+        const x = -half + i * tcell
+        const z = -half + j * tcell
         const d = Math.hypot(x - px, z - pz)
         if (d > radius) continue
         // Feather: exponent on the cos² falloff — low = wide soft skirt
         // (paths, gentle mounds), high = tight hard-edged plateau.
         const fall = Math.cos((d / radius) * Math.PI * 0.5) ** (2 * feather)
-        const v = j * (SUB + 1) + i
-        const h = heights[v] ?? 0
-        if (mode === 'sculpt') heights[v] = h + strength * fall * 0.35
-        else if (mode === 'flatten') heights[v] = h + (flatH - h) * Math.min(1, fall * 0.6)
+        const v = j * (n + 1) + i
+        const h = hs[v] ?? 0
+        if (mode === 'sculpt') hs[v] = h + strength * fall * 0.35
+        else if (mode === 'flatten') hs[v] = h + (flatH - h) * Math.min(1, fall * 0.6)
         else if (mode === 'smooth') {
-          const n =
-            ((heights[v - 1] ?? h) +
-              (heights[v + 1] ?? h) +
-              (heights[v - (SUB + 1)] ?? h) +
-              (heights[v + (SUB + 1)] ?? h)) /
+          const nb =
+            ((hs[v - 1] ?? h) +
+              (hs[v + 1] ?? h) +
+              (hs[v - (n + 1)] ?? h) +
+              (hs[v + (n + 1)] ?? h)) /
             4
-          heights[v] = h + (n - h) * Math.min(1, fall * 0.8)
+          hs[v] = h + (nb - h) * Math.min(1, fall * 0.8)
         }
-        posBuf[vtx(i, j) * 3 + 1] = heights[v] ?? 0
       }
     }
-    terrain.updateVerticesData(VertexBuffer.PositionKind, posBuf, true)
-    const norms: number[] = []
-    VertexData.ComputeNormals(posBuf, indices, norms)
-    terrain.updateVerticesData(VertexBuffer.NormalKind, norms, true)
-    wire.updateVerticesData(VertexBuffer.PositionKind, posBuf, true)
+    refreshTarget(target)
   }
 
   function paint(px: number, pz: number): void {
@@ -515,21 +706,34 @@ async function boot(): Promise<void> {
   let ghostFor = -1
   let placeYaw = 0
   const ensureGhost = (): Mesh | null => {
-    const idx = Number(placeSel.value)
-    const def = PLACEABLES[idx]
+    const idx = tool === 'entity' ? 1000 + Number(entitySel.value) : Number(placeSel.value)
+    const def =
+      tool === 'entity' ? ENTITY_DEFS[Number(entitySel.value)] : PLACEABLES[Number(placeSel.value)]
     if (!def) return null
     if (ghost && ghostFor === idx) return ghost
     ghost?.dispose()
-    const shape =
+    const shape = placeableShape(def)
+    const color =
       def.kind === 'static'
-        ? def.shape!
-        : (NODE_LOOKS[def.node!]?.shape ?? { type: 'sphere', radius: 0.6 })
-    const color = def.kind === 'static' ? def.color! : (NODE_LOOKS[def.node!]?.color ?? '#888888')
+        ? def.color!
+        : def.kind === 'node'
+          ? (NODE_LOOKS[def.node!]?.color ?? '#888888')
+          : '#e8b54a'
     ghost = meshForShape(scene, 'ghost', shape, color)
     ghost.visibility = 0.5
     ghost.isPickable = false
     ghostFor = idx
     return ghost
+  }
+  const placeableShape = (def: Placeable): StaticBody['shape'] => {
+    if (def.kind === 'static') return def.shape!
+    if (def.kind === 'node') return NODE_LOOKS[def.node!]?.shape ?? { type: 'sphere', radius: 0.6 }
+    if (def.kind === 'model') {
+      const model = mapModels.find((mm) => mm.id === def.modelId)
+      const b = model?.bounds ?? [1, 1, 1]
+      return { type: 'box', size: [b[0], b[1], b[2]] }
+    }
+    return { type: 'box', size: [0.3, 3, 0.3] } // spawn flag pole
   }
   const shapeHeight = (shape: StaticBody['shape']): number =>
     shape.type === 'box'
@@ -549,17 +753,15 @@ async function boot(): Promise<void> {
   const computePlacePose = (): PlacePose | null => {
     const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m !== ghost && m !== wire)
     if (!pick?.hit || !pick.pickedPoint) return null
-    const def = PLACEABLES[Number(placeSel.value)]
+    const def =
+      tool === 'entity' ? ENTITY_DEFS[Number(entitySel.value)] : PLACEABLES[Number(placeSel.value)]
     if (!def) return null
-    const shape =
-      def.kind === 'static'
-        ? def.shape!
-        : (NODE_LOOKS[def.node!]?.shape ?? { type: 'sphere', radius: 0.6 as number })
+    const shape = placeableShape(def)
     const n = pick.getNormal(true) ?? new Vector3(0, 1, 0)
     // Align local +Y to the surface normal (walls, slopes), then apply the
     // wheel yaw around that normal. Nodes always sit upright.
     const rot =
-      def.kind === 'node' || n.y > 0.95
+      def.kind === 'node' || def.kind === 'spawn' || n.y > 0.95
         ? Quaternion.RotationAxis(new Vector3(0, 1, 0), placeYaw)
         : Quaternion.FromUnitVectorsToRef(
             new Vector3(0, 1, 0),
@@ -578,7 +780,7 @@ async function boot(): Promise<void> {
   canvas.addEventListener(
     'wheel',
     (e) => {
-      if (tool !== 'place') return
+      if (tool !== 'mesh' && tool !== 'entity') return
       e.preventDefault()
       const step = shift ? Math.PI / 60 : Math.PI / 12
       placeYaw += (e.deltaY > 0 ? 1 : -1) * step
@@ -587,8 +789,36 @@ async function boot(): Promise<void> {
   )
 
   function placeAt(pose: PlacePose): void {
-    const def = PLACEABLES[Number(placeSel.value)]
+    const def =
+      tool === 'entity' ? ENTITY_DEFS[Number(entitySel.value)] : PLACEABLES[Number(placeSel.value)]
     if (!def) return
+    if (def.kind === 'spawn') {
+      spawnPos = [pose.pos.x, pose.pos.y, pose.pos.z]
+      spawnYaw = placeYaw
+      placeSpawnFlag()
+      markDirty()
+      status.textContent = '🚩 spawn point set — players appear here after save'
+      return
+    }
+    if (def.kind === 'model') {
+      const model = mapModels.find((mm) => mm.id === def.modelId)
+      if (!model) return
+      const e = pose.rot.toEulerAngles()
+      const body: StaticBody = {
+        shape: { type: 'box', size: [model.bounds[0], model.bounds[1], model.bounds[2]] },
+        pos: [pose.pos.x, pose.pos.y, pose.pos.z],
+        yaw: e.y,
+        ...(Math.abs(e.x) > 0.01 || Math.abs(e.z) > 0.01
+          ? { rot: [e.x, e.y, e.z] as [number, number, number] }
+          : {}),
+        color: '#8a8d90',
+        model: model.id,
+      }
+      placedStatics.push(body)
+      renderStatic(body)
+      pushUndo({ kind: 'place', body })
+      return
+    }
     if (def.kind === 'node') {
       const ground = sampleH(pose.pos.x, pose.pos.z)
       const node: MapNodeSpawn = { node: def.node!, pos: [pose.pos.x, 0, pose.pos.z] }
@@ -617,18 +847,82 @@ async function boot(): Promise<void> {
 
   // ── Selection: gizmos + properties popover ──────────────────────────
   const gizmos = new GizmoManager(scene)
-  gizmos.positionGizmoEnabled = true
-  gizmos.rotationGizmoEnabled = true
-  gizmos.scaleGizmoEnabled = true
   gizmos.usePointerToAttachGizmos = false
   gizmos.attachToMesh(null)
+  type GizmoMode = 'move' | 'rotate' | 'scale'
+  let gizmoMode: GizmoMode = 'move'
+  const setGizmoMode = (mode: GizmoMode): void => {
+    // Selection kinds constrain modes: nodes only move; patches move/rotate.
+    if (selectedNode && mode !== 'move') mode = 'move'
+    if (selectedPatch && mode === 'scale') mode = 'move'
+    gizmoMode = mode
+    gizmos.positionGizmoEnabled = mode === 'move'
+    gizmos.rotationGizmoEnabled = mode === 'rotate'
+    gizmos.scaleGizmoEnabled = mode === 'scale'
+    for (const [id, m] of [
+      ['gm-move', 'move'],
+      ['gm-rot', 'rotate'],
+      ['gm-scale', 'scale'],
+    ] as const) {
+      document.getElementById(id)?.classList.toggle('active', m === mode)
+    }
+    // Re-wire drag hooks: gizmo instances are created lazily per mode.
+    wireGizmoHooks()
+  }
+  document.getElementById('gm-move')?.addEventListener('click', () => setGizmoMode('move'))
+  document.getElementById('gm-rot')?.addEventListener('click', () => setGizmoMode('rotate'))
+  document.getElementById('gm-scale')?.addEventListener('click', () => setGizmoMode('scale'))
   const props = $e('props')
   let selected: { mesh: Mesh; body: StaticBody; editBefore: StaticBody | null } | null = null
+  let selectedNode: { mesh: Mesh; node: MapNodeSpawn; before: [number, number, number] } | null =
+    null
+  let selectedPatch: { mesh: Mesh; patch: PatchState } | null = null
 
   const deselect = (): void => {
     gizmos.attachToMesh(null)
     props.style.display = 'none'
     selected = null
+    selectedNode = null
+    selectedPatch = null
+  }
+
+  /** Nodes: position-only gizmo; drag end re-grounds and records undo. */
+  const selectNode = (mesh: Mesh, node: MapNodeSpawn): void => {
+    deselect()
+    selectedNode = { mesh, node, before: [node.pos[0], node.pos[1], node.pos[2]] }
+    setGizmoMode('move')
+    gizmos.attachToMesh(mesh)
+    props.style.display = 'flex'
+    props.style.left = '274px'
+    props.style.top = '12px'
+    $e('props-title').textContent = `resource: ${node.node}`
+    for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
+    $('p-x').value = String(node.pos[0])
+    $('p-y').value = '0'
+    $('p-z').value = String(node.pos[2])
+    status.textContent = 'drag arrows to move the node · Del removes it'
+  }
+
+  /** Patches: move + tilt the whole terrain patch. */
+  const selectPatch = (mesh: Mesh, patch: PatchState): void => {
+    deselect()
+    selectedPatch = { mesh, patch }
+    setGizmoMode(gizmoMode === 'scale' ? 'move' : gizmoMode)
+    gizmos.attachToMesh(mesh)
+    props.style.display = 'flex'
+    props.style.left = '274px'
+    props.style.top = '12px'
+    $e('props-title').textContent = `terrain patch (${patch.halfExtent * 2}m)`
+    for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
+    const deg = (r: number) => Math.round((r * 180) / Math.PI)
+    const rot = patch.rot ?? [0, 0, 0]
+    $('p-x').value = String(patch.origin[0])
+    $('p-y').value = String(patch.origin[1])
+    $('p-z').value = String(patch.origin[2])
+    $('r-x').value = String(deg(rot[0]))
+    $('r-y').value = String(deg(rot[1]))
+    $('r-z').value = String(deg(rot[2]))
+    status.textContent = 'sculpt patches with the terrain tools · tilt for caves/overhangs'
   }
   const rebuildSelectedMesh = (body: StaticBody, oldMesh: Mesh): Mesh => {
     const wasSelected = selected?.mesh === oldMesh
@@ -667,7 +961,9 @@ async function boot(): Promise<void> {
     texSel.value = body.tex ?? ''
   }
   const select = (mesh: Mesh, body: StaticBody): void => {
+    deselect()
     selected = { mesh, body, editBefore: null }
+    setGizmoMode(gizmoMode)
     gizmos.attachToMesh(mesh)
     props.style.display = 'flex'
     props.style.left = '274px'
@@ -689,44 +985,126 @@ async function boot(): Promise<void> {
   const beginEdit = (): void => {
     if (selected && !selected.editBefore) selected.editBefore = snapshotBody(selected.body)
   }
-  // Gizmo drags write back into the body (and undo) on release.
-  for (const g of [gizmos.gizmos.positionGizmo, gizmos.gizmos.rotationGizmo]) {
-    g?.onDragStartObservable.add(beginEdit)
-    g?.onDragEndObservable.add(() => {
+  // Gizmo drags write back into the body (and undo) on release. The
+  // GizmoManager creates gizmo instances lazily when a mode first enables,
+  // so hooks re-wire after every mode switch (idempotent via WeakSet).
+  const wiredGizmos = new WeakSet<object>()
+  function wireGizmoHooks(): void {
+    wirePosRot()
+    wireScale()
+  }
+  function wirePosRot(): void {
+    for (const g of [gizmos.gizmos.positionGizmo, gizmos.gizmos.rotationGizmo]) {
+      if (!g || wiredGizmos.has(g)) continue
+      wiredGizmos.add(g)
+      g.onDragStartObservable.add(beginEdit)
+      g.onDragEndObservable.add(() => {
+        if (selectedNode) {
+          const m = selectedNode.mesh
+          const node = selectedNode.node
+          const after: [number, number, number] = [snapVal(m.position.x), 0, snapVal(m.position.z)]
+          node.pos = after
+          m.position.set(after[0], sampleH(after[0], after[2]) + 0.4, after[2])
+          pushUndo({ kind: 'nodemove', node, before: selectedNode.before, after })
+          selectedNode.before = [after[0], after[1], after[2]]
+          $('p-x').value = String(after[0])
+          $('p-z').value = String(after[2])
+          return
+        }
+        if (selectedPatch) {
+          const m = selectedPatch.mesh
+          const patch = selectedPatch.patch
+          const before = {
+            origin: [...patch.origin] as [number, number, number],
+            ...(patch.rot ? { rot: [...patch.rot] as [number, number, number] } : {}),
+          }
+          patch.origin = [m.position.x, m.position.y, m.position.z]
+          const e2 = m.rotationQuaternion ? m.rotationQuaternion.toEulerAngles() : m.rotation
+          if (Math.abs(e2.x) > 0.001 || Math.abs(e2.y) > 0.001 || Math.abs(e2.z) > 0.001)
+            patch.rot = [e2.x, e2.y, e2.z]
+          else delete patch.rot
+          pushUndo({
+            kind: 'patchedit',
+            id: patch.id,
+            before,
+            after: {
+              origin: [...patch.origin] as [number, number, number],
+              ...(patch.rot ? { rot: [...patch.rot] as [number, number, number] } : {}),
+            },
+          })
+          return
+        }
+        if (!selected) return
+        const m = selected.mesh
+        const b = selected.body
+        b.pos = [snapVal(m.position.x), m.position.y, snapVal(m.position.z)]
+        m.position.set(b.pos[0], b.pos[1], b.pos[2])
+        const e2 = m.rotationQuaternion ? m.rotationQuaternion.toEulerAngles() : m.rotation
+        b.yaw = e2.y
+        if (Math.abs(e2.x) > 0.01 || Math.abs(e2.z) > 0.01) b.rot = [e2.x, e2.y, e2.z]
+        else delete b.rot
+        fillProps(b)
+        commitEdit()
+      })
+    }
+  }
+  function wireScale(): void {
+    const g = gizmos.gizmos.scaleGizmo
+    if (!g || wiredGizmos.has(g)) return
+    wiredGizmos.add(g)
+    g.onDragStartObservable.add(beginEdit)
+    g.onDragEndObservable.add(() => {
       if (!selected) return
+      // Bake the gizmo scale into the shape dimensions, then rebuild clean.
       const m = selected.mesh
       const b = selected.body
-      b.pos = [snapVal(m.position.x), m.position.y, snapVal(m.position.z)]
-      m.position.set(b.pos[0], b.pos[1], b.pos[2])
-      const e2 = m.rotationQuaternion ? m.rotationQuaternion.toEulerAngles() : m.rotation
-      b.yaw = e2.y
-      if (Math.abs(e2.x) > 0.01 || Math.abs(e2.z) > 0.01) b.rot = [e2.x, e2.y, e2.z]
-      else delete b.rot
+      const sc = m.scaling
+      if (b.shape.type === 'box')
+        b.shape.size = [b.shape.size[0] * sc.x, b.shape.size[1] * sc.y, b.shape.size[2] * sc.z]
+      else if (b.shape.type === 'cylinder') {
+        b.shape.radius *= (sc.x + sc.z) / 2
+        b.shape.height *= sc.y
+      } else b.shape.radius *= (sc.x + sc.y + sc.z) / 3
+      rebuildSelectedMesh(b, m)
       fillProps(b)
       commitEdit()
     })
   }
-  gizmos.gizmos.scaleGizmo?.onDragStartObservable.add(beginEdit)
-  gizmos.gizmos.scaleGizmo?.onDragEndObservable.add(() => {
-    if (!selected) return
-    // Bake the gizmo scale into the shape dimensions, then rebuild clean.
-    const m = selected.mesh
-    const b = selected.body
-    const s = m.scaling
-    if (b.shape.type === 'box')
-      b.shape.size = [b.shape.size[0] * s.x, b.shape.size[1] * s.y, b.shape.size[2] * s.z]
-    else if (b.shape.type === 'cylinder') {
-      b.shape.radius *= (s.x + s.z) / 2
-      b.shape.height *= s.y
-    } else b.shape.radius *= (s.x + s.y + s.z) / 3
-    rebuildSelectedMesh(b, m)
-    fillProps(b)
-    commitEdit()
-  })
+  wireGizmoHooks()
+  setGizmoMode('move')
   // Numeric property edits apply live.
+  const applyManualPose = (): void => {
+    // Manual numeric entry for the non-static selections.
+    if (selectedNode) {
+      const node = selectedNode.node
+      const after: [number, number, number] = [Number($('p-x').value), 0, Number($('p-z').value)]
+      pushUndo({ kind: 'nodemove', node, before: selectedNode.before, after })
+      node.pos = after
+      selectedNode.before = [after[0], after[1], after[2]]
+      selectedNode.mesh.position.set(after[0], sampleH(after[0], after[2]) + 0.4, after[2])
+    } else if (selectedPatch) {
+      const patch = selectedPatch.patch
+      const rad2 = (d: number) => (d * Math.PI) / 180
+      patch.origin = [Number($('p-x').value), Number($('p-y').value), Number($('p-z').value)]
+      const r: [number, number, number] = [
+        rad2(Number($('r-x').value)),
+        rad2(Number($('r-y').value)),
+        rad2(Number($('r-z').value)),
+      ]
+      if (Math.abs(r[0]) > 0.001 || Math.abs(r[1]) > 0.001 || Math.abs(r[2]) > 0.001) patch.rot = r
+      else delete patch.rot
+      selectedPatch.mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
+      selectedPatch.mesh.rotationQuaternion = null
+      selectedPatch.mesh.rotation.set(r[0], r[1], r[2])
+      markDirty()
+    }
+  }
   const propInput = (id: string, apply: (v: number, b: StaticBody) => void): void => {
     $(id).addEventListener('change', () => {
-      if (!selected) return
+      if (!selected) {
+        applyManualPose()
+        return
+      }
       beginEdit()
       apply(Number($(id).value), selected.body)
       rebuildSelectedMesh(selected.body, selected.mesh)
@@ -749,7 +1127,10 @@ async function boot(): Promise<void> {
   }
   for (const id of ['r-x', 'r-y', 'r-z'])
     $(id).addEventListener('change', () => {
-      if (!selected) return
+      if (!selected) {
+        applyManualPose()
+        return
+      }
       beginEdit()
       setRot(selected.body)
       rebuildSelectedMesh(selected.body, selected.mesh)
@@ -761,6 +1142,31 @@ async function boot(): Promise<void> {
   propInput('d-r', (v, b) => b.shape.type === 'cylinder' && (b.shape.radius = v))
   propInput('d-h', (v, b) => b.shape.type === 'cylinder' && (b.shape.height = v))
   propInput('d-sr', (v, b) => b.shape.type === 'sphere' && (b.shape.radius = v))
+  for (const [id, axis] of [
+    ['s-x', 0],
+    ['s-y', 1],
+    ['s-z', 2],
+  ] as const) {
+    $(id).addEventListener('change', () => {
+      if (!selected) return
+      const f = Number($(id).value)
+      if (!Number.isFinite(f) || f <= 0) {
+        $(id).value = '1'
+        return
+      }
+      beginEdit()
+      const b = selected.body
+      if (b.shape.type === 'box') b.shape.size[axis] *= f
+      else if (b.shape.type === 'cylinder') {
+        if (axis === 1) b.shape.height *= f
+        else b.shape.radius *= f
+      } else b.shape.radius *= f
+      rebuildSelectedMesh(b, selected.mesh)
+      fillProps(b)
+      commitEdit()
+      $(id).value = '1'
+    })
+  }
   $('p-color').addEventListener('change', () => {
     if (!selected) return
     beginEdit()
@@ -777,6 +1183,27 @@ async function boot(): Promise<void> {
     commitEdit()
   })
   const deleteSelected = (): void => {
+    if (selectedNode) {
+      const { mesh, node } = selectedNode
+      deselect()
+      placedNodes = placedNodes.filter((n) => n !== node)
+      nodeMeshes.delete(mesh)
+      mesh.dispose()
+      pushUndo({ kind: 'delete', node })
+      return
+    }
+    if (selectedPatch) {
+      const { mesh, patch } = selectedPatch
+      deselect()
+      patches = patches.filter((pp) => pp !== patch)
+      patchMeshes.delete(mesh)
+      const ti = terrainTargets.findIndex((t) => t.patch === patch)
+      if (ti >= 0) terrainTargets.splice(ti, 1)
+      mesh.dispose()
+      markDirty()
+      status.textContent = 'patch removed (no undo for patches — save carefully)'
+      return
+    }
     if (!selected) return
     const { mesh, body } = selected
     deselect()
@@ -804,14 +1231,17 @@ async function boot(): Promise<void> {
     if (e.button !== 0 && e.button !== 2) return
     const sign = e.button === 2 ? -1 : 1
     if (tool === 'sculpt' || tool === 'smooth' || tool === 'flatten') {
-      strokeBefore = heights.slice()
+      const t = pickTerrainTarget()
+      if (!t) return
+      strokeTarget = t.target
+      strokeBefore = t.target.heights.slice()
       painting = sign
       applySculpt(sign)
     } else if (tool === 'paint' && e.button === 0) {
       paintBefore = mixCtx.getImageData(0, 0, MIX, MIX)
       painting = 1
       applyPaint()
-    } else if (tool === 'place' && e.button === 0) {
+    } else if ((tool === 'mesh' || tool === 'entity') && e.button === 0) {
       const pose = computePlacePose()
       if (pose) placeAt(pose)
     } else if (tool === 'select' && e.button === 0) {
@@ -822,21 +1252,26 @@ async function boot(): Promise<void> {
       )
       const mesh = pick?.pickedMesh as Mesh | undefined
       if (mesh && staticMeshes.has(mesh)) select(mesh, staticMeshes.get(mesh)!)
-      else if (mesh && nodeMeshes.has(mesh)) {
-        // Nodes have no gizmo editing — delete/undo only for now.
-        const node = nodeMeshes.get(mesh)!
-        placedNodes = placedNodes.filter((n) => n !== node)
-        nodeMeshes.delete(mesh)
-        mesh.dispose()
-        pushUndo({ kind: 'delete', node })
-        status.textContent = 'node removed (undo with Ctrl+Z)'
-      } else deselect()
+      else if (mesh && nodeMeshes.has(mesh)) selectNode(mesh, nodeMeshes.get(mesh)!)
+      else {
+        // Patches are selectable too (move/tilt/delete whole patch).
+        const ppick = scene.pick(scene.pointerX, scene.pointerY, (m) => patchMeshes.has(m as Mesh))
+        const pmesh = ppick?.pickedMesh as Mesh | undefined
+        if (pmesh && patchMeshes.has(pmesh)) selectPatch(pmesh, patchMeshes.get(pmesh)!)
+        else deselect()
+      }
     }
   })
   window.addEventListener('pointerup', () => {
-    if (painting && strokeBefore) {
-      pushUndo({ kind: 'terrain', before: strokeBefore, after: heights.slice() })
+    if (painting && strokeBefore && strokeTarget) {
+      pushUndo({
+        kind: 'terrain',
+        target: strokeTarget.id,
+        before: strokeBefore,
+        after: strokeTarget.heights.slice(),
+      })
       strokeBefore = null
+      strokeTarget = null
     }
     if (painting && paintBefore) {
       pushUndo({ kind: 'paint', before: paintBefore, after: mixCtx.getImageData(0, 0, MIX, MIX) })
@@ -849,9 +1284,26 @@ async function boot(): Promise<void> {
     if (tool === 'paint') applyPaint()
     else applySculpt(painting)
   })
+  /** Pick whichever terrain (main or patch) is under the cursor. */
+  function pickTerrainTarget(): { target: TerrainTarget; local: Vector3 } | null {
+    const pick = scene.pick(
+      scene.pointerX,
+      scene.pointerY,
+      (m) => m === terrain || patchMeshes.has(m as Mesh),
+    )
+    if (!pick?.hit || !pick.pickedPoint || !pick.pickedMesh) return null
+    const target = terrainTargets.find((t) => t.mesh === pick.pickedMesh)
+    if (!target) return null
+    // Patch sculpting happens in patch-local space (patches can be tilted).
+    const inv = pick.pickedMesh.getWorldMatrix().clone().invert()
+    const local = Vector3.TransformCoordinates(pick.pickedPoint, inv)
+    return { target, local }
+  }
   function applySculpt(sign: number): void {
-    const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m === terrain)
-    if (pick?.hit && pick.pickedPoint) sculpt(pick.pickedPoint.x, pick.pickedPoint.z, sign)
+    const t = pickTerrainTarget()
+    if (!t) return
+    if (strokeTarget && t.target !== strokeTarget) return // one target per stroke
+    sculpt(t.target, t.local.x, t.local.z, sign)
   }
   function applyPaint(): void {
     const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m === terrain)
@@ -865,17 +1317,27 @@ async function boot(): Promise<void> {
       (e.target as HTMLElement).tagName === 'SELECT'
     )
       return
-    if (e.key === 'Shift') shift = true
-    else if (e.key === 'z' || e.key === 'Z') {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault()
-        if (e.shiftKey) redo()
-        else undo()
-      } else {
-        // Z: toggle pointer-locked free-look.
-        if (document.pointerLockElement === canvas) document.exitPointerLock()
-        else void canvas.requestPointerLock()
-      }
+    if (e.key === 'Shift') {
+      shift = true
+      camera.speed = 4.5 // fly faster while held
+    } else if (!e.ctrlKey && !e.metaKey && TOOLS.some(([t]) => keys[t] === e.key.toLowerCase())) {
+      setTool(TOOLS.find(([t]) => keys[t] === e.key.toLowerCase())![0])
+    } else if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === keys['grab']) {
+      setGizmoMode('move')
+    } else if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === keys['rotate']) {
+      setGizmoMode('rotate')
+    } else if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === keys['scale']) {
+      setGizmoMode('scale')
+    } else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      $e('p-dup').click()
+    } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      if (e.shiftKey) redo()
+      else undo()
+    } else if (e.key.toLowerCase() === keys['freelook']) {
+      if (document.pointerLockElement === canvas) document.exitPointerLock()
+      else void canvas.requestPointerLock()
     } else if (e.key === '[' || e.key === ']') {
       const dir = e.key === ']' ? 1 : -1
       const target = e.shiftKey ? 'strength' : 'radius'
@@ -890,7 +1352,10 @@ async function boot(): Promise<void> {
     else if (e.key === 'Escape') deselect()
   })
   window.addEventListener('keyup', (e) => {
-    if (e.key === 'Shift') shift = false
+    if (e.key === 'Shift') {
+      shift = false
+      camera.speed = 1.6
+    }
   })
 
   // ── Brush cursor + wireframe + ghost per-frame ──────────────────────
@@ -913,7 +1378,7 @@ async function boot(): Promise<void> {
       brush.setEnabled(true)
     } else brush.setEnabled(false)
     wire.setEnabled(tool !== 'paint' && sculpting && overTerrain)
-    if (tool === 'place') {
+    if (tool === 'mesh' || tool === 'entity') {
       const pose = computePlacePose()
       const g = ensureGhost()
       if (g && pose) {
@@ -935,6 +1400,17 @@ async function boot(): Promise<void> {
     mix: (mixCtx.canvas as HTMLCanvasElement).toDataURL('image/png'),
     statics: placedStatics,
     nodes: placedNodes,
+    terrains: patches.map((pp) => ({
+      id: pp.id,
+      origin: pp.origin,
+      halfExtent: pp.halfExtent,
+      sub: pp.sub,
+      heights: encodeHeights(pp.heights),
+      ...(pp.rot ? { rot: pp.rot } : {}),
+    })),
+    models: mapModels,
+    textures: mapTextures,
+    ...(spawnPos ? { spawn: spawnPos, spawnYaw } : {}),
   })
   document.getElementById('save')?.addEventListener('click', () => {
     void (async () => {
@@ -948,8 +1424,9 @@ async function boot(): Promise<void> {
         body: JSON.stringify(file),
       })
       if (resp.ok) {
-        // Our own save must not bounce back as a "remote" merge.
-        lastSig = `${file.heights.length}:${file.statics.length}:${(file.nodes ?? []).length}:${(file.mix ?? '').length}`
+        dirty = false
+        saveBtn.textContent = '💾 Save map (applies live)'
+        lastSig = `${file.heights.length}:${file.statics.length}:${(file.nodes ?? []).length}:${(file.mix ?? '').length}:${(file.terrains ?? []).length}:${(file.models ?? []).length}:${(file.textures ?? []).length}`
       }
       status.textContent = resp.ok
         ? '✅ saved — live in game'
@@ -965,7 +1442,7 @@ async function boot(): Promise<void> {
     try {
       const map = (await (await fetch('/map.json')).json()) as MapFile | null
       if (!map || map.v !== 1 || map.sub !== SUB) return
-      const sig = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}`
+      const sig = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}`
       if (sig === lastSig) return
       lastSig = sig
       heights.set(decodeHeights(map.heights))
@@ -986,6 +1463,20 @@ async function boot(): Promise<void> {
       placedNodes = map.nodes ?? []
       for (const st of placedStatics) renderStatic(st)
       for (const n of placedNodes) renderNode(n)
+      // Patches: rebuild from the remote artifact.
+      for (const m of patchMeshes.keys()) m.dispose()
+      patchMeshes.clear()
+      for (let i = terrainTargets.length - 1; i >= 0; i--) {
+        if (terrainTargets[i]!.patch) terrainTargets.splice(i, 1)
+      }
+      patches = (map.terrains ?? []).map((t) => ({ ...t, heights: decodeHeights(t.heights) }))
+      for (const pp of patches) buildPatchMesh(pp)
+      mapModels = map.models ?? []
+      mapTextures = map.textures ?? []
+      refreshImportedPalette()
+      spawnPos = map.spawn ?? null
+      spawnYaw = map.spawnYaw ?? 0
+      placeSpawnFlag()
       status.textContent = '🔄 merged edits from another admin'
     } catch {
       /* offline poll */
@@ -1116,6 +1607,193 @@ async function boot(): Promise<void> {
       )
     }
   }, 120)
+
+  // ── Imports + patch creation ────────────────────────────────────────
+  const refreshImportedPalette = (): void => {
+    // Rebuild the Place dropdown: base placeables + imported models.
+    for (let i = PLACEABLES.length - 1; i >= 0; i--) {
+      if (PLACEABLES[i]!.kind === 'model') PLACEABLES.splice(i, 1)
+    }
+    for (const model of mapModels)
+      PLACEABLES.push({ name: `🗿 ${model.name}`, kind: 'model', modelId: model.id })
+    placeSel.replaceChildren()
+    PLACEABLES.forEach((pp, i) => {
+      const o = document.createElement('option')
+      o.value = String(i)
+      o.textContent = pp.name
+      placeSel.appendChild(o)
+    })
+    // Texture dropdown: stock + custom uploads.
+    texSel.replaceChildren()
+    for (const t of [...TEXTURES, ...mapTextures.map((tt) => `custom:${tt.name}`)]) {
+      const o = document.createElement('option')
+      o.value = t
+      o.textContent = t === '' ? '(plain color)' : t
+      texSel.appendChild(o)
+    }
+  }
+  refreshImportedPalette()
+
+  document.getElementById('add-patch')?.addEventListener('click', () => {
+    const half = 16
+    const sub = 32
+    const id = `patch-${Date.now().toString(36)}`
+    const fwd = camera.getForwardRay(40)
+    const at = fwd.origin.add(fwd.direction.scale(30))
+    const patch: PatchState = {
+      id,
+      origin: [Math.round(at.x), Math.max(1, Math.round(at.y - 8)), Math.round(at.z)],
+      halfExtent: half,
+      sub,
+      heights: new Float32Array((sub + 1) * (sub + 1)),
+    }
+    patches.push(patch)
+    const mesh = buildPatchMesh(patch)
+    markDirty()
+    setTool('select')
+    selectPatch(mesh, patch)
+    status.textContent = '⛰ patch added — sculpt it with the terrain tools, tilt it for caves'
+  })
+
+  const fileToDataUrl = (file: File): Promise<string> =>
+    new Promise((res, rej) => {
+      const r = new FileReader()
+      r.onload = () => res(String(r.result))
+      r.onerror = () => rej(new Error('read failed'))
+      r.readAsDataURL(file)
+    })
+
+  document.getElementById('model-file')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    if (file.size > 4 * 1024 * 1024) {
+      status.textContent = '⛔ model too large (4MB max — maps ship to every player)'
+      return
+    }
+    void (async () => {
+      const dataUrl = await fileToDataUrl(file)
+      status.textContent = 'loading model…'
+      try {
+        const { SceneLoader } = await import('@babylonjs/core/Loading/sceneLoader.js')
+        await import('@babylonjs/loaders/glTF/2.0/glTFLoader.js')
+        const result = await SceneLoader.ImportMeshAsync('', '', dataUrl, scene, undefined, '.glb')
+        const root = result.meshes[0]
+        if (!root) throw new Error('empty glb')
+        const { min, max } = root.getHierarchyBoundingVectors(true)
+        const bounds: [number, number, number] = [
+          Math.max(0.2, max.x - min.x),
+          Math.max(0.2, max.y - min.y),
+          Math.max(0.2, max.z - min.z),
+        ]
+        for (const m of result.meshes) m.dispose()
+        const id = `model-${Date.now().toString(36)}`
+        const name = file.name.replace(/\.(glb|gltf)$/i, '').slice(0, 24)
+        mapModels.push({ id, name, glb: dataUrl, bounds })
+        refreshImportedPalette()
+        placeSel.value = String(PLACEABLES.findIndex((pp) => pp.modelId === id))
+        setTool('mesh')
+        markDirty()
+        status.textContent = `🗿 ${name} imported (${bounds.map((b) => b.toFixed(1)).join('×')}m) — click to place`
+      } catch {
+        status.textContent = '⛔ could not load that glb'
+      }
+    })()
+  })
+
+  document.getElementById('texture-file')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    if (file.size > 1024 * 1024) {
+      status.textContent = '⛔ texture too large (1MB max)'
+      return
+    }
+    void (async () => {
+      const dataUrl = await fileToDataUrl(file)
+      const name = file.name
+        .replace(/\.[a-z]+$/i, '')
+        .replace(/[^a-z0-9_-]/gi, '')
+        .slice(0, 24)
+      mapTextures = mapTextures.filter((t) => t.name !== name)
+      mapTextures.push({ name, dataUrl })
+      refreshImportedPalette()
+      markDirty()
+      status.textContent = `🖼 texture "${name}" uploaded — pick custom:${name} on a selected object`
+    })()
+  })
+
+  // ── Settings: remappable hotkeys ────────────────────────────────────
+  const settingsEl = $e('settings')
+  const renderKeys = (): void => {
+    const list = $e('keys-list')
+    list.replaceChildren()
+    const LABELS: Record<string, string> = {
+      sculpt: 'Raise/Lower tool',
+      smooth: 'Smooth tool',
+      flatten: 'Flatten tool',
+      paint: 'Paint tool',
+      entity: 'Entity tool',
+      mesh: 'Mesh tool',
+      select: 'Select tool',
+      grab: 'Gizmo: move (grab)',
+      rotate: 'Gizmo: rotate',
+      scale: 'Gizmo: scale',
+      freelook: 'Toggle free-look',
+    }
+    for (const action of Object.keys(DEFAULT_KEYS)) {
+      const row = document.createElement('div')
+      row.className = 'krow'
+      const lbl = document.createElement('span')
+      lbl.textContent = LABELS[action] ?? action
+      const inp = document.createElement('input')
+      inp.readOnly = true
+      inp.value = (keys[action] ?? '').toUpperCase()
+      inp.addEventListener('keydown', (e) => {
+        e.preventDefault()
+        if (e.key.length === 1) {
+          keys[action] = e.key.toLowerCase()
+          inp.value = e.key.toUpperCase()
+          localStorage.setItem('hobo.editor.keys', JSON.stringify(keys))
+          refreshToolButtons()
+        }
+      })
+      inp.addEventListener('focus', () => (inp.value = '…'))
+      inp.addEventListener('blur', () => (inp.value = (keys[action] ?? '').toUpperCase()))
+      row.append(lbl, inp)
+      list.appendChild(row)
+    }
+  }
+  const refreshToolButtons = (): void => {
+    toolsEl.querySelectorAll('button').forEach((b) => {
+      const hk = b.querySelector('.hk')
+      const t = b.dataset['tool']
+      if (hk && t) hk.textContent = (keys[t] ?? '').toUpperCase()
+    })
+  }
+  document.getElementById('settings-btn')?.addEventListener('click', () => {
+    settingsEl.style.display = settingsEl.style.display === 'flex' ? 'none' : 'flex'
+    renderKeys()
+  })
+  document.getElementById('settings-close')?.addEventListener('click', () => {
+    settingsEl.style.display = 'none'
+  })
+  document.getElementById('keys-reset')?.addEventListener('click', () => {
+    for (const k of Object.keys(keys)) delete keys[k]
+    Object.assign(keys, DEFAULT_KEYS)
+    localStorage.removeItem('hobo.editor.keys')
+    renderKeys()
+    refreshToolButtons()
+  })
+
+  // ── Collapsible sidebar (Photoshop-style icon rail; expanded default) ─
+  const panel = $e('panel')
+  const collapseBtn = document.getElementById('collapse') as HTMLButtonElement
+  const setCollapsed = (on: boolean): void => {
+    panel.classList.toggle('collapsed', on)
+    collapseBtn.textContent = on ? '»' : '«'
+    localStorage.setItem('hobo.editor.panel', on ? 'collapsed' : 'expanded')
+  }
+  collapseBtn.addEventListener('click', () => setCollapsed(!panel.classList.contains('collapsed')))
+  setCollapsed(localStorage.getItem('hobo.editor.panel') === 'collapsed')
 
   setTool('sculpt')
   engine.runRenderLoop(() => scene.render())

@@ -44,6 +44,7 @@ import {
 } from '@hobo/shared'
 import type { ServerConfig } from '../config.js'
 import { resolveHoboToolsUser } from '../net/hoboToolsAuth.js'
+import { worldSpawn } from '@hobo/content'
 import type { ServerMetrics } from '../observability/metrics.js'
 import type { GameWorld } from './gameWorld.js'
 import {
@@ -638,9 +639,10 @@ export class GameServer {
 
     const world = this.world.content.world
     const playerId = existing ? asPlayerId(existing.id) : newPlayerId()
+    const mapSpawn = worldSpawn(world)
     const spawn = existing
       ? vec3(existing.pos[0], existing.pos[1], existing.pos[2])
-      : vec3(world.spawnPoint[0], world.spawnPoint[1], world.spawnPoint[2])
+      : vec3(mapSpawn.pos[0], mapSpawn.pos[1], mapSpawn.pos[2])
     const inventory = existing
       ? Inventory.fromDto(existing.inventory, this.world.content)
       : new Inventory(INVENTORY_SIZE, HOTBAR_SIZE, this.world.content)
@@ -672,7 +674,7 @@ export class GameServer {
       rank,
       name: msg.name,
       spawn,
-      yaw: existing?.yaw ?? world.spawnYaw,
+      yaw: existing?.yaw ?? mapSpawn.yaw,
       inventory,
       skills,
       friends,
@@ -954,7 +956,7 @@ export class GameServer {
 
   /** Death/rescue respawn: back to the city with restored vitals. */
   private respawn(session: PlayerSession, died: boolean): void {
-    const spawn = this.world.content.world.spawnPoint
+    const spawn = worldSpawn(this.world.content.world).pos
     session.move.pos.x = spawn[0]
     session.move.pos.y = spawn[1]
     session.move.pos.z = spawn[2]

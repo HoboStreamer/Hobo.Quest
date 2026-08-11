@@ -22,6 +22,9 @@ export const StaticBodySchema = z.object({
   tex: z.string().optional(),
   /** Optional client-side decoration kind (roofs, doors, fountain...). */
   decor: z.string().optional(),
+  /** Imported model id (MapFile.models): client renders the glb, the shape
+   *  above stays the physics proxy collider. */
+  model: z.string().optional(),
 })
 
 export const ResourceNodeSpawnSchema = z.object({

@@ -17,7 +17,23 @@ export declare function meshForShape(
   shape: WorldShape,
   color: string,
 ): Mesh
-/** Builds render meshes for the static level (mirrors the server's physics statics). */
+export declare function registerMapAssets(
+  map: {
+    textures?: {
+      name: string
+      dataUrl: string
+    }[]
+    models?: {
+      id: string
+      name: string
+      glb: string
+      bounds: [number, number, number]
+    }[]
+  } | null,
+): void
+/** Extra terrain patches (mountains, cave shells) from the edited map. */
+export declare function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mesh[]
+export declare function rebuildTerrainPatchVisuals(scene: Scene, content: ContentRegistry): void
 export declare function buildStaticWorld(
   scene: Scene,
   content: ContentRegistry,

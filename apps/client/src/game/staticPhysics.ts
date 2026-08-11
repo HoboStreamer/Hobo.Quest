@@ -1,4 +1,9 @@
-import { buildTerrainGrid, type ContentRegistry } from '@hobo/content'
+import {
+  buildPatchGrid,
+  buildTerrainGrid,
+  getMapOverride,
+  type ContentRegistry,
+} from '@hobo/content'
 import { CollisionLayer, type BodyId, type PhysicsWorld } from '@hobo/physics'
 import { qfromEuler, qfromYaw, quat, vec3 } from '@hobo/shared'
 
@@ -8,6 +13,25 @@ import { qfromEuler, qfromYaw, quat, vec3 } from '@hobo/shared'
  * build from the same world definition — divergence here would cause
  * constant mispredictions, so keep this in lockstep with GameWorld.
  */
+let patchBodies: BodyId[] = []
+
+/** Terrain-patch trimeshes — kept in lockstep with the server's. */
+function buildPatchPhysics(physics: PhysicsWorld): void {
+  for (const patch of getMapOverride()?.terrains ?? []) {
+    const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
+    patchBodies.push(
+      physics.addBody({
+        shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
+        motion: 'static',
+        pos: vec3(patch.origin[0], patch.origin[1], patch.origin[2]),
+        rot: patch.rot ? qfromEuler(quat(), patch.rot[0], patch.rot[1], patch.rot[2]) : quat(),
+        layer: CollisionLayer.Static,
+        collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+      }),
+    )
+  }
+}
+
 export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegistry): void {
   const world = content.world
   physics.addBody({
@@ -17,6 +41,7 @@ export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegist
     layer: CollisionLayer.Static,
     collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
   })
+  buildPatchPhysics(physics)
   const grid = buildTerrainGrid(world)
   lastTerrainBody = physics.addBody({
     shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
@@ -64,6 +89,9 @@ let lastTerrainBody: BodyId | null = null
 /** Live map edit: swap the prediction terrain body for the new grid. */
 export function rebuildTerrainPhysics(physics: PhysicsWorld, content: ContentRegistry): void {
   if (lastTerrainBody !== null) physics.removeBody(lastTerrainBody)
+  for (const b of patchBodies) physics.removeBody(b)
+  patchBodies = []
+  buildPatchPhysics(physics)
   const grid = buildTerrainGrid(content.world)
   lastTerrainBody = physics.addBody({
     shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
