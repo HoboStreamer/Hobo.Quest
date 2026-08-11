@@ -1,8 +1,6 @@
 import { Engine } from '@babylonjs/core/Engines/engine.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera.js'
-import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight.js'
-import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight.js'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { Texture } from '@babylonjs/core/Materials/Textures/texture.js'
 import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture.js'
@@ -35,6 +33,7 @@ import {
 } from '@hobo/content'
 import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer.js'
 import { meshForShape } from '../render/sceneSetup.js'
+import { Environment } from '../render/environment.js'
 import {
   LIGHT_DEFAULTS,
   applyPatchTexture,
@@ -204,6 +203,7 @@ type UndoOp =
       before: { tex?: string; color?: string; uv?: FaceStyle }
       after: { tex?: string; color?: string; uv?: FaceStyle }
     }
+  | { kind: 'ppaint'; patch: PatchState; before: ImageData; after: ImageData }
   | { kind: 'lightadd'; light: MapLight }
   | { kind: 'lightdelete'; light: MapLight }
   | { kind: 'lightedit'; light: MapLight; before: MapLight; after: MapLight }
@@ -222,13 +222,16 @@ async function boot(): Promise<void> {
   const engine = new Engine(canvas, true)
   const scene = new Scene(engine)
   scene.clearColor = new Color4(0.45, 0.58, 0.72, 1)
-  new HemisphericLight('hemi', new Vector3(0.2, 1, 0.1), scene).intensity = 0.85
-  new DirectionalLight('sun', new Vector3(-0.4, -1, -0.3), scene).intensity = 0.6
+  // The game's full sky: Preetham dome + drifting clouds + moon + flares +
+  // day/night lighting. The editor shares it so lighting previews match.
+  const env = new Environment(scene, engine)
+  env.setDayFraction(0.35)
 
   // ── Camera: WASD+QE fly; Z toggles pointer-locked free-look ─────────
   const camera = new FreeCamera('cam', new Vector3(0, 45, -55), scene)
   camera.setTarget(new Vector3(0, 0, 0))
   camera.minZ = 0.1
+  env.attachCamera(camera)
   // No Babylon camera inputs at all — the editor's action system drives
   // flight, and pointer handlers below drive orbit/pan/zoom. Nothing to
   // fight with, everything remappable.
@@ -749,6 +752,13 @@ async function boot(): Promise<void> {
     } else if (op.kind === 'paint') {
       mixCtx.putImageData(dir === 'undo' ? op.before : op.after, 0, 0)
       mixTex.update()
+    } else if (op.kind === 'ppaint') {
+      const cached = patchMixCtx.get(op.patch.id)
+      if (cached) {
+        cached.ctx.putImageData(dir === 'undo' ? op.before : op.after, 0, 0)
+        ;(scene.getTextureByName(`pmix:${op.patch.id}`) as DynamicTexture | null)?.update()
+        op.patch.mix = (cached.ctx.canvas as HTMLCanvasElement).toDataURL('image/png')
+      }
     } else if (op.kind === 'place' || op.kind === 'delete') {
       const removing = (op.kind === 'place') === (dir === 'undo')
       if (removing) {
@@ -783,6 +793,9 @@ async function boot(): Promise<void> {
   const undo = (): void => {
     const op = undoStack.pop()
     if (!op) return
+    // Ops rebuild meshes; a live (multi)selection would hold disposed ones.
+    deselect()
+    clearFaceSel()
     applyOp(op, 'undo')
     redoStack.push(op)
     updateDirty()
@@ -791,6 +804,8 @@ async function boot(): Promise<void> {
   const redo = (): void => {
     const op = redoStack.pop()
     if (!op) return
+    deselect()
+    clearFaceSel()
     applyOp(op, 'redo')
     undoStack.push(op)
     updateDirty()
@@ -808,6 +823,8 @@ async function boot(): Promise<void> {
   }
   const terrainTargets: TerrainTarget[] = []
   const patchMeshes = new Map<Mesh, PatchState>()
+  /** Sculpt wireframe overlay per patch (main terrain has `wire`). */
+  const patchWires = new Map<Mesh, Mesh>()
   const extras = bootMap
   let patches: PatchState[] = (extras?.terrains ?? []).map((t) => ({
     ...t,
@@ -980,6 +997,19 @@ async function boot(): Promise<void> {
     VertexData.ComputeNormals(pvd.positions, grid.indices, pn)
     pvd.normals = pn
     pvd.applyToMesh(mesh, true)
+    // Wireframe overlay (same grid, +3cm) — every terrain type gets one.
+    const pw = new Mesh(`pwire:${patch.id}`, scene)
+    const wvd = new VertexData()
+    wvd.positions = (pvd.positions as number[] | Float32Array).slice() as number[]
+    wvd.indices = grid.indices
+    wvd.applyToMesh(pw, true)
+    pw.material = wireMat
+    pw.isPickable = false
+    pw.position.y = 0.03
+    pw.parent = mesh
+    pw.setEnabled(false)
+    patchWires.set(mesh, pw)
+    mesh.onDisposeObservable.add(() => patchWires.delete(mesh))
     mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
     if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
     if (patch.mix) {
@@ -1026,6 +1056,7 @@ async function boot(): Promise<void> {
     VertexData.ComputeNormals(buf, idx, nn)
     t.mesh.updateVerticesData(VertexBuffer.NormalKind, nn, true)
     if (t.id === 'main') wire.updateVerticesData(VertexBuffer.PositionKind, buf, true)
+    patchWires.get(t.mesh)?.updateVerticesData(VertexBuffer.PositionKind, buf, true)
   }
 
   // ── Sculpt core ─────────────────────────────────────────────────────
@@ -1036,6 +1067,7 @@ async function boot(): Promise<void> {
   let strokeBefore: Float32Array | null = null
   let strokeTarget: TerrainTarget | null = null
   let paintBefore: ImageData | null = null
+  let paintTarget: TerrainTarget | null = null
 
   function sculpt(target: TerrainTarget, px: number, pz: number, sign: number): void {
     const radius = Number($('radius').value)
@@ -1160,7 +1192,7 @@ async function boot(): Promise<void> {
     const pick = scene.pick(
       scene.pointerX,
       scene.pointerY,
-      (m) => m !== ghost && m !== wire && m.isEnabled(),
+      (m) => m !== ghost && m !== wire && m.isEnabled() && m.isPickable,
     )
     if (!pick?.hit || !pick.pickedPoint) return null
     const def =
@@ -1203,7 +1235,7 @@ async function boot(): Promise<void> {
       const pick = scene.pick(
         scene.pointerX,
         scene.pointerY,
-        (m) => m !== ghost && m !== wire && m.isEnabled(),
+        (m) => m !== ghost && m !== wire && m.isEnabled() && m.isPickable,
       )
       const target =
         pick?.hit && pick.pickedPoint
@@ -1424,6 +1456,18 @@ async function boot(): Promise<void> {
   const gizmos = new GizmoManager(scene)
   gizmos.usePointerToAttachGizmos = false
   gizmos.attachToMesh(null)
+  /** True while the pointer is on a gizmo handle or mid-drag: scene picks
+   *  must NOT run then, or the click selects whatever is behind the gizmo. */
+  let gizmoDragging = false
+  const gizmoBusy = (): boolean => {
+    const g = gizmos.gizmos
+    return Boolean(
+      gizmoDragging ||
+      g.positionGizmo?.isHovered ||
+      g.rotationGizmo?.isHovered ||
+      g.scaleGizmo?.isHovered,
+    )
+  }
   type GizmoMode = 'move' | 'rotate' | 'scale'
   let gizmoMode: GizmoMode = 'move'
   const setGizmoMode = (mode: GizmoMode): void => {
@@ -1664,14 +1708,51 @@ async function boot(): Promise<void> {
     multiPivot.scaling.setAll(1)
     for (const it of all) it.mesh.setParent(multiPivot)
   }
-  const addToMulti = (mesh: Mesh, body: StaticBody): void => {
+  /** Promote WHATEVER single selection exists (any kind) into the set —
+   *  mixing kinds must never leave the old single selection stranded. */
+  const promoteSingleToMulti = (): void => {
     if (selected) {
-      // Promote the single selection into the set first.
       const prev = selected
       selected = null
-      if (!multiSel.some((it) => it.mesh === prev.mesh))
+      if (!multiSel.some((it) => it.mesh === prev.mesh)) {
         multiSel.push({ mesh: prev.mesh, body: prev.body, before: snapshotBody(prev.body) })
+        outline(prev.mesh)
+      }
     }
+    if (selectedNode) {
+      const prev = selectedNode
+      selectedNode = null
+      if (!multiNodes.some((it) => it.mesh === prev.mesh)) {
+        multiNodes.push({ mesh: prev.mesh, node: prev.node, before: [...prev.node.pos] })
+        outline(prev.mesh)
+      }
+    }
+    if (selectedProp) {
+      const prev = selectedProp
+      selectedProp = null
+      if (!multiProps.some((it) => it.mesh === prev.mesh)) {
+        multiProps.push({ mesh: prev.mesh, prop: prev.prop, before: [...prev.prop.pos] })
+        outline(prev.mesh)
+      }
+    }
+    if (selectedPatch) {
+      const prev = selectedPatch
+      selectedPatch = null
+      if (!multiPatches.some((it) => it.mesh === prev.mesh)) {
+        multiPatches.push({
+          mesh: prev.mesh,
+          patch: prev.patch,
+          before: {
+            origin: [...prev.patch.origin],
+            ...(prev.patch.rot ? { rot: [...prev.patch.rot] } : {}),
+          },
+        })
+        outline(prev.mesh)
+      }
+    }
+  }
+  const addToMulti = (mesh: Mesh, body: StaticBody): void => {
+    promoteSingleToMulti()
     const i = multiSel.findIndex((it) => it.mesh === mesh)
     if (i >= 0) {
       multiSel[i]!.mesh.setParent(null)
@@ -1738,14 +1819,7 @@ async function boot(): Promise<void> {
     $('s-z').value = '1'
   }
   const addNodeToMulti = (mesh: Mesh, node: MapNodeSpawn): void => {
-    if (selectedNode) {
-      const prev = selectedNode
-      selectedNode = null
-      if (!multiNodes.some((it) => it.mesh === prev.mesh)) {
-        multiNodes.push({ mesh: prev.mesh, node: prev.node, before: [...prev.node.pos] })
-        outline(prev.mesh)
-      }
-    }
+    promoteSingleToMulti()
     const i = multiNodes.findIndex((it) => it.mesh === mesh)
     if (i >= 0) {
       multiNodes[i]!.mesh.setParent(null)
@@ -1761,14 +1835,7 @@ async function boot(): Promise<void> {
     mesh: Mesh,
     prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number },
   ): void => {
-    if (selectedProp) {
-      const prev = selectedProp
-      selectedProp = null
-      if (!multiProps.some((it) => it.mesh === prev.mesh)) {
-        multiProps.push({ mesh: prev.mesh, prop: prev.prop, before: [...prev.prop.pos] })
-        outline(prev.mesh)
-      }
-    }
+    promoteSingleToMulti()
     const i = multiProps.findIndex((it) => it.mesh === mesh)
     if (i >= 0) {
       multiProps[i]!.mesh.setParent(null)
@@ -1781,19 +1848,7 @@ async function boot(): Promise<void> {
     finishMultiChange()
   }
   const addPatchToMulti = (mesh: Mesh, patch: PatchState): void => {
-    if (selectedPatch) {
-      const prev = selectedPatch
-      selectedPatch = null
-      if (!multiPatches.some((it) => it.mesh === prev.mesh))
-        multiPatches.push({
-          mesh: prev.mesh,
-          patch: prev.patch,
-          before: {
-            origin: [...prev.patch.origin],
-            ...(prev.patch.rot ? { rot: [...prev.patch.rot] } : {}),
-          },
-        })
-    }
+    promoteSingleToMulti()
     const i = multiPatches.findIndex((it) => it.mesh === mesh)
     if (i >= 0) {
       multiPatches[i]!.mesh.setParent(null)
@@ -2030,8 +2085,12 @@ async function boot(): Promise<void> {
     for (const g of [gizmos.gizmos.positionGizmo, gizmos.gizmos.rotationGizmo]) {
       if (!g || wiredGizmos.has(g)) continue
       wiredGizmos.add(g)
-      g.onDragStartObservable.add(beginEdit)
+      g.onDragStartObservable.add(() => {
+        gizmoDragging = true
+        beginEdit()
+      })
       g.onDragEndObservable.add(() => {
+        gizmoDragging = false
         if (mainSelected) {
           // Bake the drag into a real patch; the base grid stays anchored.
           const pos = terrain.position.clone()
@@ -2137,8 +2196,12 @@ async function boot(): Promise<void> {
     const g = gizmos.gizmos.scaleGizmo
     if (!g || wiredGizmos.has(g)) return
     wiredGizmos.add(g)
-    g.onDragStartObservable.add(beginEdit)
+    g.onDragStartObservable.add(() => {
+      gizmoDragging = true
+      beginEdit()
+    })
     g.onDragEndObservable.add(() => {
+      gizmoDragging = false
       if (multiTotal() > 0) {
         bakeMulti()
         fillMultiProps()
@@ -2926,11 +2989,17 @@ async function boot(): Promise<void> {
   window.addEventListener('pointerdown', (e) => {
     if (e.button === 0 || e.button === 2) mouseIsDown = true
   })
-  window.addEventListener('pointerup', () => (mouseIsDown = false))
+  window.addEventListener('pointerup', () => {
+    mouseIsDown = false
+    // Drag-end observables normally clear this; never let it stick.
+    setTimeout(() => (gizmoDragging = false), 50)
+  })
   canvas.addEventListener('contextmenu', (e) => e.preventDefault())
   canvas.addEventListener('pointerdown', (e) => {
     if (freeLook) return
     if (e.button !== 0 && e.button !== 2) return
+    // Pointer on a gizmo handle (utility layer): the gizmo owns this click.
+    if (gizmoBusy()) return
     mouseIsDown = true // canvas handler runs before the window listener
     const sign = e.button === 2 ? -1 : 1
     if (tool === 'terrain') {
@@ -2957,7 +3026,15 @@ async function boot(): Promise<void> {
         })
       }
     } else if (tool === 'paint' && e.button === 0) {
-      paintBefore = mixCtx.getImageData(0, 0, MIX, MIX)
+      const t = pickTerrainTarget()
+      if (!t) return
+      paintTarget = t.target
+      if (t.target.id === 'main') {
+        paintBefore = mixCtx.getImageData(0, 0, MIX, MIX)
+      } else if (t.target.patch) {
+        const pctx = ensurePatchMix(t.target.patch, t.target.mesh)
+        paintBefore = pctx.getImageData(0, 0, PATCH_MIX, PATCH_MIX)
+      }
       painting = 1
       applyPaint()
     } else if ((tool === 'mesh' || tool === 'entity') && e.button === 0) {
@@ -2967,7 +3044,8 @@ async function boot(): Promise<void> {
       const pick = scene.pick(
         scene.pointerX,
         scene.pointerY,
-        (m) => m !== ghost && m !== wire && m.isEnabled() && !lightMeshes.has(m as Mesh),
+        (m) =>
+          m !== ghost && m !== wire && m.isEnabled() && m.isPickable && !lightMeshes.has(m as Mesh),
       )
       if (!pick?.hit || !pick.pickedPoint) return
       if (mapLightsArr.length >= 24) {
@@ -3017,11 +3095,21 @@ async function boot(): Promise<void> {
           addPropToMulti(mesh, propMeshes.get(mesh)!)
           return
         }
-        const shiftPatch = scene.pick(
-          scene.pointerX,
-          scene.pointerY,
-          (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
-        )?.pickedMesh as Mesh | undefined
+        const shifthits = (
+          scene.multiPick(
+            scene.pointerX,
+            scene.pointerY,
+            (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
+          ) ?? []
+        ).filter((h) => h.hit && h.pickedMesh)
+        shifthits.sort((a, b) => a.distance - b.distance)
+        let shiftPatch = shifthits[0]?.pickedMesh as Mesh | undefined
+        for (const h of shifthits.slice(1)) {
+          if (h.distance - shifthits[0]!.distance > 1.5) break
+          const cand = h.pickedMesh as Mesh
+          if (patchMeshes.get(cand)!.halfExtent < patchMeshes.get(shiftPatch!)!.halfExtent)
+            shiftPatch = cand
+        }
         if (shiftPatch && patchMeshes.has(shiftPatch)) {
           addPatchToMulti(shiftPatch, patchMeshes.get(shiftPatch)!)
           return
@@ -3039,12 +3127,22 @@ async function boot(): Promise<void> {
         selectSpawn()
       else {
         // Patches are selectable too (move/tilt/delete whole patch).
-        const ppick = scene.pick(
-          scene.pointerX,
-          scene.pointerY,
-          (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
-        )
-        const pmesh = ppick?.pickedMesh as Mesh | undefined
+        // Overlapping patches: nearest hit wins; near-ties go to the
+        // SMALLEST patch so islands on top of islands stay clickable.
+        const phits = (
+          scene.multiPick(
+            scene.pointerX,
+            scene.pointerY,
+            (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
+          ) ?? []
+        ).filter((h) => h.hit && h.pickedMesh)
+        phits.sort((a, b) => a.distance - b.distance)
+        let pmesh = phits[0]?.pickedMesh as Mesh | undefined
+        for (const h of phits.slice(1)) {
+          if (h.distance - phits[0]!.distance > 1.5) break
+          const cand = h.pickedMesh as Mesh
+          if (patchMeshes.get(cand)!.halfExtent < patchMeshes.get(pmesh!)!.halfExtent) pmesh = cand
+        }
         if (pmesh && patchMeshes.has(pmesh)) selectPatch(pmesh, patchMeshes.get(pmesh)!)
         else {
           // A removed (sunken+disabled) starter island must NOT catch rays.
@@ -3070,10 +3168,23 @@ async function boot(): Promise<void> {
       strokeBefore = null
       strokeTarget = null
     }
-    if (painting && paintBefore) {
-      pushUndo({ kind: 'paint', before: paintBefore, after: mixCtx.getImageData(0, 0, MIX, MIX) })
+    if (painting && paintBefore && paintTarget) {
+      if (paintTarget.id === 'main') {
+        pushUndo({ kind: 'paint', before: paintBefore, after: mixCtx.getImageData(0, 0, MIX, MIX) })
+      } else if (paintTarget.patch) {
+        const cached = patchMixCtx.get(paintTarget.patch.id)
+        if (cached) {
+          pushUndo({
+            kind: 'ppaint',
+            patch: paintTarget.patch,
+            before: paintBefore,
+            after: cached.ctx.getImageData(0, 0, PATCH_MIX, PATCH_MIX),
+          })
+        }
+      }
       paintBefore = null
     }
+    paintTarget = null
     painting = 0
   })
   canvas.addEventListener('pointermove', () => {
@@ -3105,6 +3216,7 @@ async function boot(): Promise<void> {
   function applyPaint(): void {
     const t = pickTerrainTarget()
     if (!t) return
+    if (paintTarget && t.target !== paintTarget) return // one target per stroke
     if (t.target.id === 'main') {
       paint(t.local.x, t.local.z)
       return
@@ -3131,7 +3243,6 @@ async function boot(): Promise<void> {
     ctx.fillRect(u - r, vpix - r, r * 2, r * 2)
     patch.mix = (ctx.canvas as HTMLCanvasElement).toDataURL('image/png')
     ;(scene.getTextureByName(`pmix:${patch.id}`) as DynamicTexture | null)?.update()
-    markDirty()
   }
 
   // ── Input: one action system drives everything ──────────────────────
@@ -3257,6 +3368,7 @@ async function boot(): Promise<void> {
   // fight with (Q/E vs tools conflicts are gone; every key is remappable).
   scene.onBeforeRenderObservable.add(() => {
     const dt = engine.getDeltaTime() / 1000
+    env.update(dt, camera.position)
     const speed = (holding('cam.fast') ? 34 : 11) * dt
     const move = new Vector3(
       (holding('cam.right') ? 1 : 0) - (holding('cam.left') ? 1 : 0),
@@ -3290,7 +3402,7 @@ async function boot(): Promise<void> {
     )
     const overTerrain = Boolean(pick?.hit && pick.pickedPoint)
     // Hover highlight for the Select tool (cheap: every 6th frame).
-    if (tool === 'select' && ++frameTick % 6 === 0) {
+    if (tool === 'select' && !gizmoBusy() && ++frameTick % 6 === 0) {
       const hp = scene.pick(
         scene.pointerX,
         scene.pointerY,
@@ -3316,8 +3428,22 @@ async function boot(): Promise<void> {
       brush.scaling.set(r, r, r)
       brush.setEnabled(true)
     } else brush.setEnabled(false)
-    wireHover = tool !== 'paint' && sculpting && overTerrain
+    // Wireframes: hovered terrain shows its own wire; a stroke in progress
+    // pins the wire to the stroke target (no flicker when the cursor slips
+    // off-mesh mid-drag); selected patches keep theirs visible.
+    const hoverMeshT = overTerrain ? (pick!.pickedMesh as Mesh) : null
+    wireHover =
+      (tool === 'terrain' && hoverMeshT === terrain) ||
+      (painting !== 0 && strokeTarget?.id === 'main')
     wire.setEnabled(wireHover || mainSelected)
+    for (const [pm, pw] of patchWires) {
+      const on =
+        (tool === 'terrain' && hoverMeshT === pm) ||
+        selectedPatch?.mesh === pm ||
+        multiPatches.some((it) => it.mesh === pm) ||
+        (painting !== 0 && strokeTarget?.mesh === pm)
+      pw.setEnabled(on)
+    }
     if (tool === 'mesh' || tool === 'entity') {
       const pose = computePlacePose()
       const g = ensureGhost()
@@ -4027,6 +4153,13 @@ async function boot(): Promise<void> {
   engine.runRenderLoop(() => scene.render())
   window.addEventListener('resize', () => engine.resize())
 
+  // Sky preview time (the cycle still advances — full day/night in 20min).
+  const skySel = document.getElementById('sky-time') as HTMLSelectElement | null
+  skySel?.addEventListener('change', () => {
+    env.setDayFraction(Number(skySel.value))
+    status.textContent = 'sky time set (day/night keeps cycling from here)'
+  })
+
   // Blender-style drag-scrub on every numeric input (incl. dynamic panels).
   scrubAllNumbers(document)
 
@@ -4085,6 +4218,24 @@ async function boot(): Promise<void> {
     },
     faceSelCount() {
       return faceSel.length
+    },
+    patchWireCount() {
+      return patchWires.size
+    },
+    gizmoBusyState() {
+      const g = gizmos.gizmos
+      return {
+        dragging: gizmoDragging,
+        pos: Boolean(g.positionGizmo?.isHovered),
+        rot: Boolean(g.rotationGizmo?.isHovered),
+        scale: Boolean(g.scaleGizmo?.isHovered),
+      }
+    },
+    hasSky() {
+      return Boolean(scene.getMeshByName('skybox') && scene.getMeshByName('clouds'))
+    },
+    patchOrigins() {
+      return patches.map((pp) => [...pp.origin])
     },
   }
 }
