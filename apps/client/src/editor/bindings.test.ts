@@ -67,6 +67,25 @@ describe('editor bindings', () => {
     expect(bindingFromEvent(ev('ShiftRight', { shiftKey: true }))).toEqual({ code: 'ShiftLeft' })
   })
 
+  it('meta bindings match Cmd exactly; ctrl-convention accepts Cmd', () => {
+    // Explicit meta: requires metaKey, refuses plain ctrl.
+    const metaB = { code: 'KeyK', meta: true }
+    expect(bindingMatches(metaB, ev('KeyK', { metaKey: true }))).toBe(true)
+    expect(bindingMatches(metaB, ev('KeyK', { ctrlKey: true }))).toBe(false)
+    // Ctrl convention: Cmd works as Ctrl when meta is unspecified.
+    const ctrlB = { code: 'KeyK', ctrl: true }
+    expect(bindingMatches(ctrlB, ev('KeyK', { metaKey: true }))).toBe(true)
+  })
+
+  it('context-aware conflicts: distinct contexts may share a chord', () => {
+    const b = defaultBindings()
+    // cam.fast (camera-fly) and cam.pan (camera-drag) both use ShiftLeft.
+    expect(findConflicts(b, { code: 'ShiftLeft' }, 'cam.pan')).toEqual([])
+    expect(findConflicts(b, { code: 'AltLeft' }, 'place.fine')).toEqual([])
+    // But two tools (global context) still conflict.
+    expect(findConflicts(b, { code: 'Digit1' }, 'tool.paint')).toEqual(['tool.terrain'])
+  })
+
   it('no default camera-movement key collides with a tool key', () => {
     const b = defaultBindings()
     const move = ['cam.forward', 'cam.back', 'cam.left', 'cam.right', 'cam.up', 'cam.down']

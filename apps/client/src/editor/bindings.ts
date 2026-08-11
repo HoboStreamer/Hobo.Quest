@@ -19,6 +19,8 @@ export interface ActionDef {
   default: Binding
   /** Held key (movement) rather than a triggered action. */
   hold?: boolean
+  /** Input context: same chord in DIFFERENT contexts is not a conflict. */
+  context?: 'global' | 'camera-fly' | 'camera-drag' | 'placement' | 'selection'
 }
 
 export const ACTIONS: ActionDef[] = [
@@ -53,6 +55,15 @@ export const ACTIONS: ActionDef[] = [
     group: 'camera',
     default: { code: 'ShiftLeft' },
     hold: true,
+    context: 'camera-fly',
+  },
+  {
+    id: 'cam.pan',
+    label: 'MMB pan modifier (hold)',
+    group: 'camera',
+    default: { code: 'ShiftLeft' },
+    hold: true,
+    context: 'camera-drag',
   },
   { id: 'cam.freelook', label: 'Toggle free-look', group: 'camera', default: { code: 'KeyZ' } },
   { id: 'cam.frame', label: 'Frame selection', group: 'camera', default: { code: 'KeyF' } },
@@ -72,6 +83,15 @@ export const ACTIONS: ActionDef[] = [
     group: 'transform',
     default: { code: 'AltLeft' },
     hold: true,
+    context: 'selection',
+  },
+  {
+    id: 'place.fine',
+    label: 'Fine placement rotation (hold)',
+    group: 'transform',
+    default: { code: 'AltLeft' },
+    hold: true,
+    context: 'placement',
   },
   // Editing
   { id: 'edit.undo', label: 'Undo', group: 'edit', default: { code: 'KeyZ', ctrl: true } },
@@ -137,7 +157,14 @@ export function bindingMatches(b: Binding, e: KeyboardEvent): boolean {
   if (normCode(e.code) !== normCode(b.code)) return false
   const isMod = ['ShiftLeft', 'AltLeft', 'ControlLeft', 'MetaLeft'].includes(normCode(b.code))
   if (isMod) return true // hold-modifiers match regardless of other modifiers
-  if (Boolean(b.ctrl) !== (e.ctrlKey || e.metaKey)) return false
+  if (b.meta !== undefined) {
+    // Explicit meta binding: meta must match exactly, ctrl separately.
+    if (Boolean(b.meta) !== e.metaKey) return false
+    if (Boolean(b.ctrl) !== e.ctrlKey) return false
+  } else {
+    // Convention: ctrl bindings accept Cmd on macOS.
+    if (Boolean(b.ctrl) !== (e.ctrlKey || e.metaKey)) return false
+  }
   if (Boolean(b.shift) !== e.shiftKey) return false
   if (Boolean(b.alt) !== e.altKey) return false
   return true
@@ -188,8 +215,16 @@ export function findConflicts(
   b: Binding,
   except?: string,
 ): string[] {
+  const ctxOf = (id: string): string => ACTIONS.find((a) => a.id === id)?.context ?? 'global'
+  const myCtx = except ? ctxOf(except) : 'global'
   return Object.entries(bindings)
-    .filter(([id, cur]) => id !== except && sameBinding(cur, b))
+    .filter(([id, cur]) => {
+      if (id === except || !sameBinding(cur, b)) return false
+      const otherCtx = ctxOf(id)
+      // Distinct non-global contexts can intentionally share a chord.
+      if (myCtx !== 'global' && otherCtx !== 'global' && myCtx !== otherCtx) return false
+      return true
+    })
     .map(([id]) => id)
 }
 

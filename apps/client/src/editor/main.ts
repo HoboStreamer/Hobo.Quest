@@ -177,6 +177,13 @@ type UndoOp =
       after: [number, number, number] | null
     }
   | {
+      kind: 'patchprop'
+      patch: PatchState
+      before: { tex?: string; color?: string }
+      after: { tex?: string; color?: string }
+    }
+  | { kind: 'batchdelete'; bodies: StaticBody[] }
+  | {
       kind: 'patchedit'
       id: string
       before: { origin: [number, number, number]; rot?: [number, number, number] }
@@ -215,7 +222,7 @@ async function boot(): Promise<void> {
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button === 1) {
       e.preventDefault()
-      mmb = e.shiftKey ? 'pan' : 'orbit'
+      mmb = holding('cam.pan') || e.shiftKey ? 'pan' : 'orbit'
       lastMX = e.clientX
       lastMY = e.clientY
       canvas.setPointerCapture(e.pointerId)
@@ -598,6 +605,32 @@ async function boot(): Promise<void> {
       const src = dir === 'undo' ? op.before : op.after
       spawnPos = src ? [src[0], src[1], src[2]] : null
       placeSpawnFlag()
+    } else if (op.kind === 'patchprop') {
+      const src = dir === 'undo' ? op.before : op.after
+      if (src.tex) op.patch.tex = src.tex
+      else delete op.patch.tex
+      if (src.color) op.patch.color = src.color
+      else delete op.patch.color
+      for (const [m, pp] of patchMeshes) {
+        if (pp === op.patch) applyPatchMaterial(m.material as StandardMaterial, op.patch)
+      }
+    } else if (op.kind === 'batchdelete') {
+      const removing = dir === 'redo'
+      if (removing) {
+        for (const b of op.bodies) {
+          placedStatics = placedStatics.filter((x) => x !== b)
+          const m = findMesh(b)
+          if (m) {
+            staticMeshes.delete(m)
+            m.dispose()
+          }
+        }
+      } else {
+        for (const b of op.bodies) {
+          placedStatics.push(b)
+          renderStatic(b)
+        }
+      }
     } else if (op.kind === 'batch') {
       for (const it of op.items) {
         const src = dir === 'undo' ? it.before : it.after
@@ -931,7 +964,7 @@ async function boot(): Promise<void> {
     (e) => {
       e.preventDefault()
       if (tool === 'mesh' || tool === 'entity') {
-        const step = shift ? Math.PI / 60 : Math.PI / 12
+        const step = holding('place.fine') || shift ? Math.PI / 60 : Math.PI / 12
         placeYaw += (e.deltaY > 0 ? 1 : -1) * step
         return
       }
@@ -1068,12 +1101,23 @@ async function boot(): Promise<void> {
   /** Recompute every highlight from current local + remote selection. */
   const refreshSelectionVisuals = (): void => {
     hl.removeAllMeshes()
+    let remoteMain: Color3 | null = null
     for (const [, r] of remoteSel) {
       for (const oid of r.ids) {
+        if (oid === 'spawn') {
+          for (const c of spawnFlag.getChildMeshes()) hl.addMesh(c as Mesh, r.color)
+          continue
+        }
+        if (oid === 'terrain:main') {
+          remoteMain = r.color
+          continue
+        }
         const m = meshById(oid)
         if (m) hl.addMesh(m, r.color)
       }
     }
+    wireMat.emissiveColor = remoteMain ?? new Color3(0.35, 0.75, 1)
+    if (remoteMain) wire.setEnabled(true)
     for (const it of multiSel)
       hl.addMesh(it.mesh, it.mesh === multiSel[0]?.mesh ? C_PRIMARY : C_SECONDARY)
     if (selected) hl.addMesh(selected.mesh, C_PRIMARY)
@@ -1091,16 +1135,38 @@ async function boot(): Promise<void> {
   const lockOwners = new Map<string, { name: string; color: string }>()
   let myLockedIds: string[] = []
   let lockDenied: { owner: string } | null = null
-  const requestLock = (ids: string[]): void => {
+  /** Explicit lock lifecycle: nothing mutates until the server says owned. */
+  type LockState = 'unlocked' | 'pending' | 'owned' | 'denied' | 'lost'
+  let lockState: LockState = 'unlocked'
+  /** Deferred gizmo attach — runs only when the pending lock is GRANTED. */
+  let onLockGranted: (() => void) | null = null
+  const requestLock = (ids: string[], granted?: () => void): void => {
+    if (myLockedIds.length && ws?.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ t: 'unlock', ids: myLockedIds }))
     myLockedIds = ids
     lockDenied = null
+    if (ids.length === 0) {
+      lockState = 'unlocked'
+      granted?.()
+      return
+    }
+    lockState = 'pending'
+    onLockGranted = granted ?? null
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'lock', ids }))
+    else {
+      // Offline/solo editing: no collab channel, no contention.
+      lockState = 'owned'
+      granted?.()
+      onLockGranted = null
+    }
   }
   const releaseLocks = (): void => {
     if (myLockedIds.length && ws?.readyState === WebSocket.OPEN)
       ws.send(JSON.stringify({ t: 'unlock', ids: myLockedIds }))
     myLockedIds = []
     lockDenied = null
+    lockState = 'unlocked'
+    onLockGranted = null
   }
   const sendSelection = (ids: string[]): void => {
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'sel', ids }))
@@ -1153,6 +1219,7 @@ async function boot(): Promise<void> {
 
   const deselect = (): void => {
     mainSelected = false
+    anchorAxes.setEnabled(false)
     spawnSelected = false
     clearMulti()
     gizmos.attachToMesh(null)
@@ -1167,11 +1234,18 @@ async function boot(): Promise<void> {
     refreshSelectionVisuals()
   }
 
-  /** Lock + broadcast + visuals for the current selection's ids. */
-  const afterSelect = (ids: string[]): void => {
-    requestLock(ids)
+  /**
+   * Lock + broadcast + visuals. The gizmo/inspector stay read-only while
+   * the lock is pending; `whenOwned` attaches them on grant.
+   */
+  const afterSelect = (ids: string[], whenOwned?: () => void): void => {
+    setInspectorLocked(true)
+    requestLock(ids, () => {
+      setInspectorLocked(false)
+      whenOwned?.()
+      refreshSelectionVisuals()
+    })
     sendSelection(ids)
-    setInspectorLocked(false)
     refreshSelectionVisuals()
   }
 
@@ -1183,7 +1257,6 @@ async function boot(): Promise<void> {
     deselect()
     selectedProp = { mesh, prop, before: [prop.pos[0], prop.pos[1], prop.pos[2]] }
     setGizmoMode('move')
-    gizmos.attachToMesh(mesh)
     props.style.display = 'flex'
     props.style.left = '274px'
     props.style.top = '12px'
@@ -1192,20 +1265,19 @@ async function boot(): Promise<void> {
     $('p-x').value = String(prop.pos[0])
     $('p-y').value = '0'
     $('p-z').value = String(prop.pos[2])
-    afterSelect(prop.id ? [prop.id] : [])
+    afterSelect(prop.id ? [prop.id] : [], () => gizmos.attachToMesh(mesh))
   }
 
   const selectSpawn = (): void => {
     deselect()
     spawnSelected = true
     setGizmoMode('move')
-    gizmos.attachToNode(spawnFlag)
     props.style.display = 'flex'
     props.style.left = '274px'
     props.style.top = '12px'
     $e('props-title').textContent = '🚩 player spawn'
     for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
-    afterSelect(['spawn'])
+    afterSelect(['spawn'], () => gizmos.attachToNode(spawnFlag))
   }
 
   /** Nodes: position-only gizmo; drag end re-grounds and records undo. */
@@ -1213,7 +1285,6 @@ async function boot(): Promise<void> {
     deselect()
     selectedNode = { mesh, node, before: [node.pos[0], node.pos[1], node.pos[2]] }
     setGizmoMode('move')
-    gizmos.attachToMesh(mesh)
     props.style.display = 'flex'
     props.style.left = '274px'
     props.style.top = '12px'
@@ -1223,7 +1294,7 @@ async function boot(): Promise<void> {
     $('p-y').value = '0'
     $('p-z').value = String(node.pos[2])
     status.textContent = 'drag arrows to move the node · Del removes it'
-    afterSelect(node.id ? [node.id] : [])
+    afterSelect(node.id ? [node.id] : [], () => gizmos.attachToMesh(mesh))
   }
 
   // ── Multi-select: Shift+click accumulates statics; a pivot node carries
@@ -1274,9 +1345,8 @@ async function boot(): Promise<void> {
     }
     refreshMultiPivot()
     if (gizmoMode === 'scale') setGizmoMode('move')
-    gizmos.attachToNode(multiPivot)
     const ids = multiSel.map((it) => it.body.id).filter((x): x is string => Boolean(x))
-    afterSelect(ids)
+    afterSelect(ids, () => gizmos.attachToNode(multiPivot))
     status.textContent = `${multiSel.length} selected — G/R to move/rotate together, Del deletes all`
   }
   const bakeMulti = (): void => {
@@ -1301,9 +1371,38 @@ async function boot(): Promise<void> {
 
   /** The starter island is placeholder — selectable so it can be wiped. */
   let mainSelected = false
+  const anchorAxes = new TransformNode('anchor-axes', scene)
+  {
+    const mk = (name: string, dir: [number, number, number], color: string): void => {
+      const bar = meshForShape(
+        scene,
+        name,
+        {
+          type: 'box',
+          size: [
+            Math.abs(dir[0]) * 8 + 0.3,
+            Math.abs(dir[1]) * 8 + 0.3,
+            Math.abs(dir[2]) * 8 + 0.3,
+          ],
+        },
+        color,
+      )
+      bar.parent = anchorAxes
+      bar.position.set(dir[0] * 4, dir[1] * 4 + 0.4, dir[2] * 4)
+      bar.isPickable = false
+      bar.visibility = 0.55
+    }
+    mk('ax-x', [1, 0, 0], '#d94b4b')
+    mk('ax-y', [0, 1, 0], '#57c04f')
+    mk('ax-z', [0, 0, 1], '#4b7bd9')
+    anchorAxes.setEnabled(false)
+  }
   const selectMainTerrain = (): void => {
     deselect()
     mainSelected = true
+    // Anchored-transform affordance: greyed origin axes, not a live gizmo —
+    // the sampler/physics anchor the island at the origin by design.
+    anchorAxes.setEnabled(true)
     props.style.display = 'flex'
     props.style.left = '274px'
     props.style.top = '12px'
@@ -1319,7 +1418,6 @@ async function boot(): Promise<void> {
     deselect()
     selectedPatch = { mesh, patch }
     setGizmoMode(gizmoMode === 'scale' ? 'move' : gizmoMode)
-    gizmos.attachToMesh(mesh)
     props.style.display = 'flex'
     props.style.left = '274px'
     props.style.top = '12px'
@@ -1336,7 +1434,7 @@ async function boot(): Promise<void> {
     texSel.value = patch.tex ?? ''
     ;($('p-color') as HTMLInputElement).value = patch.color ?? '#bfbfbf'
     status.textContent = 'sculpt patches with the Terrain tool · tilt for caves/overhangs'
-    afterSelect([`terrain:${patch.id}`])
+    afterSelect([`terrain:${patch.id}`], () => gizmos.attachToMesh(mesh))
   }
   const rebuildSelectedMesh = (body: StaticBody, oldMesh: Mesh): Mesh => {
     const wasSelected = selected?.mesh === oldMesh
@@ -1380,13 +1478,12 @@ async function boot(): Promise<void> {
     deselect()
     selected = { mesh, body, editBefore: null }
     setGizmoMode(gizmoMode)
-    gizmos.attachToMesh(mesh)
     props.style.display = 'flex'
     props.style.left = '274px'
     props.style.top = '12px'
     $e('props-title').textContent = `${body.shape.type} static`
     fillProps(body)
-    afterSelect(body.id ? [body.id] : [])
+    afterSelect(body.id ? [body.id] : [], () => gizmos.attachToMesh(mesh))
   }
   const snapshotBody = (b: StaticBody): StaticBody => JSON.parse(JSON.stringify(b)) as StaticBody
   const commitEdit = (): void => {
@@ -1608,9 +1705,19 @@ async function boot(): Promise<void> {
   }
   $('p-color').addEventListener('change', () => {
     if (selectedPatch) {
-      selectedPatch.patch.color = ($('p-color') as HTMLInputElement).value
-      applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, selectedPatch.patch)
-      markDirty()
+      const patch = selectedPatch.patch
+      const before = {
+        ...(patch.tex ? { tex: patch.tex } : {}),
+        ...(patch.color ? { color: patch.color } : {}),
+      }
+      patch.color = ($('p-color') as HTMLInputElement).value
+      applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
+      pushUndo({
+        kind: 'patchprop',
+        patch,
+        before,
+        after: { ...(patch.tex ? { tex: patch.tex } : {}), color: patch.color },
+      })
       return
     }
     if (!selected) return
@@ -1622,10 +1729,22 @@ async function boot(): Promise<void> {
   texSel.addEventListener('change', () => {
     if (selectedPatch) {
       const patch = selectedPatch.patch
+      const before = {
+        ...(patch.tex ? { tex: patch.tex } : {}),
+        ...(patch.color ? { color: patch.color } : {}),
+      }
       if (texSel.value) patch.tex = texSel.value
       else delete patch.tex
       applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
-      markDirty()
+      pushUndo({
+        kind: 'patchprop',
+        patch,
+        before,
+        after: {
+          ...(patch.tex ? { tex: patch.tex } : {}),
+          ...(patch.color ? { color: patch.color } : {}),
+        },
+      })
       status.textContent = `patch texture: ${texSel.value || 'default grass'}`
       return
     }
@@ -1666,9 +1785,9 @@ async function boot(): Promise<void> {
         placedStatics = placedStatics.filter((b) => b !== it.body)
         staticMeshes.delete(it.mesh)
         it.mesh.dispose()
-        pushUndo({ kind: 'delete', body: it.body })
       }
-      status.textContent = `${items.length} objects deleted`
+      pushUndo({ kind: 'batchdelete', bodies: items.map((it) => it.body) })
+      status.textContent = `${items.length} objects deleted (one undo restores all)`
       return
     }
     if (spawnSelected) {
@@ -1730,10 +1849,16 @@ async function boot(): Promise<void> {
 
   // ── Pointer handling ────────────────────────────────────────────────
   let painting = 0 // 0 none, 1 = LMB, 2 = RMB (lower)
+  let mouseIsDown = false
+  window.addEventListener('pointerdown', (e) => {
+    if (e.button === 0 || e.button === 2) mouseIsDown = true
+  })
+  window.addEventListener('pointerup', () => (mouseIsDown = false))
   canvas.addEventListener('contextmenu', (e) => e.preventDefault())
   canvas.addEventListener('pointerdown', (e) => {
     if (freeLook) return
     if (e.button !== 0 && e.button !== 2) return
+    mouseIsDown = true // canvas handler runs before the window listener
     const sign = e.button === 2 ? -1 : 1
     if (tool === 'terrain') {
       const t = pickTerrainTarget()
@@ -1743,11 +1868,21 @@ async function boot(): Promise<void> {
         status.textContent = `🔒 terrain locked by ${lockOwners.get(lockId)!.name}`
         return
       }
-      requestLock([lockId])
-      strokeTarget = t.target
-      strokeBefore = t.target.heights.slice()
-      painting = sign
-      applySculpt(sign)
+      const begin = (): void => {
+        strokeTarget = t.target
+        strokeBefore = t.target.heights.slice()
+        painting = sign
+        applySculpt(sign)
+      }
+      if (lockState === 'owned' && myLockedIds.includes(lockId)) {
+        begin() // already hold this terrain's lock — sculpt immediately
+      } else {
+        // First stroke on a target: acquire, then begin once GRANTED (the
+        // heightfield is never touched while the lock is pending).
+        requestLock([lockId], () => {
+          if (mouseIsDown) begin()
+        })
+      }
     } else if (tool === 'paint' && e.button === 0) {
       paintBefore = mixCtx.getImageData(0, 0, MIX, MIX)
       painting = 1
@@ -2235,7 +2370,14 @@ async function boot(): Promise<void> {
       if (msg.t === 'welcome' && msg.id !== undefined) myPeerId = msg.id
       if (msg.t === 'lock_result') {
         const lm = msg as unknown as { granted: boolean; ids: string[]; owner?: string }
+        if (lm.granted) {
+          lockState = 'owned'
+          onLockGranted?.()
+          onLockGranted = null
+          return
+        }
         if (!lm.granted) {
+          lockState = 'denied'
           lockDenied = { owner: lm.owner ?? 'another editor' }
           if (painting && strokeTarget && strokeBefore) {
             strokeTarget.heights.set(strokeBefore)
@@ -2258,6 +2400,15 @@ async function boot(): Promise<void> {
         lockOwners.clear()
         for (const [oid, o] of Object.entries(lm.owners)) {
           if (o.id !== myPeerId) lockOwners.set(oid, { name: o.name, color: o.color })
+        }
+        // Lost-lease detection: we believe we own ids the server no longer
+        // attributes to us (lease expiry, reconnect race) → stop editing.
+        if (lockState === 'owned' && myLockedIds.some((oid) => lm.owners[oid]?.id !== myPeerId)) {
+          lockState = 'lost'
+          gizmos.attachToMesh(null)
+          gizmos.attachToNode(null)
+          setInspectorLocked(true, 'lock lost — reselect to reacquire')
+          status.textContent = '⚠ edit lock lost (lease expired) — reselect to reacquire'
         }
         return
       }
@@ -2295,6 +2446,9 @@ async function boot(): Promise<void> {
     }
   }
   connectPresence()
+  setInterval(() => {
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'ping' }))
+  }, 10_000)
   $('key').addEventListener('change', () => {
     ws?.close()
   })
@@ -2459,6 +2613,7 @@ async function boot(): Promise<void> {
         localStorage.setItem('hobo.editor.bindings', JSON.stringify(bindings))
         inp.value = formatBinding(b2)
         refreshToolButtons()
+        renderHelp()
         inp.blur()
       })
       row.append(lbl, inp)
@@ -2499,6 +2654,22 @@ async function boot(): Promise<void> {
   }
   collapseBtn.addEventListener('click', () => setCollapsed(!panel.classList.contains('collapsed')))
   setCollapsed(localStorage.getItem('hobo.editor.panel') === 'collapsed')
+
+  // Help text derives from the LIVE bindings so remapping can't make it lie.
+  const renderHelp = (): void => {
+    const f = (a: string): string => formatBinding(bindingOf(a))
+    const hintEl = document.querySelector('.hint') as HTMLElement | null
+    if (hintEl)
+      hintEl.innerHTML =
+        `<b>${f('tool.terrain')}–${f('tool.select')}</b> tools (again = off) · ` +
+        `<b>${f('cam.freelook')}</b> free-look · fly ${f('cam.forward')}${f('cam.left')}${f('cam.back')}${f('cam.right')}+${f('cam.up')}/${f('cam.down')} (<b>${f('cam.fast')}</b> fast) · ` +
+        `MMB orbit / ${f('cam.pan')}+MMB pan · wheel zooms (rotates while placing) · ` +
+        `<b>LMB</b> raise / <b>RMB</b> lower · <b>${f('brush.radiusDown')} ${f('brush.radiusUp')}</b> radius · ` +
+        `<b>${f('xf.move')}/${f('xf.rotate')}/${f('xf.scale')}</b> move/rotate/scale · ${f('xf.nosnap')} = no snap · ` +
+        `<b>${f('edit.undo')}/${f('edit.redo')}</b> undo/redo · ${f('edit.duplicate')} duplicate · ` +
+        `${f('edit.delete')} delete · ${f('edit.save')} save · ${f('ui.sidebar')} sidebar · ${f('ui.settings')} settings`
+  }
+  renderHelp()
 
   // Start with NO active tool: camera-only until the user picks one.
   status.textContent =

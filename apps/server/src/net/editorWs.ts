@@ -22,6 +22,8 @@ interface EditorPeer {
   name: string
   color: string
   authed: boolean
+  lastCam: { pos: number[]; yaw: number; pitch: number } | null
+  lastSel: string[]
 }
 
 /** Stable, distinguishable session colors (assigned round-robin). */
@@ -70,6 +72,8 @@ export function attachEditorWs(http: Server, auth: EditorAuth, log: Logger): Edi
       name: 'editor',
       color: PEER_COLORS[nextId % PEER_COLORS.length]!,
       authed: false,
+      lastCam: null,
+      lastSel: [],
     }
     peers.add(peer)
 
@@ -117,6 +121,32 @@ export function attachEditorWs(http: Server, auth: EditorAuth, log: Logger): Edi
               ),
             }),
           )
+          // Presence snapshot: the newcomer immediately sees everyone's
+          // camera + selection without waiting for them to move.
+          for (const other of peers) {
+            if (other === peer || !other.authed) continue
+            if (other.lastCam)
+              ws.send(
+                JSON.stringify({
+                  t: 'peer',
+                  id: other.id,
+                  name: other.name,
+                  pos: other.lastCam.pos,
+                  yaw: other.lastCam.yaw,
+                  pitch: other.lastCam.pitch,
+                }),
+              )
+            if (other.lastSel.length > 0)
+              ws.send(
+                JSON.stringify({
+                  t: 'peer_sel',
+                  id: other.id,
+                  name: other.name,
+                  color: other.color,
+                  ids: other.lastSel,
+                }),
+              )
+          }
           log.info('editor joined', { id: peer.id, name: peer.name })
         })
         return
@@ -147,6 +177,7 @@ export function attachEditorWs(http: Server, auth: EditorAuth, log: Logger): Edi
         return
       }
       if (msg.t === 'sel') {
+        peer.lastSel = strIds(msg.ids)
         sendOthers(
           peer,
           JSON.stringify({
@@ -165,6 +196,11 @@ export function attachEditorWs(http: Server, auth: EditorAuth, log: Logger): Edi
         msg.pos.length === 3 &&
         msg.pos.every((n) => typeof n === 'number' && Number.isFinite(n))
       ) {
+        peer.lastCam = {
+          pos: msg.pos,
+          yaw: Number(msg.yaw) || 0,
+          pitch: Number(msg.pitch) || 0,
+        }
         sendOthers(
           peer,
           JSON.stringify({

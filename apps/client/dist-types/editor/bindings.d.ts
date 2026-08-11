@@ -17,6 +17,8 @@ export interface ActionDef {
   default: Binding
   /** Held key (movement) rather than a triggered action. */
   hold?: boolean
+  /** Input context: same chord in DIFFERENT contexts is not a conflict. */
+  context?: 'global' | 'camera-fly' | 'camera-drag' | 'placement' | 'selection'
 }
 export declare const ACTIONS: ActionDef[]
 export declare function bindingMatches(b: Binding, e: KeyboardEvent): boolean
