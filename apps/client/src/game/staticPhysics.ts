@@ -3,6 +3,8 @@ import {
   buildTerrainGrid,
   getMapOverride,
   type ContentRegistry,
+  effectiveShape,
+  scalePatchPositions,
 } from '@hobo/content'
 import { CollisionLayer, type BodyId, type PhysicsWorld } from '@hobo/physics'
 import { qfromEuler, qfromYaw, quat, vec3 } from '@hobo/shared'
@@ -21,7 +23,11 @@ function buildPatchPhysics(physics: PhysicsWorld): void {
     const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
     patchBodies.push(
       physics.addBody({
-        shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
+        shape: {
+          type: 'trimesh',
+          positions: scalePatchPositions(grid.positions, patch.scale),
+          indices: grid.indices,
+        },
         motion: 'static',
         pos: vec3(patch.origin[0], patch.origin[1], patch.origin[2]),
         rot: patch.rot ? qfromEuler(quat(), patch.rot[0], patch.rot[1], patch.rot[2]) : quat(),
@@ -68,13 +74,16 @@ export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegist
     })
   }
   for (const s of world.statics) {
+    // Same helper the server uses — scaled render and scaled collision or
+    // neither, never one without the other.
+    const shape = effectiveShape(s)
     physics.addBody({
       shape:
-        s.shape.type === 'box'
-          ? { type: 'box', size: s.shape.size }
-          : s.shape.type === 'cylinder'
-            ? { type: 'cylinder', radius: s.shape.radius, height: s.shape.height }
-            : { type: 'sphere', radius: s.shape.radius },
+        shape.type === 'box'
+          ? { type: 'box', size: shape.size }
+          : shape.type === 'cylinder'
+            ? { type: 'cylinder', radius: shape.radius, height: shape.height }
+            : { type: 'sphere', radius: shape.radius },
       motion: 'static',
       pos: vec3(s.pos[0], s.pos[1], s.pos[2]),
       rot: s.rot ? qfromEuler(quat(), s.rot[0], s.rot[1], s.rot[2]) : qfromYaw(quat(), s.yaw),

@@ -25,6 +25,7 @@ import {
   type MapTextureEntry,
   type WorldShape,
   type StaticBody,
+  effectiveShape,
 } from '@hobo/content'
 import { Water } from './water.js'
 import {
@@ -155,6 +156,9 @@ export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mes
     vd.applyToMesh(mesh, false)
     mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
     if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
+    // Physics scales the trimesh vertices with scalePatchPositions(); Babylon
+    // applies mesh scaling in the same S→R→T order, so the two agree.
+    if (patch.scale) mesh.scaling.set(patch.scale[0], patch.scale[1], patch.scale[2])
     if (patch.mix) {
       // Painted patch: same splat pipeline as the main terrain.
       const tmat = new TerrainMaterial(`patchmix:${patch.id}`, scene)
@@ -206,7 +210,7 @@ export function buildStaticWorld(scene: Scene, content: ContentRegistry, mapMix?
   for (const m of groundMeshes) water.addToRenderList(m)
 
   for (const [i, s] of world.statics.entries()) {
-    const mesh = meshForShape(scene, `static:${i}`, s.shape, s.color)
+    const mesh = meshForShape(scene, `static:${i}`, effectiveShape(s), s.color)
     applyStaticStyle(scene, mesh, s)
     if (s.model) attachModel(scene, mesh, s.model)
     mesh.position.set(s.pos[0], s.pos[1], s.pos[2])

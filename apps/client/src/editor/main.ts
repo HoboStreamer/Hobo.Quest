@@ -51,6 +51,14 @@ import {
   type TexOption,
 } from './ui.js'
 import { InteractionController } from './interaction/interactionController.js'
+import { CommandHistory } from './history/commandHistory.js'
+import { TransformSession, type TransformAccessor } from './viewport/transformSession.js'
+import {
+  centroidOf,
+  eulerOf,
+  transformFromEuler,
+  type EditorTransform,
+} from './viewport/transformMath.js'
 import { EditorPicker, type MeshOwner } from './interaction/editorPicker.js'
 import { SelectionManager, selectModeFromEvent } from './selection/selectionManager.js'
 import {
@@ -163,6 +171,8 @@ interface PatchState {
   sub: number
   heights: Float32Array
   rot?: [number, number, number]
+  /** Canonical scale (X/Z footprint, Y height displacement). */
+  scale?: [number, number, number]
   tex?: string
   color?: string
   mix?: string
@@ -576,24 +586,20 @@ async function boot(): Promise<void> {
   bindVal('strength')
   bindVal('feather')
 
-  // ── Undo/redo ───────────────────────────────────────────────────────
-  const undoStack: UndoOp[] = []
-  const redoStack: UndoOp[] = []
+  // ── Undo/redo: ONE CommandHistory ───────────────────────────────────
+  // Legacy UndoOps are bridged into it as commands, so transform sessions,
+  // numeric scrubs and every older mutation share a single stack, a single
+  // undo/redo path and a single dirty flag.
+  const history = new CommandHistory<undefined>(undefined)
   let dirty = false
-  let opSeq = 0
-  const opIds = new WeakMap<UndoOp, number>()
-  /** Sequence id of the op at the top of the undo stack when last saved. */
-  let savedTopOp = 0
-  let nonHistoryDirt = false // mutations that bypass history (rare)
-  const topOpId = (): number => {
-    const top = undoStack[undoStack.length - 1]
-    return top ? (opIds.get(top) ?? -1) : 0
-  }
+  /** Mutations that bypass history entirely (texture imports, renames). */
+  let nonHistoryDirt = false
   const saveBtn = document.getElementById('save') as HTMLButtonElement
   const updateDirty = (): void => {
-    dirty = nonHistoryDirt || topOpId() !== savedTopOp
+    dirty = nonHistoryDirt || history.isDirty()
     saveBtn.textContent = dirty ? '💾 Save map ● (unsaved changes)' : '💾 Save map (applies live)'
   }
+  history.onChange(() => updateDirty())
   const markDirty = (): void => {
     nonHistoryDirt = true
     updateDirty()
@@ -601,11 +607,22 @@ async function boot(): Promise<void> {
   window.addEventListener('beforeunload', (e) => {
     if (dirty) e.preventDefault()
   })
+  /** Rough retained size, so paint/terrain strokes obey the memory budget. */
+  const opBytes = (op: UndoOp): number => {
+    if (op.kind === 'terrain') return op.before.byteLength * 2
+    if (op.kind === 'paint' || op.kind === 'ppaint') return op.before.data.length * 2
+    if (op.kind === 'mainconvert') return op.prev.byteLength
+    if (op.kind === 'group') return op.ops.reduce((n, o) => n + opBytes(o), 0)
+    return 1024
+  }
+  /** Record an already-applied mutation. */
   const pushUndo = (op: UndoOp): void => {
-    opIds.set(op, ++opSeq)
-    undoStack.push(op)
-    if (undoStack.length > 40) undoStack.shift()
-    redoStack.length = 0
+    history.record({
+      label: op.kind,
+      estimatedBytes: opBytes(op),
+      execute: () => applyOp(op, 'redo'),
+      undo: () => applyOp(op, 'undo'),
+    })
     updateDirty()
   }
   const findMesh = (body?: StaticBody, node?: MapNodeSpawn): Mesh | null => {
@@ -805,26 +822,37 @@ async function boot(): Promise<void> {
       }
     }
   }
-  const undo = (): void => {
-    const op = undoStack.pop()
-    if (!op) return
-    // Ops rebuild meshes; a live (multi)selection would hold disposed ones.
-    deselect()
+  /**
+   * Undo/redo no longer deselect everything. Commands rebuild meshes, so the
+   * VIEW state has to be re-derived — but the selection itself is stable ids,
+   * and only ids whose object actually disappeared are dropped.
+   */
+  const objectExists = (oid: string): boolean => {
+    if (oid === 'spawn') return spawnPos !== null
+    if (oid === 'terrain:main') return true
+    if (oid.startsWith('terrain:')) return patches.some((p) => `terrain:${p.id}` === oid)
+    return (
+      placedStatics.some((b) => b.id === oid) ||
+      placedNodes.some((n) => n.id === oid) ||
+      placedProps.some((pr) => pr.id === oid) ||
+      mapLightsArr.some((l) => l.id === oid)
+    )
+  }
+  const afterHistoryStep = (label: string): void => {
     clearFaceSel()
-    applyOp(op, 'undo')
-    redoStack.push(op)
+    selectionMgr.retain(objectExists)
+    rebuildSelectionViews()
     updateDirty()
-    status.textContent = '↶ undo'
+    status.textContent = label
+  }
+  const undo = (): void => {
+    if (xform.active) xform.cancel()
+    if (!history.undo()) return
+    afterHistoryStep('↶ undo')
   }
   const redo = (): void => {
-    const op = redoStack.pop()
-    if (!op) return
-    deselect()
-    clearFaceSel()
-    applyOp(op, 'redo')
-    undoStack.push(op)
-    updateDirty()
-    status.textContent = '↷ redo'
+    if (!history.redo()) return
+    afterHistoryStep('↷ redo')
   }
 
   // ── Terrain targets: the main ground plus free-floating patches ─────
@@ -1523,15 +1551,10 @@ async function boot(): Promise<void> {
   const setGizmoMode = (mode: GizmoMode): void => {
     // Selection kinds constrain modes: nodes only move; patches move/rotate.
     if (selectedNode && mode !== 'move') mode = 'move'
-    if (selectedPatch && mode === 'scale') mode = 'move'
     if (selectedLight && mode === 'scale') mode = 'move'
     if (selectedLight?.light.type === 'point' && mode === 'rotate') mode = 'move'
-    if (
-      mode === 'scale' &&
-      multiTotal() > 0 &&
-      (multiPatches.length > 0 || multiNodes.length > 0 || multiProps.length > 0)
-    )
-      mode = 'move'
+    // Group scale is no longer statics-only: TransformSession applies one
+    // delta to every kind, terrain included.
     gizmoMode = mode
     gizmos.positionGizmoEnabled = mode === 'move'
     gizmos.rotationGizmoEnabled = mode === 'rotate'
@@ -1616,7 +1639,7 @@ async function boot(): Promise<void> {
     $('p-x').value = String(prop.pos[0])
     $('p-y').value = '0'
     $('p-z').value = String(prop.pos[2])
-    afterSelect(prop.id ? [prop.id] : [], () => gizmos.attachToMesh(mesh))
+    afterSelect(prop.id ? [prop.id] : [], attachGizmoToPivot)
   }
 
   const LIGHT_LABEL: Record<MapLight['type'], string> = {
@@ -1668,7 +1691,7 @@ async function boot(): Promise<void> {
       l.type === 'point'
         ? 'drag to move the light · edit properties in the panel'
         : 'G moves · R rotates the beam direction · edit properties in the panel'
-    afterSelect([l.id], () => gizmos.attachToMesh(mesh))
+    afterSelect([l.id], attachGizmoToPivot)
   }
   /** One-liner for light property edits: mutate + undo + live preview. */
   const editLight = (mutate: (l: MapLight) => void): void => {
@@ -1694,7 +1717,7 @@ async function boot(): Promise<void> {
     props.style.top = '12px'
     $e('props-title').textContent = '🚩 player spawn'
     for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
-    afterSelect(['spawn'], () => gizmos.attachToNode(spawnFlag))
+    afterSelect(['spawn'], attachGizmoToPivot)
   }
 
   /** Nodes: position-only gizmo; drag end re-grounds and records undo. */
@@ -1711,7 +1734,7 @@ async function boot(): Promise<void> {
     $('p-y').value = '0'
     $('p-z').value = String(node.pos[2])
     status.textContent = 'drag arrows to move the node · Del removes it'
-    afterSelect(node.id ? [node.id] : [], () => gizmos.attachToMesh(mesh))
+    afterSelect(node.id ? [node.id] : [], attachGizmoToPivot)
   }
 
   // ── Multi-select: Shift+click accumulates statics; a pivot node carries
@@ -1729,40 +1752,156 @@ async function boot(): Promise<void> {
     prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number }
     before: [number, number, number]
   }[] = []
-  const multiAll = (): { mesh: Mesh }[] => [
-    ...multiSel,
-    ...multiPatches,
-    ...multiNodes,
-    ...multiProps,
-  ]
   const multiTotal = (): number =>
     multiSel.length + multiPatches.length + multiNodes.length + multiProps.length
-  const multiPivot = new TransformNode('multipivot', scene)
   const clearMulti = (): void => {
-    for (const it of multiSel) {
-      it.mesh.setParent(null)
+    for (const it of [...multiSel, ...multiPatches, ...multiNodes, ...multiProps])
       it.mesh.renderOutline = false
-    }
-    for (const it of [...multiPatches, ...multiNodes, ...multiProps]) {
-      it.mesh.setParent(null)
-      it.mesh.renderOutline = false
-    }
     multiSel.length = 0
     multiPatches.length = 0
     multiNodes.length = 0
     multiProps.length = 0
   }
-  const refreshMultiPivot = (): void => {
-    const all = multiAll()
-    for (const it of all) it.mesh.setParent(null)
-    const c = new Vector3()
-    for (const it of all) c.addInPlace(it.mesh.position)
-    c.scaleInPlace(1 / Math.max(1, all.length))
-    multiPivot.position.copyFrom(c)
-    multiPivot.rotationQuaternion = Quaternion.Identity()
-    multiPivot.scaling.setAll(1)
-    for (const it of all) it.mesh.setParent(multiPivot)
+  /**
+   * Canonical transform access for every authored object kind. This is the
+   * ONLY place that knows how a kind stores its pose, so TransformSession —
+   * and therefore group move/rotate/scale — works identically across
+   * statics, terrain, nodes, props, lights and the spawn point.
+   */
+  const transformAccessor: TransformAccessor = {
+    get(id: string): EditorTransform | null {
+      if (id === 'spawn')
+        return spawnPos ? transformFromEuler([...spawnPos], [0, spawnYaw, 0]) : null
+      if (id.startsWith('terrain:')) {
+        const p = patches.find((pp) => `terrain:${pp.id}` === id)
+        if (!p) return null
+        return transformFromEuler([...p.origin], p.rot ?? [0, 0, 0], p.scale ?? [1, 1, 1])
+      }
+      const b = placedStatics.find((x) => x.id === id)
+      if (b) return transformFromEuler([...b.pos], b.rot ?? [0, b.yaw, 0], b.scale ?? [1, 1, 1])
+      const n = placedNodes.find((x) => x.id === id)
+      if (n) return transformFromEuler([...n.pos], [0, 0, 0])
+      const pr = placedProps.find((x) => x.id === id)
+      if (pr) return transformFromEuler([...pr.pos], [0, pr.yaw ?? 0, 0])
+      const l = mapLightsArr.find((x) => x.id === id)
+      if (l) {
+        const q = lightQuat(l)
+        return { position: [...l.pos], rotation: [q.x, q.y, q.z, q.w], scale: [1, 1, 1] }
+      }
+      return null
+    },
+    set(id: string, t: EditorTransform): void {
+      const e = eulerOf(t)
+      if (id === 'spawn') {
+        spawnPos = [t.position[0], t.position[1], t.position[2]]
+        spawnYaw = e[1]
+        placeSpawnFlag()
+        return
+      }
+      if (id.startsWith('terrain:')) {
+        const p = patches.find((pp) => `terrain:${pp.id}` === id)
+        if (!p) return
+        p.origin = [t.position[0], t.position[1], t.position[2]]
+        if (Math.abs(e[0]) > 1e-4 || Math.abs(e[1]) > 1e-4 || Math.abs(e[2]) > 1e-4)
+          p.rot = [e[0], e[1], e[2]]
+        else delete p.rot
+        if (t.scale.some((v) => Math.abs(v - 1) > 1e-4))
+          p.scale = [t.scale[0], t.scale[1], t.scale[2]]
+        else delete p.scale
+        for (const [m, pp] of patchMeshes) {
+          if (pp !== p) continue
+          m.position.set(p.origin[0], p.origin[1], p.origin[2])
+          m.rotationQuaternion = null
+          const r = p.rot ?? [0, 0, 0]
+          m.rotation.set(r[0], r[1], r[2])
+          m.scaling.set(t.scale[0], t.scale[1], t.scale[2])
+        }
+        return
+      }
+      const b = placedStatics.find((x) => x.id === id)
+      if (b) {
+        b.pos = [t.position[0], t.position[1], t.position[2]]
+        b.yaw = e[1]
+        if (Math.abs(e[0]) > 1e-4 || Math.abs(e[2]) > 1e-4) b.rot = [e[0], e[1], e[2]]
+        else delete b.rot
+        if (t.scale.some((v) => Math.abs(v - 1) > 1e-4))
+          b.scale = [t.scale[0], t.scale[1], t.scale[2]]
+        else delete b.scale
+        for (const [m, bb] of staticMeshes) {
+          if (bb !== b) continue
+          // A pose change is a cheap mesh update, never a rebuild.
+          m.position.set(b.pos[0], b.pos[1], b.pos[2])
+          m.rotationQuaternion = null
+          m.rotation.set(e[0], e[1], e[2])
+          m.scaling.set(t.scale[0], t.scale[1], t.scale[2])
+        }
+        return
+      }
+      const n = placedNodes.find((x) => x.id === id)
+      if (n) {
+        n.pos = [t.position[0], 0, t.position[2]]
+        for (const [m, nn] of nodeMeshes)
+          if (nn === n) m.position.set(n.pos[0], sampleH(n.pos[0], n.pos[2]) + 0.4, n.pos[2])
+        return
+      }
+      const pr = placedProps.find((x) => x.id === id)
+      if (pr) {
+        pr.pos = [t.position[0], 1, t.position[2]]
+        pr.yaw = e[1]
+        for (const [m, p2] of propMeshes)
+          if (p2 === pr) {
+            m.position.set(pr.pos[0], sampleH(pr.pos[0], pr.pos[2]) + 0.5, pr.pos[2])
+            m.rotation.y = pr.yaw ?? 0
+          }
+        return
+      }
+      const l = mapLightsArr.find((x) => x.id === id)
+      if (l) {
+        l.pos = [t.position[0], t.position[1], t.position[2]]
+        if (l.type !== 'point') {
+          const d = new Vector3(0, -1, 0)
+          d.rotateByQuaternionToRef(
+            new Quaternion(t.rotation[0], t.rotation[1], t.rotation[2], t.rotation[3]),
+            d,
+          )
+          l.dir = [d.x, d.y, d.z]
+        }
+        refreshLightRender(l)
+      }
+    },
   }
+  const xform = new TransformSession<undefined>(transformAccessor, history)
+  /**
+   * The gizmo always rides this node — single selection included. Nothing is
+   * ever reparented, so a drag cannot disturb scene hierarchy, and the pivot
+   * pose is the single input to the group delta.
+   */
+  const gizmoPivot = new TransformNode('gizmopivot', scene)
+  const pivotTransform = (): EditorTransform => {
+    const q = gizmoPivot.rotationQuaternion ?? Quaternion.Identity()
+    return {
+      position: [gizmoPivot.position.x, gizmoPivot.position.y, gizmoPivot.position.z],
+      rotation: [q.x, q.y, q.z, q.w],
+      scale: [gizmoPivot.scaling.x, gizmoPivot.scaling.y, gizmoPivot.scaling.z],
+    }
+  }
+  /** Park the pivot on the selection centroid with an identity basis, so the
+   *  gizmo reports pure deltas for the group inspector. */
+  const attachGizmoToPivot = (): void => {
+    refreshGizmoPivot()
+    gizmos.attachToNode(gizmoPivot)
+  }
+  const refreshGizmoPivot = (): void => {
+    const ts = selectionMgr
+      .ids()
+      .map((id) => transformAccessor.get(id))
+      .filter((t): t is EditorTransform => t !== null)
+    const c = centroidOf(ts)
+    gizmoPivot.position.set(c[0], c[1], c[2])
+    gizmoPivot.rotationQuaternion = Quaternion.Identity()
+    gizmoPivot.scaling.setAll(1)
+  }
+
   const outline = (mesh: Mesh): void => {
     mesh.renderOutline = true
     mesh.outlineColor = new Color3(0.4, 0.8, 1)
@@ -1775,10 +1914,7 @@ async function boot(): Promise<void> {
       gizmos.attachToMesh(null)
       return
     }
-    refreshMultiPivot()
-    // Group scale only makes sense for a statics-only selection.
-    if (gizmoMode === 'scale' && (multiPatches.length || multiNodes.length || multiProps.length))
-      setGizmoMode('move')
+    refreshGizmoPivot()
     const ids = [
       ...multiSel.map((it) => it.body.id).filter((x): x is string => Boolean(x)),
       ...multiPatches.map((it) => `terrain:${it.patch.id}`),
@@ -1786,8 +1922,8 @@ async function boot(): Promise<void> {
       ...multiProps.map((it) => it.prop.id).filter((x): x is string => Boolean(x)),
     ]
     fillMultiProps()
-    afterSelect(ids, () => gizmos.attachToNode(multiPivot))
-    status.textContent = `${multiTotal()} selected — move/rotate together (scale: statics only), Del deletes`
+    afterSelect(ids, attachGizmoToPivot)
+    status.textContent = `${multiTotal()} selected — move/rotate/scale together · Del deletes`
   }
   /** Group inspector: pivot position + delta rotation/scale inputs. */
   const fillMultiProps = (): void => {
@@ -1799,9 +1935,9 @@ async function boot(): Promise<void> {
     for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
     $e('light-rows').style.display = 'none'
     const r1 = (v: number): string => String(Number(v.toFixed(2)))
-    $('p-x').value = r1(multiPivot.position.x)
-    $('p-y').value = r1(multiPivot.position.y)
-    $('p-z').value = r1(multiPivot.position.z)
+    $('p-x').value = r1(gizmoPivot.position.x)
+    $('p-y').value = r1(gizmoPivot.position.y)
+    $('p-z').value = r1(gizmoPivot.position.z)
     // Rotation and scale act as DELTAS applied to the whole group.
     $('r-x').value = '0'
     $('r-y').value = '0'
@@ -1810,81 +1946,6 @@ async function boot(): Promise<void> {
     $('s-y').value = '1'
     $('s-z').value = '1'
   }
-  /** Bake a finished group drag (any mix of kinds) into ONE undo entry. */
-  const bakeMulti = (): void => {
-    if (multiTotal() === 0) return
-    const subOps: UndoOp[] = []
-    const items: { body: StaticBody; before: StaticBody; after: StaticBody }[] = []
-    for (const it of multiSel) {
-      it.mesh.setParent(null)
-      const m = it.mesh
-      const b = it.body
-      b.pos = [m.position.x, m.position.y, m.position.z]
-      const q = m.rotationQuaternion ?? Quaternion.FromEulerAngles(0, m.rotation.y, 0)
-      const e2 = q.toEulerAngles()
-      b.yaw = e2.y
-      if (Math.abs(e2.x) > 0.01 || Math.abs(e2.z) > 0.01) b.rot = [e2.x, e2.y, e2.z]
-      else delete b.rot
-      // Group scale (statics-only mode): bake inherited pivot scale into dims.
-      const sc = m.scaling
-      if (Math.abs(sc.x - 1) > 0.001 || Math.abs(sc.y - 1) > 0.001 || Math.abs(sc.z - 1) > 0.001) {
-        if (b.shape.type === 'box')
-          b.shape.size = [b.shape.size[0] * sc.x, b.shape.size[1] * sc.y, b.shape.size[2] * sc.z]
-        else if (b.shape.type === 'cylinder') {
-          b.shape.radius *= (sc.x + sc.z) / 2
-          b.shape.height *= sc.y
-        } else b.shape.radius *= (sc.x + sc.y + sc.z) / 3
-        rebuildSelectedMesh(b, m)
-      }
-      items.push({ body: b, before: it.before, after: snapshotBody(b) })
-      it.before = snapshotBody(b)
-    }
-    if (items.length > 0) subOps.push({ kind: 'batch', items })
-    for (const it of multiPatches) {
-      it.mesh.setParent(null)
-      const m = it.mesh
-      const patch = it.patch
-      const before = {
-        origin: [...it.before.origin] as [number, number, number],
-        ...(it.before.rot ? { rot: [...it.before.rot] as [number, number, number] } : {}),
-      }
-      patch.origin = [m.position.x, m.position.y, m.position.z]
-      const q = m.rotationQuaternion ?? Quaternion.FromEulerAngles(0, m.rotation.y, 0)
-      const e2 = q.toEulerAngles()
-      if (Math.abs(e2.x) > 0.001 || Math.abs(e2.y) > 0.001 || Math.abs(e2.z) > 0.001)
-        patch.rot = [e2.x, e2.y, e2.z]
-      else delete patch.rot
-      subOps.push({
-        kind: 'patchedit',
-        id: patch.id,
-        before,
-        after: { origin: [...patch.origin], ...(patch.rot ? { rot: [...patch.rot] } : {}) },
-      })
-      it.before = { origin: [...patch.origin], ...(patch.rot ? { rot: [...patch.rot] } : {}) }
-    }
-    for (const it of multiNodes) {
-      it.mesh.setParent(null)
-      const m = it.mesh
-      const after: [number, number, number] = [m.position.x, 0, m.position.z]
-      subOps.push({ kind: 'nodemove', node: it.node, before: it.before, after })
-      it.node.pos = after
-      m.position.set(after[0], sampleH(after[0], after[2]) + 0.4, after[2])
-      it.before = [...after]
-    }
-    for (const it of multiProps) {
-      it.mesh.setParent(null)
-      const m = it.mesh
-      const after: [number, number, number] = [m.position.x, 1, m.position.z]
-      subOps.push({ kind: 'propmove', prop: it.prop, before: it.before, after })
-      it.prop.pos = after
-      m.position.set(after[0], sampleH(after[0], after[2]) + 0.5, after[2])
-      it.before = [...after]
-    }
-    if (subOps.length === 1) pushUndo(subOps[0]!)
-    else if (subOps.length > 1) pushUndo({ kind: 'group', label: 'group transform', ops: subOps })
-    refreshMultiPivot()
-  }
-
   /** The starter island is placeholder — selectable so it can be wiped. */
   let mainSelected = false
   /**
@@ -1917,7 +1978,6 @@ async function boot(): Promise<void> {
   const selectMainTerrain = (): void => {
     deselect()
     mainSelected = true
-    if (gizmoMode === 'scale') setGizmoMode('move')
     props.style.display = 'flex'
     props.style.left = '274px'
     props.style.top = '12px'
@@ -1925,32 +1985,41 @@ async function boot(): Promise<void> {
     for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
     status.textContent =
       'starter island — a normal terrain: move/tilt converts it to a patch, Del removes it'
-    afterSelect(['terrain:main'], () => gizmos.attachToMesh(terrain))
+    afterSelect(['terrain:main'], attachGizmoToPivot)
   }
 
   /** Patches: move + tilt the whole terrain patch. */
-  const selectPatch = (mesh: Mesh, patch: PatchState): void => {
-    deselect()
-    selectedPatch = { mesh, patch }
-    setGizmoMode(gizmoMode === 'scale' ? 'move' : gizmoMode)
-    props.style.display = 'flex'
-    props.style.left = '274px'
-    props.style.top = '12px'
-    $e('props-title').textContent = `terrain patch (${patch.halfExtent * 2}m)`
+  /** Terrain inspector: a full transform — terrain scales like anything else. */
+  const fillPatchProps = (patch: PatchState): void => {
+    $e('props-title').textContent = `terrain (${patch.halfExtent * 2}m)`
     for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
-    const deg = (r: number) => Math.round((r * 180) / Math.PI)
+    $e('light-rows').style.display = 'none'
+    const deg = (r: number): string => String(Math.round((r * 180) / Math.PI))
     const rot = patch.rot ?? [0, 0, 0]
+    const sc = patch.scale ?? [1, 1, 1]
     $('p-x').value = String(patch.origin[0])
     $('p-y').value = String(patch.origin[1])
     $('p-z').value = String(patch.origin[2])
-    $('r-x').value = String(deg(rot[0]))
-    $('r-y').value = String(deg(rot[1]))
-    $('r-z').value = String(deg(rot[2]))
+    $('r-x').value = deg(rot[0])
+    $('r-y').value = deg(rot[1])
+    $('r-z').value = deg(rot[2])
+    $('s-x').value = String(sc[0])
+    $('s-y').value = String(sc[1])
+    $('s-z').value = String(sc[2])
     texSel.value = patch.tex === 'none' ? '' : (patch.tex ?? 'leafy_grass')
     texPicker.sync()
     ;($('p-color') as HTMLInputElement).value = patch.color ?? '#bfbfbf'
-    status.textContent = 'sculpt patches with the Terrain tool · tilt for caves/overhangs'
-    afterSelect([`terrain:${patch.id}`], () => gizmos.attachToMesh(mesh))
+  }
+  const selectPatch = (mesh: Mesh, patch: PatchState): void => {
+    deselect()
+    selectedPatch = { mesh, patch }
+    setGizmoMode(gizmoMode)
+    props.style.display = 'flex'
+    props.style.left = '274px'
+    props.style.top = '12px'
+    fillPatchProps(patch)
+    status.textContent = 'sculpt with the Terrain tool · move/rotate/SCALE like any object'
+    afterSelect([`terrain:${patch.id}`], attachGizmoToPivot)
   }
   const rebuildSelectedMesh = (body: StaticBody, oldMesh: Mesh): Mesh => {
     const wasSelected = selected?.mesh === oldMesh
@@ -1985,6 +2054,10 @@ async function boot(): Promise<void> {
     } else {
       $('d-sr').value = String(body.shape.radius)
     }
+    const sc = body.scale ?? [1, 1, 1]
+    $('s-x').value = String(sc[0])
+    $('s-y').value = String(sc[1])
+    $('s-z').value = String(sc[2])
     ;($('p-color') as HTMLInputElement).value = body.color
     texSel.value = body.tex ?? ''
     texPicker.sync()
@@ -2001,7 +2074,7 @@ async function boot(): Promise<void> {
     props.style.top = '12px'
     $e('props-title').textContent = `${body.shape.type} static`
     fillProps(body)
-    afterSelect(body.id ? [body.id] : [], () => gizmos.attachToMesh(mesh))
+    afterSelect(body.id ? [body.id] : [], attachGizmoToPivot)
   }
   const snapshotBody = (b: StaticBody): StaticBody => JSON.parse(JSON.stringify(b)) as StaticBody
   const commitEdit = (): void => {
@@ -2017,162 +2090,74 @@ async function boot(): Promise<void> {
   const beginEdit = (): void => {
     if (selected && !selected.editBefore) selected.editBefore = snapshotBody(selected.body)
   }
-  // Gizmo drags write back into the body (and undo) on release. The
-  // GizmoManager creates gizmo instances lazily when a mode first enables,
-  // so hooks re-wire after every mode switch (idempotent via WeakSet).
+  /**
+   * Gizmo drags run through TransformSession: claim the gesture, snapshot the
+   * selection's start transforms, recompute from those snapshots every frame,
+   * and commit ONE history entry. There is no per-kind bake branch left, and
+   * nothing is reparented.
+   */
+  /** Re-read the inspector fields for whatever single object is selected. */
+  const refreshInspectorFor = (id: string, t: EditorTransform): void => {
+    if (selected) return fillProps(selected.body)
+    if (selectedLight) return fillLightProps(selectedLight.light)
+    if (selectedPatch) return fillPatchProps(selectedPatch.patch)
+    const deg = (r: number): string => String(Math.round((r * 180) / Math.PI))
+    const e = eulerOf(t)
+    $('p-x').value = String(Number(t.position[0].toFixed(3)))
+    $('p-y').value = String(Number(t.position[1].toFixed(3)))
+    $('p-z').value = String(Number(t.position[2].toFixed(3)))
+    $('r-x').value = deg(e[0])
+    $('r-y').value = deg(e[1])
+    $('r-z').value = deg(e[2])
+    void id
+  }
   const wiredGizmos = new WeakSet<object>()
   function wireGizmoHooks(): void {
-    wirePosRot()
-    wireScale()
-  }
-  function wirePosRot(): void {
-    for (const g of [gizmos.gizmos.positionGizmo, gizmos.gizmos.rotationGizmo]) {
+    for (const g of [
+      gizmos.gizmos.positionGizmo,
+      gizmos.gizmos.rotationGizmo,
+      gizmos.gizmos.scaleGizmo,
+    ]) {
       if (!g || wiredGizmos.has(g)) continue
       wiredGizmos.add(g)
       g.onDragStartObservable.add(() => {
-        // Claimed BEFORE our canvas pointerdown handler runs (see note at
-        // the InteractionController construction) — this is what stops the
-        // click leaking through to whatever sits behind the handle.
+        // Claimed BEFORE our canvas pointerdown handler runs (see the note at
+        // the InteractionController) — this is what stops the click leaking
+        // through to whatever sits behind the handle.
         interaction.begin('gizmo-drag', { x: scene.pointerX, y: scene.pointerY, pointerId: 0 })
         selectionMgr.freeze()
-        beginEdit()
+        const started = xform.begin(selectionMgr.ids(), gizmoMode, {
+          isWritable: (id) => !lockOwners.has(id),
+          label:
+            `${gizmoMode} ${selectionMgr.size > 1 ? `${selectionMgr.size} objects` : ''}`.trim(),
+        })
+        if (!started) {
+          // Nothing transformable (or a lock refused): let go of the gesture
+          // rather than dragging a pivot that writes nowhere.
+          selectionMgr.unfreeze()
+          interaction.cancel()
+          status.textContent = '🔒 selection is not editable'
+        }
+      })
+      g.onDragObservable.add(() => {
+        if (xform.active) xform.update(pivotTransform())
       })
       g.onDragEndObservable.add(() => {
+        if (xform.active) {
+          // Snap the committed pose for move drags (Alt bypasses).
+          xform.commit()
+          if (selectionMgr.size === 1) {
+            const id = selectionMgr.primaryId!
+            const t = transformAccessor.get(id)
+            if (t) refreshInspectorFor(id, t)
+          } else fillMultiProps()
+        }
         interaction.end()
         selectionMgr.unfreeze()
-        if (mainSelected) {
-          // Bake the drag into a real patch; the base grid stays anchored.
-          const pos = terrain.position.clone()
-          const rq = terrain.rotationQuaternion?.clone() ?? null
-          const er = rq ? rq.toEulerAngles() : terrain.rotation.clone()
-          terrain.position.set(0, 0, 0)
-          terrain.rotationQuaternion = null
-          terrain.rotation.set(0, 0, 0)
-          wire.position.set(0, 0.03, 0)
-          const patch = convertMainToPatch(false)
-          if (patch) {
-            patch.origin = [pos.x, pos.y, pos.z]
-            if (Math.abs(er.x) > 0.001 || Math.abs(er.y) > 0.001 || Math.abs(er.z) > 0.001)
-              patch.rot = [er.x, er.y, er.z]
-            for (const [m, pp] of patchMeshes) {
-              if (pp === patch) {
-                m.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
-                if (patch.rot) m.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
-                deselect()
-                selectPatch(m, patch)
-                break
-              }
-            }
-            status.textContent = '⛰ starter island converted to a regular terrain patch'
-          }
-          return
-        }
-        if (multiTotal() > 0) {
-          bakeMulti()
-          fillMultiProps()
-          return
-        }
-        if (selectedLight) {
-          const { mesh: m, light } = selectedLight
-          const before = JSON.parse(JSON.stringify(light)) as MapLight
-          light.pos = [m.position.x, m.position.y, m.position.z]
-          if (light.type !== 'point') {
-            const q = m.rotationQuaternion ?? Quaternion.Identity()
-            const d = new Vector3(0, -1, 0)
-            d.rotateByQuaternionToRef(q, d)
-            light.dir = [d.x, d.y, d.z]
-          }
-          pushUndo({
-            kind: 'lightedit',
-            light,
-            before,
-            after: JSON.parse(JSON.stringify(light)) as MapLight,
-          })
-          refreshLightRender(light)
-          fillLightProps(light)
-          return
-        }
-        if (selectedNode) {
-          const m = selectedNode.mesh
-          const node = selectedNode.node
-          const after: [number, number, number] = [snapVal(m.position.x), 0, snapVal(m.position.z)]
-          node.pos = after
-          m.position.set(after[0], sampleH(after[0], after[2]) + 0.4, after[2])
-          pushUndo({ kind: 'nodemove', node, before: selectedNode.before, after })
-          selectedNode.before = [after[0], after[1], after[2]]
-          $('p-x').value = String(after[0])
-          $('p-z').value = String(after[2])
-          return
-        }
-        if (selectedPatch) {
-          const m = selectedPatch.mesh
-          const patch = selectedPatch.patch
-          const before = {
-            origin: [...patch.origin] as [number, number, number],
-            ...(patch.rot ? { rot: [...patch.rot] as [number, number, number] } : {}),
-          }
-          patch.origin = [m.position.x, m.position.y, m.position.z]
-          const e2 = m.rotationQuaternion ? m.rotationQuaternion.toEulerAngles() : m.rotation
-          if (Math.abs(e2.x) > 0.001 || Math.abs(e2.y) > 0.001 || Math.abs(e2.z) > 0.001)
-            patch.rot = [e2.x, e2.y, e2.z]
-          else delete patch.rot
-          pushUndo({
-            kind: 'patchedit',
-            id: patch.id,
-            before,
-            after: {
-              origin: [...patch.origin] as [number, number, number],
-              ...(patch.rot ? { rot: [...patch.rot] as [number, number, number] } : {}),
-            },
-          })
-          return
-        }
-        if (!selected) return
-        const m = selected.mesh
-        const b = selected.body
-        b.pos = [snapVal(m.position.x), m.position.y, snapVal(m.position.z)]
-        m.position.set(b.pos[0], b.pos[1], b.pos[2])
-        const e2 = m.rotationQuaternion ? m.rotationQuaternion.toEulerAngles() : m.rotation
-        b.yaw = e2.y
-        if (Math.abs(e2.x) > 0.01 || Math.abs(e2.z) > 0.01) b.rot = [e2.x, e2.y, e2.z]
-        else delete b.rot
-        fillProps(b)
-        commitEdit()
+        refreshGizmoPivot()
+        refreshSelectionVisuals()
       })
     }
-  }
-  function wireScale(): void {
-    const g = gizmos.gizmos.scaleGizmo
-    if (!g || wiredGizmos.has(g)) return
-    wiredGizmos.add(g)
-    g.onDragStartObservable.add(() => {
-      interaction.begin('gizmo-drag', { x: scene.pointerX, y: scene.pointerY, pointerId: 0 })
-      selectionMgr.freeze()
-      beginEdit()
-    })
-    g.onDragEndObservable.add(() => {
-      interaction.end()
-      selectionMgr.unfreeze()
-      if (multiTotal() > 0) {
-        bakeMulti()
-        fillMultiProps()
-        return
-      }
-      if (!selected) return
-      // Bake the gizmo scale into the shape dimensions, then rebuild clean.
-      const m = selected.mesh
-      const b = selected.body
-      const sc = m.scaling
-      if (b.shape.type === 'box')
-        b.shape.size = [b.shape.size[0] * sc.x, b.shape.size[1] * sc.y, b.shape.size[2] * sc.z]
-      else if (b.shape.type === 'cylinder') {
-        b.shape.radius *= (sc.x + sc.z) / 2
-        b.shape.height *= sc.y
-      } else b.shape.radius *= (sc.x + sc.y + sc.z) / 3
-      rebuildSelectedMesh(b, m)
-      fillProps(b)
-      commitEdit()
-    })
   }
   wireGizmoHooks()
   setGizmoMode('move')
@@ -2189,21 +2174,24 @@ async function boot(): Promise<void> {
         fillMultiProps()
         return
       }
-      multiPivot.position.set(px, py, pz)
-      multiPivot.rotationQuaternion = Quaternion.FromEulerAngles(
+      const started = xform.begin(selectionMgr.ids(), 'move', { label: 'group transform' })
+      if (!started) return
+      const q = Quaternion.FromEulerAngles(
         rad2(Number($('r-x').value) || 0),
         rad2(Number($('r-y').value) || 0),
         rad2(Number($('r-z').value) || 0),
       )
-      const sx = Number($('s-x').value) || 1
-      const sy = Number($('s-y').value) || 1
-      const sz = Number($('s-z').value) || 1
-      if (multiSel.length === multiTotal()) {
-        multiPivot.scaling.set(sx, sy, sz)
-      } else if (sx !== 1 || sy !== 1 || sz !== 1) {
-        status.textContent = '⚠ group scale needs a statics-only selection — scale ignored'
-      }
-      bakeMulti()
+      xform.update({
+        position: [px, py, pz],
+        rotation: [q.x, q.y, q.z, q.w],
+        scale: [
+          Number($('s-x').value) || 1,
+          Number($('s-y').value) || 1,
+          Number($('s-z').value) || 1,
+        ],
+      })
+      xform.commit()
+      refreshGizmoPivot()
       fillMultiProps()
       return
     }
@@ -2317,32 +2305,42 @@ async function boot(): Promise<void> {
   propInput('d-r', (v, b) => b.shape.type === 'cylinder' && (b.shape.radius = v), true)
   propInput('d-h', (v, b) => b.shape.type === 'cylinder' && (b.shape.height = v), true)
   propInput('d-sr', (v, b) => b.shape.type === 'sphere' && (b.shape.radius = v), true)
+  // Scale is a REAL transform component now, not a one-shot multiplier that
+  // snapped back to 1. Dimensions live in their own Geometry fields; these
+  // three write body.scale / patch.scale and go through the same accessor a
+  // gizmo drag uses, so render and collision stay in step.
   for (const [id, axis] of [
     ['s-x', 0],
     ['s-y', 1],
     ['s-z', 2],
   ] as const) {
     $(id).addEventListener('change', () => {
-      const f = Number($(id).value)
-      if (!Number.isFinite(f) || f <= 0) {
-        $(id).value = '1'
+      const v = safeNum($(id).value, true)
+      const targetId = selectionMgr.size === 1 ? selectionMgr.primaryId : null
+      if (v === null) {
+        status.textContent = '⛔ scale must be a positive number'
+        if (targetId) {
+          const cur = transformAccessor.get(targetId)
+          if (cur) $(id).value = String(cur.scale[axis])
+        }
         return
       }
-      if (!selected) {
-        if (multiTotal() > 0) applyManualPose() // group scale via pivot
+      if (selectionMgr.size > 1) {
+        applyManualPose() // group: the three fields are a delta
         return
       }
-      beginEdit()
-      const b = selected.body
-      if (b.shape.type === 'box') b.shape.size[axis] *= f
-      else if (b.shape.type === 'cylinder') {
-        if (axis === 1) b.shape.height *= f
-        else b.shape.radius *= f
-      } else b.shape.radius *= f
-      rebuildSelectedMesh(b, selected.mesh)
-      fillProps(b)
-      commitEdit()
-      $(id).value = '1'
+      if (!targetId) return
+      const cur = transformAccessor.get(targetId)
+      if (!cur) return
+      const next: EditorTransform = { ...cur, scale: [...cur.scale] as [number, number, number] }
+      next.scale[axis] = v
+      const started = xform.begin([targetId], 'scale', { label: 'scale' })
+      if (!started) return
+      xform.setOne(targetId, next)
+      xform.commit()
+      refreshGizmoPivot()
+      const after = transformAccessor.get(targetId)
+      if (after) refreshInspectorFor(targetId, after)
     })
   }
   /** Apply a color or texture change to EVERY selected object (one undo). */
@@ -2385,7 +2383,7 @@ async function boot(): Promise<void> {
     }
     if (subOps.length === 1) pushUndo(subOps[0]!)
     else if (subOps.length > 1) pushUndo({ kind: 'group', label: 'group style', ops: subOps })
-    refreshMultiPivot()
+    refreshGizmoPivot()
     refreshSelectionVisuals()
     status.textContent = `style applied to ${multiSel.length + multiPatches.length} objects`
   }
@@ -3463,7 +3461,7 @@ async function boot(): Promise<void> {
         body: JSON.stringify(file),
       })
       if (resp.ok) {
-        savedTopOp = topOpId()
+        history.markSaved()
         nonHistoryDirt = false
         updateDirty()
         lastSig = `${file.heights.length}:${file.statics.length}:${(file.nodes ?? []).length}:${(file.mix ?? '').length}:${(file.terrains ?? []).length}:${(file.models ?? []).length}:${(file.textures ?? []).length}:${(file.lights ?? []).length}`
@@ -3543,7 +3541,7 @@ async function boot(): Promise<void> {
   document.getElementById('conflict-load')?.addEventListener('click', () => {
     // Explicit choice: discard local changes and take the remote version.
     nonHistoryDirt = false
-    savedTopOp = topOpId()
+    history.markSaved()
     updateDirty()
     lastSig = ''
     $e('conflict').style.display = 'none'
@@ -4218,30 +4216,24 @@ async function boot(): Promise<void> {
     return out
   }
   const probeTransform = (id: string): unknown => {
-    const b = placedStatics.find((s) => s.id === id)
-    if (b)
-      return {
-        position: [...b.pos],
-        rotation: b.rot ? [...b.rot] : [0, b.yaw, 0],
-        // Statics have no canonical scale in v1 — dimensions ARE the scale.
-        scale: null,
-        dims:
-          b.shape.type === 'box'
-            ? [...b.shape.size]
-            : b.shape.type === 'cylinder'
-              ? [b.shape.radius, b.shape.height]
-              : [b.shape.radius],
-      }
-    const p = patches.find((pp) => `terrain:${pp.id}` === id || pp.id === id)
-    if (p)
-      return {
-        position: [...p.origin],
-        rotation: p.rot ? [...p.rot] : [0, 0, 0],
-        scale: null,
-      }
-    const l = mapLightsArr.find((x) => x.id === id)
-    if (l) return { position: [...l.pos], rotation: null, scale: null }
-    return null
+    const t = transformAccessor.get(id)
+    if (!t) return null
+    const b = placedStatics.find((x) => x.id === id)
+    return {
+      position: [...t.position],
+      rotation: eulerOf(t),
+      scale: [...t.scale],
+      ...(b
+        ? {
+            dims:
+              b.shape.type === 'box'
+                ? [...b.shape.size]
+                : b.shape.type === 'cylinder'
+                  ? [b.shape.radius, b.shape.height]
+                  : [b.shape.radius],
+          }
+        : {}),
+    }
   }
 
   // Test/debug handle (harness-only; not part of any API contract).
@@ -4254,13 +4246,14 @@ async function boot(): Promise<void> {
       mode: gizmoMode,
       attached: Boolean(gizmos.attachedMesh ?? gizmos.attachedNode),
       dragging: interaction.is('gizmo-drag'),
+      xformActive: xform.active,
     }),
     gizmoHandleScreenPos: probeGizmoHandle,
     cameraSnapshot: () => ({
       pos: [camera.position.x, camera.position.y, camera.position.z],
       rot: [camera.rotation.x, camera.rotation.y, camera.rotation.z],
     }),
-    history: () => ({ depth: undoStack.length, redo: redoStack.length }),
+    history: () => ({ depth: history.depth, redo: history.redoDepth }),
     terrainWires: probeTerrainWires,
     faceSelKeys: () =>
       faceSel.map(
@@ -4277,6 +4270,13 @@ async function boot(): Promise<void> {
     transformOf: probeTransform,
     worldToScreen: probeWorldToScreen,
     setToolByName: (t: string) => setTool(t as Tool),
+    selectByIds: (ids: string[]) => {
+      selectionMgr.replaceMany(ids)
+      rebuildSelectionViews()
+    },
+    terrainIds: () => patches.map((p) => `terrain:${p.id}`),
+    undo: () => undo(),
+    redo: () => redo(),
     setCameraPose: (pos: [number, number, number], rot: [number, number, number]) => {
       camera.position.set(pos[0], pos[1], pos[2])
       camera.rotation.set(rot[0], rot[1], rot[2])
@@ -4301,7 +4301,7 @@ async function boot(): Promise<void> {
       return multiTotal()
     },
     undoDepth() {
-      return undoStack.length
+      return history.depth
     },
     objectCounts() {
       return {
@@ -4322,8 +4322,15 @@ async function boot(): Promise<void> {
       return placedStatics.map((b) => [...b.pos])
     },
     groupMove(dx: number, dy: number, dz: number) {
-      multiPivot.position.addInPlaceFromFloats(dx, dy, dz)
-      bakeMulti()
+      const started = xform.begin(selectionMgr.ids(), 'move', { label: 'group move' })
+      if (!started) return
+      const p = started.pivotStart
+      xform.update({
+        ...p,
+        position: [p.position[0] + dx, p.position[1] + dy, p.position[2] + dz],
+      })
+      xform.commit()
+      refreshGizmoPivot()
       fillMultiProps()
     },
     lights() {

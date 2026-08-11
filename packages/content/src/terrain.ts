@@ -123,6 +123,13 @@ export interface TerrainPatchData {
   heights: Float32Array
   /** Euler rotation — tilt patches into overhangs and cave roofs. */
   rot?: [number, number, number]
+  /**
+   * Canonical scale. X/Z widen the terrain's world footprint, Y scales the
+   * height displacement about the patch's local origin. Absent = [1,1,1].
+   * Rendering, collision and ground sampling all read it, so a scaled
+   * terrain can never look different from what players walk on.
+   */
+  scale?: [number, number, number]
   /** Tiling texture basename (or custom:<name>); default grass. */
   tex?: string
   /** Tint color (hex). */
@@ -194,10 +201,15 @@ function sampleOverride(map: MapOverride, x: number, z: number): number {
   let h = bilinearGrid(map.heights, map.sub, map.halfExtent, x, z)
   for (const p of map.terrains ?? []) {
     if (p.rot && (Math.abs(p.rot[0]) > 0.02 || Math.abs(p.rot[2]) > 0.02)) continue
-    const lx = x - p.origin[0]
-    const lz = z - p.origin[2]
+    const sx = p.scale?.[0] ?? 1
+    const sy = p.scale?.[1] ?? 1
+    const sz = p.scale?.[2] ?? 1
+    if (sx === 0 || sz === 0) continue
+    // World → patch-local: undo the patch's translation, then its scale.
+    const lx = (x - p.origin[0]) / sx
+    const lz = (z - p.origin[2]) / sz
     if (Math.abs(lx) > p.halfExtent || Math.abs(lz) > p.halfExtent) continue
-    const ph = bilinearGrid(p.heights, p.sub, p.halfExtent, lx, lz) + p.origin[1]
+    const ph = bilinearGrid(p.heights, p.sub, p.halfExtent, lx, lz) * sy + p.origin[1]
     if (ph > h) h = ph
   }
   return h
@@ -335,4 +347,23 @@ export function worldSpawn(world: WorldDef): {
     pos: o?.spawn ?? [world.spawnPoint[0], world.spawnPoint[1], world.spawnPoint[2]],
     yaw: o?.spawnYaw ?? world.spawnYaw,
   }
+}
+
+/**
+ * Scale a patch grid's vertices in place-of-copy. Physics uses this so a
+ * scaled terrain's trimesh matches the visual mesh's `scaling`, which Babylon
+ * applies in the same scale→rotate→translate order.
+ */
+export function scalePatchPositions(
+  positions: Float32Array,
+  scale: [number, number, number] | undefined,
+): Float32Array {
+  if (!scale || (scale[0] === 1 && scale[1] === 1 && scale[2] === 1)) return positions
+  const out = new Float32Array(positions.length)
+  for (let i = 0; i < positions.length; i += 3) {
+    out[i] = (positions[i] ?? 0) * scale[0]
+    out[i + 1] = (positions[i + 1] ?? 0) * scale[1]
+    out[i + 2] = (positions[i + 2] ?? 0) * scale[2]
+  }
+  return out
 }

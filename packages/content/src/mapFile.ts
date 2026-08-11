@@ -71,6 +71,8 @@ export interface MapFile {
     sub: number
     heights: string
     rot?: [number, number, number]
+    /** Canonical scale (X/Z footprint, Y height displacement). */
+    scale?: [number, number, number]
     tex?: string
     color?: string
     mix?: string
