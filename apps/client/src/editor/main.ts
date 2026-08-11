@@ -183,6 +183,7 @@ type UndoOp =
       after: { tex?: string; color?: string }
     }
   | { kind: 'batchdelete'; bodies: StaticBody[] }
+  | { kind: 'mainconvert'; prev: Float32Array; patch: PatchState | null }
   | {
       kind: 'patchedit'
       id: string
@@ -300,6 +301,7 @@ async function boot(): Promise<void> {
   wire.material = wireMat
   wire.isPickable = false
   wire.position.y = 0.03
+  wire.parent = terrain
   wire.setEnabled(false)
 
   const refreshTerrainMesh = (): void => {
@@ -418,7 +420,19 @@ async function boot(): Promise<void> {
   const sampleH = (x: number, z: number): number => {
     const i = Math.max(0, Math.min(SUB, Math.round((x + HALF) / cell)))
     const j = Math.max(0, Math.min(SUB, Math.round((z + HALF) / cell)))
-    return heights[j * (SUB + 1) + i] ?? 0
+    let h = heights[j * (SUB + 1) + i] ?? 0
+    for (const pp of patches) {
+      if (pp.rot && (Math.abs(pp.rot[0]) > 0.02 || Math.abs(pp.rot[2]) > 0.02)) continue
+      const lx = x - pp.origin[0]
+      const lz = z - pp.origin[2]
+      if (Math.abs(lx) > pp.halfExtent || Math.abs(lz) > pp.halfExtent) continue
+      const pc = (pp.halfExtent * 2) / pp.sub
+      const pi = Math.max(0, Math.min(pp.sub, Math.round((lx + pp.halfExtent) / pc)))
+      const pj = Math.max(0, Math.min(pp.sub, Math.round((lz + pp.halfExtent) / pc)))
+      const ph = (pp.heights[pj * (pp.sub + 1) + pi] ?? 0) + pp.origin[1]
+      if (ph > h) h = ph
+    }
+    return h
   }
   for (const s of world.statics) {
     const m = meshForShape(scene, `w:${Math.random()}`, s.shape, s.color)
@@ -605,6 +619,30 @@ async function boot(): Promise<void> {
       const src = dir === 'undo' ? op.before : op.after
       spawnPos = src ? [src[0], src[1], src[2]] : null
       placeSpawnFlag()
+    } else if (op.kind === 'mainconvert') {
+      const main = terrainTargets.find((t) => t.id === 'main')!
+      if (dir === 'undo') {
+        heights.set(op.prev)
+        if (op.patch) {
+          patches = patches.filter((pp) => pp !== op.patch)
+          for (const [m, pp] of patchMeshes) {
+            if (pp === op.patch) {
+              if (selectedPatch?.mesh === m) deselect()
+              patchMeshes.delete(m)
+              m.dispose()
+            }
+          }
+          const ti = terrainTargets.findIndex((t) => t.patch === op.patch)
+          if (ti >= 0) terrainTargets.splice(ti, 1)
+        }
+      } else {
+        heights.fill(-6)
+        if (op.patch) {
+          patches.push(op.patch)
+          buildPatchMesh(op.patch)
+        }
+      }
+      refreshTarget(main)
     } else if (op.kind === 'patchprop') {
       const src = dir === 'undo' ? op.before : op.after
       if (src.tex) op.patch.tex = src.tex
@@ -1219,7 +1257,6 @@ async function boot(): Promise<void> {
 
   const deselect = (): void => {
     mainSelected = false
-    anchorAxes.setEnabled(false)
     spawnSelected = false
     clearMulti()
     gizmos.attachToMesh(null)
@@ -1371,46 +1408,45 @@ async function boot(): Promise<void> {
 
   /** The starter island is placeholder — selectable so it can be wiped. */
   let mainSelected = false
-  const anchorAxes = new TransformNode('anchor-axes', scene)
-  {
-    const mk = (name: string, dir: [number, number, number], color: string): void => {
-      const bar = meshForShape(
-        scene,
-        name,
-        {
-          type: 'box',
-          size: [
-            Math.abs(dir[0]) * 8 + 0.3,
-            Math.abs(dir[1]) * 8 + 0.3,
-            Math.abs(dir[2]) * 8 + 0.3,
-          ],
-        },
-        color,
-      )
-      bar.parent = anchorAxes
-      bar.position.set(dir[0] * 4, dir[1] * 4 + 0.4, dir[2] * 4)
-      bar.isPickable = false
-      bar.visibility = 0.55
+  /**
+   * The starter island is NOT special: transforming or deleting it
+   * converts the top-level heightfield into a regular terrain patch (the
+   * base grid sinks below the waterline). From then on it moves, tilts,
+   * retextures and deletes like any other patch — and the ground sampler
+   * follows patches, so spawns/nodes/props stay grounded.
+   */
+  const convertMainToPatch = (remove: boolean): PatchState | null => {
+    const prev = heights.slice()
+    let patch: PatchState | null = null
+    if (!remove) {
+      patch = {
+        id: newId('patch'),
+        origin: [0, 0, 0],
+        halfExtent: HALF,
+        sub: SUB,
+        heights: heights.slice(),
+      }
+      patches.push(patch)
+      buildPatchMesh(patch)
     }
-    mk('ax-x', [1, 0, 0], '#d94b4b')
-    mk('ax-y', [0, 1, 0], '#57c04f')
-    mk('ax-z', [0, 0, 1], '#4b7bd9')
-    anchorAxes.setEnabled(false)
+    heights.fill(-6)
+    const main = terrainTargets.find((t) => t.id === 'main')!
+    refreshTarget(main)
+    pushUndo({ kind: 'mainconvert', prev, patch })
+    return patch
   }
   const selectMainTerrain = (): void => {
     deselect()
     mainSelected = true
-    // Anchored-transform affordance: greyed origin axes, not a live gizmo —
-    // the sampler/physics anchor the island at the origin by design.
-    anchorAxes.setEnabled(true)
+    if (gizmoMode === 'scale') setGizmoMode('move')
     props.style.display = 'flex'
     props.style.left = '274px'
     props.style.top = '12px'
     $e('props-title').textContent = 'starter island terrain'
     for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
     status.textContent =
-      'starter island — sculptable, Del sinks it; it cannot be moved (anchored at origin)'
-    afterSelect(['terrain:main'])
+      'starter island — a normal terrain: move/tilt converts it to a patch, Del removes it'
+    afterSelect(['terrain:main'], () => gizmos.attachToMesh(terrain))
   }
 
   /** Patches: move + tilt the whole terrain patch. */
@@ -1513,6 +1549,33 @@ async function boot(): Promise<void> {
       wiredGizmos.add(g)
       g.onDragStartObservable.add(beginEdit)
       g.onDragEndObservable.add(() => {
+        if (mainSelected) {
+          // Bake the drag into a real patch; the base grid stays anchored.
+          const pos = terrain.position.clone()
+          const rq = terrain.rotationQuaternion?.clone() ?? null
+          const er = rq ? rq.toEulerAngles() : terrain.rotation.clone()
+          terrain.position.set(0, 0, 0)
+          terrain.rotationQuaternion = null
+          terrain.rotation.set(0, 0, 0)
+          wire.position.set(0, 0.03, 0)
+          const patch = convertMainToPatch(false)
+          if (patch) {
+            patch.origin = [pos.x, pos.y, pos.z]
+            if (Math.abs(er.x) > 0.001 || Math.abs(er.y) > 0.001 || Math.abs(er.z) > 0.001)
+              patch.rot = [er.x, er.y, er.z]
+            for (const [m, pp] of patchMeshes) {
+              if (pp === patch) {
+                m.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
+                if (patch.rot) m.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
+                deselect()
+                selectPatch(m, patch)
+                break
+              }
+            }
+            status.textContent = '⛰ starter island converted to a regular terrain patch'
+          }
+          return
+        }
         if (multiSel.length > 0) {
           bakeMulti()
           return
@@ -1768,14 +1831,9 @@ async function boot(): Promise<void> {
   })
   const deleteSelected = (): void => {
     if (mainSelected) {
-      // Sink the starter island below the waterline (fully undoable).
-      const main = terrainTargets.find((t) => t.id === 'main')!
-      const before = main.heights.slice()
-      main.heights.fill(-3)
-      refreshTarget(main)
-      pushUndo({ kind: 'terrain', target: 'main', before, after: main.heights.slice() })
       deselect()
-      status.textContent = '🌊 starter island sunk — build your world from terrain patches'
+      convertMainToPatch(true)
+      status.textContent = '🌊 starter island removed — one Ctrl+Z brings it back'
       return
     }
     if (multiSel.length > 0) {
@@ -2690,6 +2748,10 @@ async function boot(): Promise<void> {
       let sum = 0
       for (const h of heights) sum += Math.abs(h)
       return sum
+    },
+    selectMain() {
+      setTool('select')
+      selectMainTerrain()
     },
   }
 }

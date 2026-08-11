@@ -157,20 +157,46 @@ export function getMapOverride(): MapOverride | null {
   return mapOverride
 }
 
-function sampleOverride(map: MapOverride, x: number, z: number): number {
-  const cell = (map.halfExtent * 2) / map.sub
-  const fx = Math.min(Math.max((x + map.halfExtent) / cell, 0), map.sub - 1e-6)
-  const fz = Math.min(Math.max((z + map.halfExtent) / cell, 0), map.sub - 1e-6)
+function bilinearGrid(
+  heights: Float32Array,
+  sub: number,
+  halfExtent: number,
+  x: number,
+  z: number,
+): number {
+  const cell = (halfExtent * 2) / sub
+  const fx = Math.min(Math.max((x + halfExtent) / cell, 0), sub - 1e-6)
+  const fz = Math.min(Math.max((z + halfExtent) / cell, 0), sub - 1e-6)
   const ix = Math.floor(fx)
   const iz = Math.floor(fz)
   const tx = fx - ix
   const tz = fz - iz
-  const w = map.sub + 1
-  const h00 = map.heights[iz * w + ix] ?? 0
-  const h10 = map.heights[iz * w + ix + 1] ?? 0
-  const h01 = map.heights[(iz + 1) * w + ix] ?? 0
-  const h11 = map.heights[(iz + 1) * w + ix + 1] ?? 0
+  const w = sub + 1
+  const h00 = heights[iz * w + ix] ?? 0
+  const h10 = heights[iz * w + ix + 1] ?? 0
+  const h01 = heights[(iz + 1) * w + ix] ?? 0
+  const h11 = heights[(iz + 1) * w + ix + 1] ?? 0
   return h00 * (1 - tx) * (1 - tz) + h10 * tx * (1 - tz) + h01 * (1 - tx) * tz + h11 * tx * tz
+}
+
+/**
+ * Ground sample = max of the base heightfield and every LEVEL terrain
+ * patch covering (x, z). Patches are first-class ground: the starter
+ * island can be converted into a patch (or deleted) and spawns, resource
+ * nodes and props still land on whatever terrain is really there.
+ * Rotated (tilted) patches are skipped — they're overhangs, not ground.
+ */
+function sampleOverride(map: MapOverride, x: number, z: number): number {
+  let h = bilinearGrid(map.heights, map.sub, map.halfExtent, x, z)
+  for (const p of map.terrains ?? []) {
+    if (p.rot && (Math.abs(p.rot[0]) > 0.02 || Math.abs(p.rot[2]) > 0.02)) continue
+    const lx = x - p.origin[0]
+    const lz = z - p.origin[2]
+    if (Math.abs(lx) > p.halfExtent || Math.abs(lz) > p.halfExtent) continue
+    const ph = bilinearGrid(p.heights, p.sub, p.halfExtent, lx, lz) + p.origin[1]
+    if (ph > h) h = ph
+  }
+  return h
 }
 
 /** Terrain elevation at world (x, z). */
