@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -144,6 +144,15 @@ describe('save pipeline', () => {
     const onDisk = JSON.parse(readFileSync(mapPath, 'utf8'))
     expect(onDisk.v).toBe(2)
     expect(onDisk.terrains[0].surface.paint.layers).toHaveLength(3)
+  })
+
+  it('creates the artifact on a first save even when the map is unchanged', async () => {
+    // An empty map hashes the same as the empty default, but the file still
+    // has to be written or /map.json has nothing to serve.
+    const base = await loadMap(mapPath)
+    const r = await saveMap(mapPath, JSON.stringify(base.map), base, undefined)
+    expect(r.status).toBe(200)
+    expect(existsSync(mapPath)).toBe(true)
   })
 
   it('writes atomically — no .tmp file is left behind', async () => {

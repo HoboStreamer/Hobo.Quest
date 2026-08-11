@@ -1259,7 +1259,25 @@ async function boot(): Promise<void> {
     pos: Vector3
     rot: Quaternion
   }
+  /**
+   * A brand-new map has no geometry at all, so a placement ray hits nothing
+   * and the first object could never be placed. When the authored count is
+   * ZERO the first mesh/terrain/model commits at exactly the origin, wherever
+   * the user clicks. Sky, water, grid and helpers do not count.
+   */
+  const authoredGeometryCount = (): number => placedStatics.length + patches.length
   const computePlacePose = (): PlacePose | null => {
+    if (authoredGeometryCount() === 0) {
+      const def0 =
+        tool === 'entity'
+          ? ENTITY_DEFS[Number(entitySel.value)]
+          : PLACEABLES[Number(placeSel.value)]
+      if (def0)
+        return {
+          pos: new Vector3(0, 0, 0),
+          rot: Quaternion.RotationAxis(new Vector3(0, 1, 0), placeYaw),
+        }
+    }
     const pick = scene.pick(
       scene.pointerX,
       scene.pointerY,

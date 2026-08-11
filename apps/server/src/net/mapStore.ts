@@ -100,7 +100,10 @@ export async function saveMap(
     return { status: 409, error: 'stale_revision', revision: current.revision }
 
   const next = record(parsed.map)
-  if (next.revision === current.revision) return { status: 200, record: current }
+  // Unchanged content is a no-op ONLY if the artifact is already on disk —
+  // the first save of an empty map must still create the file.
+  if (next.revision === current.revision && existsSync(mapPath))
+    return { status: 200, record: current }
 
   await mkdir(dirname(mapPath), { recursive: true })
   // Temp + rename: a crash mid-write can never leave a half-written map.
