@@ -36,6 +36,7 @@ import {
   removeLayer,
   type PaintLayer,
   type SurfaceMaterialData,
+  validateSurface,
 } from '@hobo/content'
 import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer.js'
 import { meshForShape } from '../render/sceneSetup.js'
@@ -67,16 +68,8 @@ import { EditorPicker, type MeshOwner } from './interaction/editorPicker.js'
 import { SelectionManager, selectModeFromEvent } from './selection/selectionManager.js'
 import { FaceOverlayManager, FaceSelection } from './selection/faceSelection.js'
 import { LayeredSurfaceMaterial } from '../render/layeredSurface.js'
-import { PaintMask, type MaskPatch } from './materials/paintMask.js'
-import {
-  ACTIONS,
-  bindingFromEvent,
-  bindingMatches,
-  findConflicts,
-  formatBinding,
-  loadBindings,
-  type Binding,
-} from './bindings.js'
+import { PaintMask } from './materials/paintMask.js'
+import { ACTIONS, bindingMatches, formatBinding, loadBindings, type Binding } from './bindings.js'
 
 /**
  * Hobo.Quest map editor (/editor): the world ships as a blank floor and
@@ -94,151 +87,19 @@ const HALF = world.groundHalfExtent
 const SUB = 128
 const MIX = 512
 
-type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select' | 'face' | 'light'
-
-/** Session-stable id generator for map objects (never array positions). */
-let idCounter = 0
-const newId = (prefix: string): string =>
-  `${prefix}-${Date.now().toString(36)}-${(idCounter++).toString(36)}`
-
-interface Placeable {
-  name: string
-  kind: 'static' | 'node' | 'spawn' | 'model' | 'prop' | 'patch'
-  shape?: StaticBody['shape']
-  color?: string
-  tex?: string
-  decor?: string
-  node?: string
-  modelId?: string
-}
-
-/** Mesh tool: primitive shapes the user builds everything from (plus
- *  imported glb models, appended at runtime). No prefab world props —
- *  buildings, ramps and furniture are authored, not picked. */
-const PLACEABLES: Placeable[] = [
-  { name: '⬛ Box', kind: 'static', shape: { type: 'box', size: [2, 2, 2] }, color: '#8a8d90' },
-  {
-    name: '▬ Panel / wall',
-    kind: 'static',
-    shape: { type: 'box', size: [4, 3, 0.3] },
-    color: '#9a9187',
-  },
-  {
-    name: '⚫ Cylinder',
-    kind: 'static',
-    shape: { type: 'cylinder', radius: 1, height: 2 },
-    color: '#8f8a82',
-  },
-  { name: '🔘 Sphere', kind: 'static', shape: { type: 'sphere', radius: 1 }, color: '#7b7f83' },
-  { name: '⛰ Terrain patch (32m sculptable)', kind: 'patch' },
-]
-
-/** Entity tool: gameplay spawns — not geometry. */
-const ENTITY_DEFS: Placeable[] = [
-  { name: '🚩 Spawn point', kind: 'spawn' },
-  { name: '🌳 Oak tree (chop)', kind: 'node', node: 'oak_tree' },
-  { name: '🫐 Berry bush', kind: 'node', node: 'berry_bush' },
-  { name: '🪨 Stone deposit (pick)', kind: 'node', node: 'stone_deposit' },
-  { name: '🌿 Branch pile', kind: 'node', node: 'branch_pile' },
-  { name: '🥌 Loose stones', kind: 'node', node: 'loose_stones' },
-  { name: '⚙ Scrap pile', kind: 'node', node: 'scrap_pile' },
-  { name: '🏪 Merchant stall (shop)', kind: 'prop', node: 'merchant_stall' },
-  { name: '📦 Wooden crate (prop)', kind: 'prop', node: 'wooden_crate' },
-  { name: '🛢 Metal barrel (prop)', kind: 'prop', node: 'metal_barrel' },
-]
-
-const TEXTURES = [
-  '',
-  'brown_mud_dry',
-  'clay_roof_tiles',
-  'floor_pavement',
-  'gray_rocks',
-  'leafy_grass',
-  'metal_plate',
-  'plastered_wall_02',
-  'red_brick',
-  'weathered_plank_siding',
-  'wood_planks',
-]
-
-/** Visual stand-ins for resource nodes (matched loosely to the game's). */
-const NODE_LOOKS: Record<string, { color: string; shape: StaticBody['shape'] }> = {
-  oak_tree: { color: '#4c7a3a', shape: { type: 'cylinder', radius: 1.3, height: 5 } },
-  berry_bush: { color: '#3f6a35', shape: { type: 'sphere', radius: 0.7 } },
-  stone_deposit: { color: '#7b7f83', shape: { type: 'sphere', radius: 1.1 } },
-  branch_pile: { color: '#7a5c38', shape: { type: 'box', size: [1.2, 0.4, 1.2] } },
-  loose_stones: { color: '#8a8d90', shape: { type: 'box', size: [1, 0.35, 1] } },
-  scrap_pile: { color: '#6d6f72', shape: { type: 'box', size: [1.4, 0.6, 1.4] } },
-}
-
-interface PatchState {
-  id: string
-  origin: [number, number, number]
-  halfExtent: number
-  sub: number
-  heights: Float32Array
-  rot?: [number, number, number]
-  /** Canonical scale (X/Z footprint, Y height displacement). */
-  scale?: [number, number, number]
-  tex?: string
-  color?: string
-  /** Legacy three-way splat; migrated into `surface.paint` on first use. */
-  mix?: string
-  uv?: FaceStyle
-  /** Base style + paint layers (the v2 surface model). */
-  surface?: SurfaceMaterialData
-}
-
-type UndoOp =
-  | { kind: 'terrain'; target: string; before: Float32Array; after: Float32Array }
-  | { kind: 'paint'; before: ImageData; after: ImageData }
-  | { kind: 'place'; body?: StaticBody; node?: MapNodeSpawn }
-  | { kind: 'delete'; body?: StaticBody; node?: MapNodeSpawn }
-  | { kind: 'edit'; body: StaticBody; before: StaticBody; after: StaticBody }
-  | {
-      kind: 'nodemove'
-      node: MapNodeSpawn
-      before: [number, number, number]
-      after: [number, number, number]
-    }
-  | { kind: 'patchadd'; patch: PatchState }
-  | { kind: 'patchdelete'; patch: PatchState }
-  | {
-      kind: 'propedit'
-      add: boolean
-      prop: { item: string; pos: [number, number, number]; yaw?: number }
-    }
-  | { kind: 'batch'; items: { body: StaticBody; before: StaticBody; after: StaticBody }[] }
-  | {
-      kind: 'propmove'
-      prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number }
-      before: [number, number, number]
-      after: [number, number, number]
-    }
-  | {
-      kind: 'spawnedit'
-      before: [number, number, number] | null
-      after: [number, number, number] | null
-    }
-  | {
-      kind: 'patchprop'
-      patch: PatchState
-      before: { tex?: string; color?: string; uv?: FaceStyle }
-      after: { tex?: string; color?: string; uv?: FaceStyle }
-    }
-  | { kind: 'maskpaint'; patchId: string; before: MaskPatch; after: MaskPatch }
-  | { kind: 'lightadd'; light: MapLight }
-  | { kind: 'lightdelete'; light: MapLight }
-  | { kind: 'lightedit'; light: MapLight; before: MapLight; after: MapLight }
-  | { kind: 'batchdelete'; bodies: StaticBody[] }
-  | { kind: 'group'; label: string; ops: UndoOp[] }
-  | { kind: 'mainconvert'; prev: Float32Array; patch: PatchState | null }
-  | {
-      kind: 'patchedit'
-      id: string
-      before: { origin: [number, number, number]; rot?: [number, number, number] }
-      after: { origin: [number, number, number]; rot?: [number, number, number] }
-    }
+import {
+  ENTITY_DEFS,
+  NODE_LOOKS,
+  PLACEABLES,
+  TEXTURES,
+  newId,
+  type Placeable,
+  type Tool,
+} from './catalog.js'
+import type { PatchState, UndoOp } from './document/editorTypes.js'
+import { createSettingsPanel } from './ui/settingsPanel.js'
+import { PeerAvatars } from './collaboration/peerAvatars.js'
+import { createIssuesPanel, type EditorIssue } from './ui/issuesPanel.js'
 
 async function boot(): Promise<void> {
   const canvas = document.getElementById('game') as HTMLCanvasElement
@@ -3637,7 +3498,15 @@ async function boot(): Promise<void> {
     }
   })
 
-  let lastSig = ''
+  /**
+   * Signature of the artifact we last synced with. Seeded from the BOOT map:
+   * leaving it empty made the very first poll rebuild the whole world —
+   * disposing meshes, dropping the selection and blanking terrain wires
+   * roughly six seconds after load.
+   */
+  const sigOf = (m: MapFile): string =>
+    `${m.heights.length}:${m.statics.length}:${(m.nodes ?? []).length}:${(m.mix ?? '').length}:${(m.terrains ?? []).length}:${(m.models ?? []).length}:${(m.textures ?? []).length}:${(m.lights ?? []).length}`
+  let lastSig = bootMap ? sigOf(bootMap) : ''
   /** Revision of the map we last loaded — sent as If-Match on save. */
   let baseRevision = bootRevision
 
@@ -3693,7 +3562,7 @@ async function boot(): Promise<void> {
         history.markSaved()
         nonHistoryDirt = false
         updateDirty()
-        lastSig = `${file.heights.length}:${file.statics.length}:${(file.nodes ?? []).length}:${(file.mix ?? '').length}:${(file.terrains ?? []).length}:${(file.models ?? []).length}:${(file.textures ?? []).length}:${(file.lights ?? []).length}`
+        lastSig = sigOf(file)
       }
       if (resp.status === 409) {
         $e('conflict').style.display = 'flex'
@@ -3728,7 +3597,7 @@ async function boot(): Promise<void> {
       if (!map || map.v !== 1 || map.sub !== SUB) return
       // Revision safety: a remote save must never wipe local dirty work.
       if (dirty) {
-        const sig2 = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}:${(map.lights ?? []).length}`
+        const sig2 = sigOf(map)
         if (sig2 !== lastSig) {
           lastSig = sig2
           $e('conflict').style.display = 'flex'
@@ -3736,7 +3605,7 @@ async function boot(): Promise<void> {
         }
         return
       }
-      const sig = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}:${(map.lights ?? []).length}`
+      const sig = sigOf(map)
       if (sig === lastSig) return
       lastSig = sig
       if (served) baseRevision = served
@@ -3803,68 +3672,8 @@ async function boot(): Promise<void> {
   })
 
   // ── Live presence: co-editors as floating eyeballs ──────────────────
-  interface PeerAvatar {
-    root: TransformNode
-    label: Mesh
-  }
-  const peerAvatars = new Map<number, PeerAvatar>()
-  const peersEl = $e('peers')
-  const updatePeersLabel = (): void => {
-    peersEl.textContent =
-      peerAvatars.size > 0
-        ? `👁 ${peerAvatars.size} co-editor${peerAvatars.size > 1 ? 's' : ''} online`
-        : ''
-  }
-  const makeEyeball = (id: number, name: string): PeerAvatar => {
-    const root = new TransformNode(`peer:${id}`, scene)
-    const eye = CreateSphere(`peer:${id}:eye`, { diameter: 0.9, segments: 12 }, scene)
-    eye.parent = root
-    const em = new StandardMaterial(`peer:${id}:m`, scene)
-    em.diffuseColor = new Color3(0.95, 0.95, 0.98)
-    em.emissiveColor = new Color3(0.25, 0.25, 0.28)
-    eye.material = em
-    const iris = CreateCylinder(
-      `peer:${id}:iris`,
-      { diameter: 0.34, height: 0.04, tessellation: 16 },
-      scene,
-    )
-    iris.parent = root
-    iris.rotation.x = Math.PI / 2
-    iris.position.z = 0.44
-    const im = new StandardMaterial(`peer:${id}:im`, scene)
-    im.diffuseColor = new Color3(0.1, 0.35, 0.7)
-    im.emissiveColor = new Color3(0.05, 0.2, 0.45)
-    iris.material = im
-    const label = makeLabel(name)
-    label.parent = root
-    label.position.y = 0.85
-    for (const m of [eye, iris, label]) m.isPickable = false
-    return { root, label }
-  }
-  const makeLabel = (text: string): Mesh => {
-    const tex = new DynamicTexture(`lbl:${text}`, { width: 256, height: 64 }, scene, false)
-    const ctx = tex.getContext() as CanvasRenderingContext2D
-    ctx.font = 'bold 34px system-ui'
-    ctx.textAlign = 'center'
-    ctx.fillStyle = '#7fd0ff'
-    ctx.fillText(text.slice(0, 14), 128, 44)
-    tex.update()
-    tex.hasAlpha = true
-    const plane = new Mesh('lblp', scene)
-    const vdp = new VertexData()
-    vdp.positions = [-1, -0.25, 0, 1, -0.25, 0, 1, 0.25, 0, -1, 0.25, 0]
-    vdp.indices = [0, 1, 2, 0, 2, 3]
-    vdp.uvs = [0, 0, 1, 0, 1, 1, 0, 1]
-    vdp.applyToMesh(plane)
-    const lm = new StandardMaterial('lblm', scene)
-    lm.diffuseTexture = tex
-    lm.emissiveColor = new Color3(1, 1, 1)
-    lm.disableLighting = true
-    lm.backFaceCulling = false
-    plane.material = lm
-    plane.billboardMode = Mesh.BILLBOARDMODE_ALL
-    return plane
-  }
+  const peers = new PeerAvatars(scene, $e('peers'))
+
   let ws: WebSocket | null = null
   let myPeerId = -1
   const connectPresence = (): void => {
@@ -3937,21 +3746,9 @@ async function boot(): Promise<void> {
         return
       }
       if (msg.t === 'peer' && msg.id !== undefined && msg.pos) {
-        let avatar = peerAvatars.get(msg.id)
-        if (!avatar) {
-          avatar = makeEyeball(msg.id, msg.name ?? 'editor')
-          peerAvatars.set(msg.id, avatar)
-          updatePeersLabel()
-        }
-        avatar.root.position.set(msg.pos[0] ?? 0, msg.pos[1] ?? 0, msg.pos[2] ?? 0)
-        avatar.root.rotation.set(msg.pitch ?? 0, msg.yaw ?? 0, 0)
+        peers.update(msg.id, msg.name ?? 'editor', msg.pos, msg.yaw ?? 0, msg.pitch ?? 0)
       } else if (msg.t === 'peer_gone' && msg.id !== undefined) {
-        const avatar = peerAvatars.get(msg.id)
-        if (avatar) {
-          avatar.root.dispose(false, true)
-          peerAvatars.delete(msg.id)
-          updatePeersLabel()
-        }
+        peers.remove(msg.id)
         remoteSel.delete(msg.id)
         refreshSelectionVisuals()
       } else if (msg.t === 'map_saved') {
@@ -4252,69 +4049,7 @@ async function boot(): Promise<void> {
     texmanEl.style.display = 'none'
   })
 
-  // ── Settings: remappable hotkeys ────────────────────────────────────
-  const settingsEl = $e('settings')
-  let recording: string | null = null
-  const renderKeys = (): void => {
-    const list = $e('keys-list')
-    list.replaceChildren()
-    let lastGroup = ''
-    for (const a of ACTIONS) {
-      if (a.group !== lastGroup) {
-        lastGroup = a.group
-        const h = document.createElement('div')
-        h.textContent = a.group.toUpperCase()
-        h.style.cssText = 'color:#e8b54a;font-size:10px;letter-spacing:.1em;margin-top:6px'
-        list.appendChild(h)
-      }
-      const row = document.createElement('div')
-      row.className = 'krow'
-      const lbl = document.createElement('span')
-      lbl.textContent = a.label
-      const inp = document.createElement('input')
-      inp.readOnly = true
-      inp.value = formatBinding(bindingOf(a.id))
-      inp.addEventListener('focus', () => {
-        recording = a.id
-        inp.value = 'press key…'
-      })
-      inp.addEventListener('blur', () => {
-        recording = null
-        inp.value = formatBinding(bindingOf(a.id))
-      })
-      inp.addEventListener('keydown', (e) => {
-        e.preventDefault()
-        e.stopPropagation()
-        if (['ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight'].includes(e.code)) return
-        if (e.code === 'Escape') {
-          inp.blur()
-          return
-        }
-        const b2 = bindingFromEvent(e)
-        const conflicts = findConflicts(bindings, b2, a.id)
-        if (conflicts.length > 0) {
-          const names = conflicts
-            .map((cid) => ACTIONS.find((x) => x.id === cid)?.label ?? cid)
-            .join(', ')
-          inp.value = `⚠ used by ${names}`
-          inp.style.color = '#ff8f6e'
-          setTimeout(() => {
-            inp.style.color = ''
-            inp.value = formatBinding(bindingOf(a.id))
-          }, 1600)
-          return
-        }
-        bindings[a.id] = b2
-        localStorage.setItem('hobo.editor.bindings', JSON.stringify(bindings))
-        inp.value = formatBinding(b2)
-        refreshToolButtons()
-        renderHelp()
-        inp.blur()
-      })
-      row.append(lbl, inp)
-      list.appendChild(row)
-    }
-  }
+  // ── Settings: remappable hotkeys (see ui/settingsPanel.ts) ──────────
   const refreshToolButtons = (): void => {
     toolsEl.querySelectorAll('button').forEach((b) => {
       const hk = b.querySelector('.hk')
@@ -4322,22 +4057,14 @@ async function boot(): Promise<void> {
       if (hk && t) hk.textContent = formatBinding(bindingOf(`tool.${t}`))
     })
   }
-  document.getElementById('settings-btn')?.addEventListener('click', () => {
-    settingsEl.style.display = settingsEl.style.display === 'flex' ? 'none' : 'flex'
-    renderKeys()
+  createSettingsPanel({
+    bindings,
+    bindingOf,
+    onChanged: () => {
+      refreshToolButtons()
+      renderHelp()
+    },
   })
-  document.getElementById('settings-close')?.addEventListener('click', () => {
-    settingsEl.style.display = 'none'
-  })
-  document.getElementById('keys-reset')?.addEventListener('click', () => {
-    localStorage.removeItem('hobo.editor.bindings')
-    const fresh = loadBindings(null)
-    for (const k of Object.keys(bindings)) delete bindings[k]
-    Object.assign(bindings, fresh)
-    renderKeys()
-    refreshToolButtons()
-  })
-  void recording
 
   // ── Collapsible sidebar (Photoshop-style icon rail; expanded default) ─
   const panel = $e('panel')
@@ -4490,6 +4217,77 @@ async function boot(): Promise<void> {
     }
   }
 
+  // ── Issues: live map validation (see ui/issuesPanel.ts) ─────────────
+  // The same checks the save pipeline runs, surfaced while the author can
+  // still act on them instead of only as a rejection message.
+  const issuesPanel = createIssuesPanel({
+    collect: () => {
+      const out: EditorIssue[] = []
+      const known = (ref: string): boolean =>
+        ref === 'none' ||
+        !ref.startsWith('custom:') ||
+        mapTextures.some((t) => `custom:${t.name}` === ref)
+      const seen = new Set<string>()
+      const claim = (id: string | undefined, what: string): void => {
+        if (!id) return
+        if (seen.has(id))
+          out.push({ severity: 'error', message: `duplicate id "${id}" (${what})`, objectId: id })
+        seen.add(id)
+      }
+      for (const patch of patches) {
+        const oid = `terrain:${patch.id}`
+        claim(oid, 'terrain')
+        for (const msg of validateSurface(surfaceDataOf(patch), known))
+          out.push({ severity: 'error', message: `terrain: ${msg}`, objectId: oid })
+      }
+      for (const b of placedStatics) {
+        claim(b.id, 'static')
+        if (b.tex && !known(b.tex))
+          out.push({
+            severity: 'error',
+            message: `static: missing texture "${b.tex}"`,
+            ...(b.id ? { objectId: b.id } : {}),
+          })
+        if (b.model && !mapModels.some((m) => m.id === b.model))
+          out.push({
+            severity: 'error',
+            message: `static: missing model "${b.model}"`,
+            ...(b.id ? { objectId: b.id } : {}),
+          })
+        if (b.scale && b.scale.some((v) => Math.abs(v) < 1e-4))
+          out.push({
+            severity: 'error',
+            message: 'static: zero scale collapses the collider',
+            ...(b.id ? { objectId: b.id } : {}),
+          })
+      }
+      for (const n of placedNodes) claim(n.id, 'node')
+      for (const pr of placedProps) claim(pr.id, 'prop')
+      for (const l of mapLightsArr) claim(l.id, 'light')
+      if (mapLightsArr.filter((l) => l.shadows).length > 3)
+        out.push({
+          severity: 'warning',
+          message: 'more than 3 shadow-casting lights — the game caps shadows at 3',
+        })
+      if (!spawnPos)
+        out.push({ severity: 'warning', message: 'no spawn point — players spawn at the origin' })
+      if (patches.length === 0 && placedStatics.length === 0)
+        out.push({
+          severity: 'info',
+          message: 'empty map — place a mesh to start (lands at 0,0,0)',
+        })
+      return out
+    },
+    focus: (objectId) => {
+      setTool('select')
+      selectionMgr.replace(objectId)
+      rebuildSelectionViews()
+      runAction('cam.frame')
+    },
+  })
+  // Re-validate whenever the document changes.
+  history.onChange(() => issuesPanel.refresh())
+
   // Test/debug handle (harness-only; not part of any API contract).
   ;(window as unknown as Record<string, unknown>)['__editor'] = {
     probeVersion: 1,
@@ -4550,6 +4348,7 @@ async function boot(): Promise<void> {
       paintTexPicker.sync()
     },
     setToolByName: (t: string) => setTool(t as Tool),
+    issueCount: () => issuesPanel.count(),
     selectByIds: (ids: string[]) => {
       selectionMgr.replaceMany(ids)
       rebuildSelectionViews()
