@@ -11,6 +11,8 @@ import { WorldShapeSchema } from './item.js'
 const vec3 = z.tuple([z.number(), z.number(), z.number()])
 
 export const StaticBodySchema = z.object({
+  /** Stable editor/document id (selection, collab locks). */
+  id: z.string().optional(),
   shape: WorldShapeSchema,
   pos: vec3,
   /** Yaw rotation; ignored when `rot` is present. */

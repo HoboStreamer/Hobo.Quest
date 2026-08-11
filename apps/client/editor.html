@@ -98,15 +98,36 @@
         padding: 3px 8px;
         cursor: pointer;
       }
+      #panel {
+        box-sizing: border-box;
+        overflow-x: hidden;
+      }
+      #panel .keep-collapsed {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: rgba(16, 20, 26, 0.94);
+        padding-bottom: 4px;
+      }
       #panel.collapsed {
-        width: 52px;
+        width: 56px;
         padding: 8px 6px;
       }
       #panel.collapsed > :not(.keep-collapsed):not(.tools) {
         display: none;
       }
+      #panel.collapsed .keep-collapsed h1 {
+        display: none;
+      }
+      #panel.collapsed .keep-collapsed #settings-btn {
+        display: none;
+      }
       #panel.collapsed .tools {
         grid-template-columns: 1fr;
+      }
+      #panel.collapsed .tools button {
+        padding: 7px 0;
+        text-align: center;
       }
       #panel.collapsed .tools button .tool-label,
       #panel.collapsed .tools button .hk {
@@ -333,6 +354,14 @@
       <input id="key" type="password" placeholder="hobo.tools admin token / editor key" />
       <button id="save">💾 Save map (applies live)</button>
       <div id="status"></div>
+      <div id="conflict" style="display: none; flex-direction: column; gap: 6px">
+        <div style="color: #ffb46e; font-size: 12px">
+          ⚠ Newer map saved by another admin while you have unsaved changes.
+        </div>
+        <button id="conflict-load" class="mini">Discard mine · load theirs</button>
+        <button id="conflict-export" class="mini">💾 Download my local copy</button>
+        <div class="hint">Saving now overwrites their version with yours.</div>
+      </div>
       <div class="hint">
         <b>1-4/Q</b> tools · <b>Z</b> free-look · WASD+QE fly (<b>Shift</b> = fast) ·
         <b>LMB</b> raise / <b>RMB</b> lower · <b>[ ]</b> radius · <b>Shift+[ ]</b> strength · wheel

@@ -29,7 +29,17 @@ import {
   type MapNodeSpawn,
   type StaticBody,
 } from '@hobo/content'
+import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer.js'
 import { meshForShape } from '../render/sceneSetup.js'
+import {
+  ACTIONS,
+  bindingFromEvent,
+  bindingMatches,
+  findConflicts,
+  formatBinding,
+  loadBindings,
+  type Binding,
+} from './bindings.js'
 
 /**
  * Hobo.Quest map editor (/editor): the world ships as a blank floor and
@@ -49,28 +59,10 @@ const MIX = 512
 
 type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select'
 
-/** Blender-flavored, user-configurable hotkeys (settings ⚙). */
-const DEFAULT_KEYS: Record<string, string> = {
-  terrain: '1',
-  paint: '2',
-  entity: '3',
-  mesh: '4',
-  select: 'q',
-  grab: 'g',
-  rotate: 'r',
-  scale: 's',
-  freelook: 'z',
-}
-function loadKeys(): Record<string, string> {
-  try {
-    return {
-      ...DEFAULT_KEYS,
-      ...(JSON.parse(localStorage.getItem('hobo.editor.keys') ?? '{}') as Record<string, string>),
-    }
-  } catch {
-    return { ...DEFAULT_KEYS }
-  }
-}
+/** Session-stable id generator for map objects (never array positions). */
+let idCounter = 0
+const newId = (prefix: string): string =>
+  `${prefix}-${Date.now().toString(36)}-${(idCounter++).toString(36)}`
 
 interface Placeable {
   name: string
@@ -174,6 +166,17 @@ type UndoOp =
     }
   | { kind: 'batch'; items: { body: StaticBody; before: StaticBody; after: StaticBody }[] }
   | {
+      kind: 'propmove'
+      prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number }
+      before: [number, number, number]
+      after: [number, number, number]
+    }
+  | {
+      kind: 'spawnedit'
+      before: [number, number, number] | null
+      after: [number, number, number] | null
+    }
+  | {
       kind: 'patchedit'
       id: string
       before: { origin: [number, number, number]; rot?: [number, number, number] }
@@ -192,42 +195,58 @@ async function boot(): Promise<void> {
   const camera = new FreeCamera('cam', new Vector3(0, 45, -55), scene)
   camera.setTarget(new Vector3(0, 0, 0))
   camera.minZ = 0.1
-  camera.speed = 1.6
-  camera.attachControl(canvas, true)
-  camera.inputs.removeByType('FreeCameraMouseInput')
-  camera.keysUp = [87]
-  camera.keysDown = [83]
-  camera.keysLeft = [65]
-  camera.keysRight = [68]
-  camera.keysUpward = [69]
-  camera.keysDownward = [81]
+  // No Babylon camera inputs at all — the editor's action system drives
+  // flight, and pointer handlers below drive orbit/pan/zoom. Nothing to
+  // fight with, everything remappable.
+  camera.inputs.clear()
   let freeLook = false
   document.addEventListener('pointerlockchange', () => {
     freeLook = document.pointerLockElement === canvas
   })
+  // MMB navigation with POINTER CAPTURE: the drag keeps working even when
+  // the cursor leaves the canvas, and browser autoscroll never fires.
   let mmb: 'orbit' | 'pan' | null = null
+  let lastMX = 0
+  let lastMY = 0
   canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 1) e.preventDefault() // stop browser autoscroll
+    if (e.button === 1) e.preventDefault()
   })
+  canvas.addEventListener('auxclick', (e) => e.preventDefault())
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button === 1) {
       e.preventDefault()
       mmb = e.shiftKey ? 'pan' : 'orbit'
+      lastMX = e.clientX
+      lastMY = e.clientY
+      canvas.setPointerCapture(e.pointerId)
     }
   })
-  window.addEventListener('pointerup', (e) => {
-    if (e.button === 1) mmb = null
+  canvas.addEventListener('pointerup', (e) => {
+    if (e.button === 1) {
+      mmb = null
+      if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId)
+    }
   })
-  canvas.addEventListener('mousemove', (e) => {
-    if (mmb === 'orbit' || freeLook) {
-      camera.rotation.y += e.movementX * 0.0032
-      camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x + e.movementY * 0.0032))
-    } else if (mmb === 'pan') {
-      // Truck/pedestal along the camera's local axes, model-editor style.
+  canvas.addEventListener('pointermove', (e) => {
+    if (!mmb) return
+    const dx = e.clientX - lastMX
+    const dy = e.clientY - lastMY
+    lastMX = e.clientX
+    lastMY = e.clientY
+    if (mmb === 'orbit') {
+      camera.rotation.y += dx * 0.0038
+      camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x + dy * 0.0038))
+    } else {
       const right = camera.getDirection(new Vector3(1, 0, 0))
       const up = camera.getDirection(new Vector3(0, 1, 0))
-      camera.position.addInPlace(right.scale(-e.movementX * 0.05))
-      camera.position.addInPlace(up.scale(e.movementY * 0.05))
+      camera.position.addInPlace(right.scale(-dx * 0.05))
+      camera.position.addInPlace(up.scale(dy * 0.05))
+    }
+  })
+  canvas.addEventListener('mousemove', (e) => {
+    if (freeLook) {
+      camera.rotation.y += e.movementX * 0.0032
+      camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x + e.movementY * 0.0032))
     }
   })
 
@@ -236,17 +255,14 @@ async function boot(): Promise<void> {
   let placedStatics: StaticBody[] = []
   let placedNodes: MapNodeSpawn[] = []
   let savedMix: string | undefined
-  try {
-    const map = (await (await fetch('/map.json')).json()) as MapFile | null
-    if (map && map.v === 1 && map.sub === SUB) {
-      heights = decodeHeights(map.heights)
-      placedStatics = map.statics
-      placedNodes = map.nodes ?? []
-      savedMix = map.mix
-    } else {
-      heights = defaultHeights(world, SUB)
-    }
-  } catch {
+  // ONE boot fetch: every loader below reads this same artifact.
+  const bootMap = (await (await fetch('/map.json')).json().catch(() => null)) as MapFile | null
+  if (bootMap && bootMap.v === 1 && bootMap.sub === SUB) {
+    heights = decodeHeights(bootMap.heights)
+    placedStatics = bootMap.statics
+    placedNodes = bootMap.nodes ?? []
+    savedMix = bootMap.mix
+  } else {
     heights = defaultHeights(world, SUB)
   }
 
@@ -353,8 +369,16 @@ async function boot(): Promise<void> {
     }
     return mesh
   }
-  const propMeshes = new Map<Mesh, { item: string; pos: [number, number, number]; yaw?: number }>()
-  const renderProp = (pr: { item: string; pos: [number, number, number]; yaw?: number }): Mesh => {
+  const propMeshes = new Map<
+    Mesh,
+    { id?: string; item: string; pos: [number, number, number]; yaw?: number }
+  >()
+  const renderProp = (pr: {
+    id?: string
+    item: string
+    pos: [number, number, number]
+    yaw?: number
+  }): Mesh => {
     const rep = content.worldRepOf(pr.item)
     const mesh = meshForShape(scene, `pr:${Math.random()}`, rep.shape, rep.color)
     const h =
@@ -400,9 +424,10 @@ async function boot(): Promise<void> {
   // ── UI ──────────────────────────────────────────────────────────────
   const $ = (id: string) => document.getElementById(id) as HTMLInputElement
   const $e = (id: string) => document.getElementById(id) as HTMLElement
-  let tool: Tool = 'terrain'
+  let tool: Tool | null = null
   const toolsEl = $e('tools')
-  const keys = loadKeys()
+  const bindings = loadBindings(localStorage.getItem('hobo.editor.bindings'))
+  const bindingOf = (action: string): Binding => bindings[action] ?? { code: 'F24' }
   const TOOLS: [Tool, string][] = [
     ['terrain', '⛰ Terrain'],
     ['paint', '🖌 Paint'],
@@ -413,7 +438,9 @@ async function boot(): Promise<void> {
   const terrainMode = (): 'sculpt' | 'smooth' | 'flatten' =>
     (document.getElementById('terrain-mode') as HTMLSelectElement).value as
       'sculpt' | 'smooth' | 'flatten'
-  const setTool = (id: Tool): void => {
+  /** Toggle semantics: activating the active tool deactivates it (null). */
+  const setTool = (want: Tool | null): void => {
+    const id = want === tool ? null : want
     tool = id
     toolsEl
       .querySelectorAll('button')
@@ -428,12 +455,13 @@ async function boot(): Promise<void> {
       id === 'mesh' || id === 'entity' || id === 'select' ? 'flex' : 'none'
     if (id !== 'select') deselect()
     if (id !== 'mesh' && id !== 'entity') ghost?.setEnabled(false)
+    status.textContent = id === null ? 'no tool active — camera only' : ''
   }
   for (const [id, label] of TOOLS) {
     const b = document.createElement('button')
     b.dataset['tool'] = id
     const icon = label.slice(0, label.indexOf(' '))
-    b.innerHTML = `${icon} <span class="tool-label">${label.slice(label.indexOf(' ') + 1)}</span><span class="hk">${(keys[id] ?? '').toUpperCase()}</span>`
+    b.innerHTML = `${icon} <span class="tool-label">${label.slice(label.indexOf(' ') + 1)}</span><span class="hk">${formatBinding(bindingOf(`tool.${id}`))}</span>`
     b.title = label
     b.addEventListener('click', () => setTool(id))
     toolsEl.appendChild(b)
@@ -468,19 +496,33 @@ async function boot(): Promise<void> {
   const undoStack: UndoOp[] = []
   const redoStack: UndoOp[] = []
   let dirty = false
+  let opSeq = 0
+  const opIds = new WeakMap<UndoOp, number>()
+  /** Sequence id of the op at the top of the undo stack when last saved. */
+  let savedTopOp = 0
+  let nonHistoryDirt = false // mutations that bypass history (rare)
+  const topOpId = (): number => {
+    const top = undoStack[undoStack.length - 1]
+    return top ? (opIds.get(top) ?? -1) : 0
+  }
   const saveBtn = document.getElementById('save') as HTMLButtonElement
+  const updateDirty = (): void => {
+    dirty = nonHistoryDirt || topOpId() !== savedTopOp
+    saveBtn.textContent = dirty ? '💾 Save map ● (unsaved changes)' : '💾 Save map (applies live)'
+  }
   const markDirty = (): void => {
-    dirty = true
-    saveBtn.textContent = '💾 Save map ● (unsaved changes)'
+    nonHistoryDirt = true
+    updateDirty()
   }
   window.addEventListener('beforeunload', (e) => {
     if (dirty) e.preventDefault()
   })
   const pushUndo = (op: UndoOp): void => {
+    opIds.set(op, ++opSeq)
     undoStack.push(op)
     if (undoStack.length > 40) undoStack.shift()
     redoStack.length = 0
-    markDirty()
+    updateDirty()
   }
   const findMesh = (body?: StaticBody, node?: MapNodeSpawn): Mesh | null => {
     if (body) for (const [m, b] of staticMeshes) if (b === body) return m
@@ -546,6 +588,16 @@ async function boot(): Promise<void> {
         placedProps.push(op.prop)
         renderProp(op.prop)
       }
+    } else if (op.kind === 'propmove') {
+      const src = dir === 'undo' ? op.before : op.after
+      op.prop.pos = [src[0], src[1], src[2]]
+      for (const [m, pr] of propMeshes) {
+        if (pr === op.prop) m.position.set(src[0], sampleH(src[0], src[2]) + 0.5, src[2])
+      }
+    } else if (op.kind === 'spawnedit') {
+      const src = dir === 'undo' ? op.before : op.after
+      spawnPos = src ? [src[0], src[1], src[2]] : null
+      placeSpawnFlag()
     } else if (op.kind === 'batch') {
       for (const it of op.items) {
         const src = dir === 'undo' ? it.before : it.after
@@ -592,6 +644,7 @@ async function boot(): Promise<void> {
     if (!op) return
     applyOp(op, 'undo')
     redoStack.push(op)
+    updateDirty()
     status.textContent = '↶ undo'
   }
   const redo = (): void => {
@@ -599,6 +652,7 @@ async function boot(): Promise<void> {
     if (!op) return
     applyOp(op, 'redo')
     undoStack.push(op)
+    updateDirty()
     status.textContent = '↷ redo'
   }
 
@@ -613,7 +667,7 @@ async function boot(): Promise<void> {
   }
   const terrainTargets: TerrainTarget[] = []
   const patchMeshes = new Map<Mesh, PatchState>()
-  const extras = (await (await fetch('/map.json')).json().catch(() => null)) as MapFile | null
+  const extras = bootMap
   let patches: PatchState[] = (extras?.terrains ?? []).map((t) => ({
     ...t,
     heights: decodeHeights(t.heights),
@@ -621,8 +675,12 @@ async function boot(): Promise<void> {
   let mapModels: { id: string; name: string; glb: string; bounds: [number, number, number] }[] =
     extras?.models ?? []
   let mapTextures: { name: string; dataUrl: string }[] = extras?.textures ?? []
-  let placedProps: { item: string; pos: [number, number, number]; yaw?: number }[] =
+  let placedProps: { id?: string; item: string; pos: [number, number, number]; yaw?: number }[] =
     extras?.props ?? []
+  // Stable document ids: everything editable gets one (persisted on save).
+  for (const b of placedStatics) b.id = b.id ?? newId('s')
+  for (const n of placedNodes) n.id = n.id ?? newId('n')
+  for (const pr of placedProps) pr.id = pr.id ?? newId('pr')
   let spawnPos: [number, number, number] | null = extras?.spawn ?? null
   let spawnYaw = extras?.spawnYaw ?? 0
 
@@ -640,7 +698,7 @@ async function boot(): Promise<void> {
     )
     flag.parent = spawnFlag
     flag.position.set(0.65, 2.6, 0)
-    for (const m of [pole, flag]) m.isPickable = false
+    for (const m of [pole, flag]) m.isPickable = true
   }
   const placeSpawnFlag = (): void => {
     if (spawnPos) {
@@ -864,13 +922,33 @@ async function boot(): Promise<void> {
     )
     return { pos, rot }
   }
+  // Wheel: rotates the placement preview WHILE placing; otherwise it is
+  // cursor-centric zoom — fly toward the picked point under the mouse
+  // (or a pivot along the view direction over empty space), with speed
+  // scaled by distance so close work is precise and travel is fast.
   canvas.addEventListener(
     'wheel',
     (e) => {
-      if (tool !== 'mesh' && tool !== 'entity') return
       e.preventDefault()
-      const step = shift ? Math.PI / 60 : Math.PI / 12
-      placeYaw += (e.deltaY > 0 ? 1 : -1) * step
+      if (tool === 'mesh' || tool === 'entity') {
+        const step = shift ? Math.PI / 60 : Math.PI / 12
+        placeYaw += (e.deltaY > 0 ? 1 : -1) * step
+        return
+      }
+      const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m !== ghost && m !== wire)
+      const target =
+        pick?.hit && pick.pickedPoint
+          ? pick.pickedPoint
+          : camera.position.add(camera.getForwardRay(1).direction.scale(40))
+      const toTarget = target.subtract(camera.position)
+      const dist = toTarget.length()
+      const dirIn = e.deltaY < 0
+      // 18% of the distance per notch, clamped so we neither crawl at
+      // range nor teleport through the target.
+      const step = Math.min(60, Math.max(0.4, dist * 0.18))
+      const move = toTarget.normalize().scale(dirIn ? step : -step)
+      if (dirIn && dist - step < 1.2) return // never zoom through the point
+      camera.position.addInPlace(move)
     },
     { passive: false },
   )
@@ -880,10 +958,11 @@ async function boot(): Promise<void> {
       tool === 'entity' ? ENTITY_DEFS[Number(entitySel.value)] : PLACEABLES[Number(placeSel.value)]
     if (!def) return
     if (def.kind === 'spawn') {
+      const before = spawnPos ? ([...spawnPos] as [number, number, number]) : null
       spawnPos = [pose.pos.x, pose.pos.y, pose.pos.z]
       spawnYaw = placeYaw
       placeSpawnFlag()
-      markDirty()
+      pushUndo({ kind: 'spawnedit', before, after: [...spawnPos] as [number, number, number] })
       status.textContent = '🚩 spawn point set — players appear here after save'
       return
     }
@@ -892,6 +971,7 @@ async function boot(): Promise<void> {
       if (!model) return
       const e = pose.rot.toEulerAngles()
       const body: StaticBody = {
+        id: newId('s'),
         shape: { type: 'box', size: [model.bounds[0], model.bounds[1], model.bounds[2]] },
         pos: [pose.pos.x, pose.pos.y, pose.pos.z],
         yaw: e.y,
@@ -925,6 +1005,7 @@ async function boot(): Promise<void> {
     if (def.kind === 'prop') {
       const e = pose.rot.toEulerAngles()
       const pr = {
+        id: newId('pr'),
         item: def.node!,
         pos: [pose.pos.x, 1, pose.pos.z] as [number, number, number],
         yaw: e.y,
@@ -937,7 +1018,11 @@ async function boot(): Promise<void> {
     }
     if (def.kind === 'node') {
       const ground = sampleH(pose.pos.x, pose.pos.z)
-      const node: MapNodeSpawn = { node: def.node!, pos: [pose.pos.x, 0, pose.pos.z] }
+      const node: MapNodeSpawn = {
+        id: newId('n'),
+        node: def.node!,
+        pos: [pose.pos.x, 0, pose.pos.z],
+      }
       void ground
       placedNodes.push(node)
       renderNode(node)
@@ -946,6 +1031,7 @@ async function boot(): Promise<void> {
     }
     const e = pose.rot.toEulerAngles()
     const body: StaticBody = {
+      id: newId('s'),
       shape: JSON.parse(JSON.stringify(def.shape)) as StaticBody['shape'],
       pos: [pose.pos.x, pose.pos.y, pose.pos.z],
       yaw: e.y,
@@ -962,6 +1048,71 @@ async function boot(): Promise<void> {
   }
 
   // ── Selection: gizmos + properties popover ──────────────────────────
+  // ── Central selection visuals: one HighlightLayer for everything.
+  // Colors: primary orange, secondary lighter, hover faint white, remote
+  // collaborators in their session color. Authored materials untouched.
+  const hl = new HighlightLayer('sel', scene, { blurHorizontalSize: 0.6, blurVerticalSize: 0.6 })
+  hl.innerGlow = false
+  const C_PRIMARY = Color3.FromHexString('#ff9d2e')
+  const C_SECONDARY = Color3.FromHexString('#ffd28f')
+  const C_HOVER = Color3.FromHexString('#cfe8ff')
+  const remoteSel = new Map<number, { color: Color3; ids: string[] }>()
+  let hoverMesh: Mesh | null = null
+  const meshById = (oid: string): Mesh | null => {
+    for (const [m, b] of staticMeshes) if (b.id === oid) return m
+    for (const [m, n] of nodeMeshes) if (n.id === oid) return m
+    for (const [m, pr] of propMeshes) if (pr.id === oid) return m
+    for (const [m, pp] of patchMeshes) if (`terrain:${pp.id}` === oid) return m
+    return null
+  }
+  /** Recompute every highlight from current local + remote selection. */
+  const refreshSelectionVisuals = (): void => {
+    hl.removeAllMeshes()
+    for (const [, r] of remoteSel) {
+      for (const oid of r.ids) {
+        const m = meshById(oid)
+        if (m) hl.addMesh(m, r.color)
+      }
+    }
+    for (const it of multiSel)
+      hl.addMesh(it.mesh, it.mesh === multiSel[0]?.mesh ? C_PRIMARY : C_SECONDARY)
+    if (selected) hl.addMesh(selected.mesh, C_PRIMARY)
+    if (selectedNode) hl.addMesh(selectedNode.mesh, C_PRIMARY)
+    if (selectedProp) hl.addMesh(selectedProp.mesh, C_PRIMARY)
+    if (selectedPatch) hl.addMesh(selectedPatch.mesh, C_PRIMARY)
+    if (spawnSelected) for (const c of spawnFlag.getChildMeshes()) hl.addMesh(c as Mesh, C_PRIMARY)
+    if (hoverMesh && tool === 'select') hl.addMesh(hoverMesh, C_HOVER)
+    // Starter island: persistent wireframe while selected (not hover-only).
+    wire.setEnabled(mainSelected || wireHover)
+  }
+  let wireHover = false
+
+  // ── Collaboration locks (server-authoritative, transient) ───────────
+  const lockOwners = new Map<string, { name: string; color: string }>()
+  let myLockedIds: string[] = []
+  let lockDenied: { owner: string } | null = null
+  const requestLock = (ids: string[]): void => {
+    myLockedIds = ids
+    lockDenied = null
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'lock', ids }))
+  }
+  const releaseLocks = (): void => {
+    if (myLockedIds.length && ws?.readyState === WebSocket.OPEN)
+      ws.send(JSON.stringify({ t: 'unlock', ids: myLockedIds }))
+    myLockedIds = []
+    lockDenied = null
+  }
+  const sendSelection = (ids: string[]): void => {
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ t: 'sel', ids }))
+  }
+  const setInspectorLocked = (locked: boolean, owner?: string): void => {
+    props.querySelectorAll('input,select,button').forEach((el) => {
+      ;(el as HTMLInputElement).disabled = locked
+    })
+    const t = $e('props-title')
+    if (locked && owner) t.textContent = `${t.textContent} · 🔒 editing by ${owner}`
+  }
+
   const gizmos = new GizmoManager(scene)
   gizmos.usePointerToAttachGizmos = false
   gizmos.attachToMesh(null)
@@ -992,16 +1143,69 @@ async function boot(): Promise<void> {
   let selected: { mesh: Mesh; body: StaticBody; editBefore: StaticBody | null } | null = null
   let selectedNode: { mesh: Mesh; node: MapNodeSpawn; before: [number, number, number] } | null =
     null
+  let selectedProp: {
+    mesh: Mesh
+    prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number }
+    before: [number, number, number]
+  } | null = null
   let selectedPatch: { mesh: Mesh; patch: PatchState } | null = null
+  let spawnSelected = false
 
   const deselect = (): void => {
     mainSelected = false
+    spawnSelected = false
     clearMulti()
     gizmos.attachToMesh(null)
     props.style.display = 'none'
     selected = null
     selectedNode = null
+    selectedProp = null
     selectedPatch = null
+    releaseLocks()
+    sendSelection([])
+    setInspectorLocked(false)
+    refreshSelectionVisuals()
+  }
+
+  /** Lock + broadcast + visuals for the current selection's ids. */
+  const afterSelect = (ids: string[]): void => {
+    requestLock(ids)
+    sendSelection(ids)
+    setInspectorLocked(false)
+    refreshSelectionVisuals()
+  }
+
+  /** Props select like nodes: move gizmo + inspector, Del removes. */
+  const selectProp = (
+    mesh: Mesh,
+    prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number },
+  ): void => {
+    deselect()
+    selectedProp = { mesh, prop, before: [prop.pos[0], prop.pos[1], prop.pos[2]] }
+    setGizmoMode('move')
+    gizmos.attachToMesh(mesh)
+    props.style.display = 'flex'
+    props.style.left = '274px'
+    props.style.top = '12px'
+    $e('props-title').textContent = `prop: ${prop.item}`
+    for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
+    $('p-x').value = String(prop.pos[0])
+    $('p-y').value = '0'
+    $('p-z').value = String(prop.pos[2])
+    afterSelect(prop.id ? [prop.id] : [])
+  }
+
+  const selectSpawn = (): void => {
+    deselect()
+    spawnSelected = true
+    setGizmoMode('move')
+    gizmos.attachToNode(spawnFlag)
+    props.style.display = 'flex'
+    props.style.left = '274px'
+    props.style.top = '12px'
+    $e('props-title').textContent = '🚩 player spawn'
+    for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
+    afterSelect(['spawn'])
   }
 
   /** Nodes: position-only gizmo; drag end re-grounds and records undo. */
@@ -1019,6 +1223,7 @@ async function boot(): Promise<void> {
     $('p-y').value = '0'
     $('p-z').value = String(node.pos[2])
     status.textContent = 'drag arrows to move the node · Del removes it'
+    afterSelect(node.id ? [node.id] : [])
   }
 
   // ── Multi-select: Shift+click accumulates statics; a pivot node carries
@@ -1070,6 +1275,8 @@ async function boot(): Promise<void> {
     refreshMultiPivot()
     if (gizmoMode === 'scale') setGizmoMode('move')
     gizmos.attachToNode(multiPivot)
+    const ids = multiSel.map((it) => it.body.id).filter((x): x is string => Boolean(x))
+    afterSelect(ids)
     status.textContent = `${multiSel.length} selected — G/R to move/rotate together, Del deletes all`
   }
   const bakeMulti = (): void => {
@@ -1103,7 +1310,8 @@ async function boot(): Promise<void> {
     $e('props-title').textContent = 'starter island terrain'
     for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
     status.textContent =
-      'the default island — sculpt it, or press Del to sink it and build from patches'
+      'starter island — sculptable, Del sinks it; it cannot be moved (anchored at origin)'
+    afterSelect(['terrain:main'])
   }
 
   /** Patches: move + tilt the whole terrain patch. */
@@ -1128,6 +1336,7 @@ async function boot(): Promise<void> {
     texSel.value = patch.tex ?? ''
     ;($('p-color') as HTMLInputElement).value = patch.color ?? '#bfbfbf'
     status.textContent = 'sculpt patches with the Terrain tool · tilt for caves/overhangs'
+    afterSelect([`terrain:${patch.id}`])
   }
   const rebuildSelectedMesh = (body: StaticBody, oldMesh: Mesh): Mesh => {
     const wasSelected = selected?.mesh === oldMesh
@@ -1177,6 +1386,7 @@ async function boot(): Promise<void> {
     props.style.top = '12px'
     $e('props-title').textContent = `${body.shape.type} static`
     fillProps(body)
+    afterSelect(body.id ? [body.id] : [])
   }
   const snapshotBody = (b: StaticBody): StaticBody => JSON.parse(JSON.stringify(b)) as StaticBody
   const commitEdit = (): void => {
@@ -1310,14 +1520,32 @@ async function boot(): Promise<void> {
       markDirty()
     }
   }
-  const propInput = (id: string, apply: (v: number, b: StaticBody) => void): void => {
+  /** Reject NaN/Infinity (and non-positive dims) instead of corrupting. */
+  const safeNum = (raw: string, positive = false): number | null => {
+    const v = Number(raw)
+    if (!Number.isFinite(v)) return null
+    if (positive && v <= 0) return null
+    if (Math.abs(v) > 100_000) return null
+    return v
+  }
+  const propInput = (
+    id: string,
+    apply: (v: number, b: StaticBody) => void,
+    positive = false,
+  ): void => {
     $(id).addEventListener('change', () => {
+      const v = safeNum($(id).value, positive)
+      if (v === null) {
+        status.textContent = '⛔ invalid number'
+        if (selected) fillProps(selected.body)
+        return
+      }
       if (!selected) {
         applyManualPose()
         return
       }
       beginEdit()
-      apply(Number($(id).value), selected.body)
+      apply(v, selected.body)
       rebuildSelectedMesh(selected.body, selected.mesh)
       commitEdit()
     })
@@ -1347,12 +1575,12 @@ async function boot(): Promise<void> {
       rebuildSelectedMesh(selected.body, selected.mesh)
       commitEdit()
     })
-  propInput('d-x', (v, b) => b.shape.type === 'box' && (b.shape.size[0] = v))
-  propInput('d-y', (v, b) => b.shape.type === 'box' && (b.shape.size[1] = v))
-  propInput('d-z', (v, b) => b.shape.type === 'box' && (b.shape.size[2] = v))
-  propInput('d-r', (v, b) => b.shape.type === 'cylinder' && (b.shape.radius = v))
-  propInput('d-h', (v, b) => b.shape.type === 'cylinder' && (b.shape.height = v))
-  propInput('d-sr', (v, b) => b.shape.type === 'sphere' && (b.shape.radius = v))
+  propInput('d-x', (v, b) => b.shape.type === 'box' && (b.shape.size[0] = v), true)
+  propInput('d-y', (v, b) => b.shape.type === 'box' && (b.shape.size[1] = v), true)
+  propInput('d-z', (v, b) => b.shape.type === 'box' && (b.shape.size[2] = v), true)
+  propInput('d-r', (v, b) => b.shape.type === 'cylinder' && (b.shape.radius = v), true)
+  propInput('d-h', (v, b) => b.shape.type === 'cylinder' && (b.shape.height = v), true)
+  propInput('d-sr', (v, b) => b.shape.type === 'sphere' && (b.shape.radius = v), true)
   for (const [id, axis] of [
     ['s-x', 0],
     ['s-y', 1],
@@ -1443,6 +1671,23 @@ async function boot(): Promise<void> {
       status.textContent = `${items.length} objects deleted`
       return
     }
+    if (spawnSelected) {
+      const before = spawnPos ? ([...spawnPos] as [number, number, number]) : null
+      deselect()
+      spawnPos = null
+      placeSpawnFlag()
+      pushUndo({ kind: 'spawnedit', before, after: null })
+      return
+    }
+    if (selectedProp) {
+      const { mesh, prop } = selectedProp
+      deselect()
+      placedProps = placedProps.filter((x) => x !== prop)
+      propMeshes.delete(mesh)
+      mesh.dispose()
+      pushUndo({ kind: 'propedit', add: false, prop })
+      return
+    }
     if (selectedNode) {
       const { mesh, node } = selectedNode
       deselect()
@@ -1475,6 +1720,7 @@ async function boot(): Promise<void> {
   $e('p-dup').addEventListener('click', () => {
     if (!selected) return
     const copy = snapshotBody(selected.body)
+    copy.id = newId('s')
     copy.pos = [copy.pos[0] + 1, copy.pos[1], copy.pos[2] + 1]
     placedStatics.push(copy)
     const m = renderStatic(copy)
@@ -1492,6 +1738,12 @@ async function boot(): Promise<void> {
     if (tool === 'terrain') {
       const t = pickTerrainTarget()
       if (!t) return
+      const lockId = t.target.id === 'main' ? 'terrain:main' : `terrain:${t.target.id}`
+      if (lockOwners.has(lockId)) {
+        status.textContent = `🔒 terrain locked by ${lockOwners.get(lockId)!.name}`
+        return
+      }
+      requestLock([lockId])
       strokeTarget = t.target
       strokeBefore = t.target.heights.slice()
       painting = sign
@@ -1517,14 +1769,10 @@ async function boot(): Promise<void> {
       }
       if (mesh && staticMeshes.has(mesh)) select(mesh, staticMeshes.get(mesh)!)
       else if (mesh && nodeMeshes.has(mesh)) selectNode(mesh, nodeMeshes.get(mesh)!)
-      else if (mesh && propMeshes.has(mesh)) {
-        const pr = propMeshes.get(mesh)!
-        placedProps = placedProps.filter((x) => x !== pr)
-        propMeshes.delete(mesh)
-        mesh.dispose()
-        pushUndo({ kind: 'propedit', add: false, prop: pr })
-        status.textContent = 'prop removed from the map seed list'
-      } else {
+      else if (mesh && propMeshes.has(mesh)) selectProp(mesh, propMeshes.get(mesh)!)
+      else if (pick?.pickedMesh && spawnFlag.getChildMeshes().includes(pick.pickedMesh as Mesh))
+        selectSpawn()
+      else {
         // Patches are selectable too (move/tilt/delete whole patch).
         const ppick = scene.pick(scene.pointerX, scene.pointerY, (m) => patchMeshes.has(m as Mesh))
         const pmesh = ppick?.pickedMesh as Mesh | undefined
@@ -1585,51 +1833,139 @@ async function boot(): Promise<void> {
     if (pick?.hit && pick.pickedPoint) paint(pick.pickedPoint.x, pick.pickedPoint.z)
   }
 
-  // ── Keyboard ────────────────────────────────────────────────────────
-  window.addEventListener('keydown', (e) => {
-    if (
-      (e.target as HTMLElement).tagName === 'INPUT' ||
-      (e.target as HTMLElement).tagName === 'SELECT'
+  // ── Input: one action system drives everything ──────────────────────
+  const heldCodes = new Set<string>()
+  const holding = (action: string): boolean => {
+    const b = bindingOf(action)
+    return heldCodes.has(b.code === 'ShiftRight' ? 'ShiftLeft' : b.code)
+  }
+  const nudgeSlider = (id: string, step: number): void => {
+    const el = $(id)
+    el.value = String(Math.max(Number(el.min), Math.min(Number(el.max), Number(el.value) + step)))
+    el.dispatchEvent(new Event('input'))
+    status.textContent = `${id}: ${el.value}`
+  }
+  const runAction = (action: string): boolean => {
+    switch (action) {
+      case 'tool.terrain':
+      case 'tool.paint':
+      case 'tool.entity':
+      case 'tool.mesh':
+      case 'tool.select':
+        setTool(action.slice(5) as Tool)
+        return true
+      case 'xf.move':
+        setGizmoMode('move')
+        return true
+      case 'xf.rotate':
+        setGizmoMode('rotate')
+        return true
+      case 'xf.scale':
+        setGizmoMode('scale')
+        return true
+      case 'edit.undo':
+        undo()
+        return true
+      case 'edit.redo':
+        redo()
+        return true
+      case 'edit.duplicate':
+        $e('p-dup').click()
+        return true
+      case 'edit.delete':
+        deleteSelected()
+        return true
+      case 'edit.cancel':
+        deselect()
+        return true
+      case 'edit.save':
+        saveBtn.click()
+        return true
+      case 'cam.freelook':
+        if (document.pointerLockElement === canvas) document.exitPointerLock()
+        else void canvas.requestPointerLock()
+        return true
+      case 'cam.frame': {
+        const target = gizmos.attachedMesh ?? gizmos.attachedNode
+        if (target) {
+          const pos = (target as TransformNode).getAbsolutePosition()
+          camera.setTarget(pos.clone())
+          const dir = camera.getForwardRay(1).direction
+          camera.position = pos.subtract(dir.scale(18))
+        }
+        return true
+      }
+      case 'brush.radiusUp':
+        nudgeSlider('radius', 1)
+        return true
+      case 'brush.radiusDown':
+        nudgeSlider('radius', -1)
+        return true
+      case 'brush.strengthUp':
+        nudgeSlider('strength', 0.05)
+        return true
+      case 'brush.strengthDown':
+        nudgeSlider('strength', -0.05)
+        return true
+      case 'ui.sidebar':
+        collapseBtn.click()
+        return true
+      case 'ui.settings':
+        document.getElementById('settings-btn')?.click()
+        return true
+      default:
+        return false
+    }
+  }
+  const typingTarget = (e: KeyboardEvent): boolean => {
+    const t = e.target as HTMLElement
+    return (
+      t.tagName === 'INPUT' ||
+      t.tagName === 'SELECT' ||
+      t.tagName === 'TEXTAREA' ||
+      t.isContentEditable
     )
-      return
-    if (e.key === 'Shift') {
-      shift = true
-      camera.speed = 4.5 // fly faster while held
-    } else if (!e.ctrlKey && !e.metaKey && TOOLS.some(([t]) => keys[t] === e.key.toLowerCase())) {
-      setTool(TOOLS.find(([t]) => keys[t] === e.key.toLowerCase())![0])
-    } else if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === keys['grab']) {
-      setGizmoMode('move')
-    } else if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === keys['rotate']) {
-      setGizmoMode('rotate')
-    } else if (!e.ctrlKey && !e.metaKey && e.key.toLowerCase() === keys['scale']) {
-      setGizmoMode('scale')
-    } else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault()
-      $e('p-dup').click()
-    } else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault()
-      if (e.shiftKey) redo()
-      else undo()
-    } else if (e.key.toLowerCase() === keys['freelook']) {
-      if (document.pointerLockElement === canvas) document.exitPointerLock()
-      else void canvas.requestPointerLock()
-    } else if (e.key === '[' || e.key === ']') {
-      const dir = e.key === ']' ? 1 : -1
-      const target = e.shiftKey ? 'strength' : 'radius'
-      const el = $(target)
-      const step = e.shiftKey ? 0.05 : 1
-      el.value = String(
-        Math.max(Number(el.min), Math.min(Number(el.max), Number(el.value) + dir * step)),
-      )
-      el.dispatchEvent(new Event('input'))
-      status.textContent = `${target}: ${el.value}`
-    } else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected()
-    else if (e.key === 'Escape') deselect()
+  }
+  window.addEventListener('keydown', (e) => {
+    if (typingTarget(e)) return
+    heldCodes.add(e.code === 'ShiftRight' ? 'ShiftLeft' : e.code)
+    shift = holding('xf.nosnap') || e.shiftKey
+    // Triggered actions: most-specific binding wins (redo before undo).
+    const candidates = ACTIONS.filter((a) => !a.hold && bindingMatches(bindingOf(a.id), e)).sort(
+      (a, b2) =>
+        Number(Boolean(bindingOf(b2.id).shift)) +
+        Number(Boolean(bindingOf(b2.id).ctrl)) -
+        (Number(Boolean(bindingOf(a.id).shift)) + Number(Boolean(bindingOf(a.id).ctrl))),
+    )
+    for (const a of candidates) {
+      if (runAction(a.id)) {
+        e.preventDefault()
+        return
+      }
+    }
   })
   window.addEventListener('keyup', (e) => {
-    if (e.key === 'Shift') {
-      shift = false
-      camera.speed = 1.6
+    heldCodes.delete(e.code === 'ShiftRight' ? 'ShiftLeft' : e.code)
+    shift = holding('xf.nosnap') || (e.shiftKey && e.key !== 'Shift')
+  })
+  window.addEventListener('blur', () => heldCodes.clear())
+
+  // Manual camera flight from held bindings — no Babylon keyboard input to
+  // fight with (Q/E vs tools conflicts are gone; every key is remappable).
+  scene.onBeforeRenderObservable.add(() => {
+    const dt = engine.getDeltaTime() / 1000
+    const speed = (holding('cam.fast') ? 34 : 11) * dt
+    const move = new Vector3(
+      (holding('cam.right') ? 1 : 0) - (holding('cam.left') ? 1 : 0),
+      (holding('cam.up') ? 1 : 0) - (holding('cam.down') ? 1 : 0),
+      (holding('cam.forward') ? 1 : 0) - (holding('cam.back') ? 1 : 0),
+    )
+    if (move.lengthSquared() > 0) {
+      const fwd = camera.getDirection(new Vector3(0, 0, 1))
+      const right = camera.getDirection(new Vector3(1, 0, 0))
+      camera.position.addInPlace(fwd.scale(move.z * speed))
+      camera.position.addInPlace(right.scale(move.x * speed))
+      camera.position.y += move.y * speed
     }
   })
 
@@ -1641,19 +1977,38 @@ async function boot(): Promise<void> {
   bm.disableLighting = true
   brush.material = bm
   brush.isPickable = false
+  let frameTick = 0
   scene.onBeforeRenderObservable.add(() => {
     const sculpting = tool === 'terrain' || tool === 'paint'
     const pick = scene.pick(scene.pointerX, scene.pointerY, (m) =>
       tool === 'paint' ? m === terrain : m === terrain || patchMeshes.has(m as Mesh),
     )
     const overTerrain = Boolean(pick?.hit && pick.pickedPoint)
+    // Hover highlight for the Select tool (cheap: every 6th frame).
+    if (tool === 'select' && ++frameTick % 6 === 0) {
+      const hp = scene.pick(
+        scene.pointerX,
+        scene.pointerY,
+        (m) =>
+          staticMeshes.has(m as Mesh) || nodeMeshes.has(m as Mesh) || propMeshes.has(m as Mesh),
+      )
+      const hm = (hp?.pickedMesh as Mesh | undefined) ?? null
+      if (hm !== hoverMesh) {
+        hoverMesh = hm
+        refreshSelectionVisuals()
+      }
+    } else if (tool !== 'select' && hoverMesh) {
+      hoverMesh = null
+      refreshSelectionVisuals()
+    }
     if (sculpting && overTerrain && pick!.pickedPoint) {
       brush.position.copyFrom(pick!.pickedPoint)
       const r = Number($('radius').value)
       brush.scaling.set(r, r, r)
       brush.setEnabled(true)
     } else brush.setEnabled(false)
-    wire.setEnabled(tool !== 'paint' && sculpting && overTerrain)
+    wireHover = tool !== 'paint' && sculpting && overTerrain
+    wire.setEnabled(wireHover || mainSelected)
     if (tool === 'mesh' || tool === 'entity') {
       const pose = computePlacePose()
       const g = ensureGhost()
@@ -1685,6 +2040,7 @@ async function boot(): Promise<void> {
       heights: encodeHeights(pp.heights),
       ...(pp.rot ? { rot: pp.rot } : {}),
       ...(pp.tex ? { tex: pp.tex } : {}),
+      ...(pp.color ? { color: pp.color } : {}),
     })),
     models: mapModels,
     textures: mapTextures,
@@ -1702,8 +2058,9 @@ async function boot(): Promise<void> {
         body: JSON.stringify(file),
       })
       if (resp.ok) {
-        dirty = false
-        saveBtn.textContent = '💾 Save map (applies live)'
+        savedTopOp = topOpId()
+        nonHistoryDirt = false
+        updateDirty()
         lastSig = `${file.heights.length}:${file.statics.length}:${(file.nodes ?? []).length}:${(file.mix ?? '').length}:${(file.terrains ?? []).length}:${(file.models ?? []).length}:${(file.textures ?? []).length}`
       }
       status.textContent = resp.ok
@@ -1720,6 +2077,16 @@ async function boot(): Promise<void> {
     try {
       const map = (await (await fetch('/map.json')).json()) as MapFile | null
       if (!map || map.v !== 1 || map.sub !== SUB) return
+      // Revision safety: a remote save must never wipe local dirty work.
+      if (dirty) {
+        const sig2 = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}`
+        if (sig2 !== lastSig) {
+          lastSig = sig2
+          $e('conflict').style.display = 'flex'
+          status.textContent = '⚠ another admin saved while you have unsaved changes'
+        }
+        return
+      }
       const sig = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}`
       if (sig === lastSig) return
       lastSig = sig
@@ -1765,6 +2132,22 @@ async function boot(): Promise<void> {
     }
   }
   setInterval(() => void mergeRemote(), 6000)
+  document.getElementById('conflict-load')?.addEventListener('click', () => {
+    // Explicit choice: discard local changes and take the remote version.
+    nonHistoryDirt = false
+    savedTopOp = topOpId()
+    updateDirty()
+    lastSig = ''
+    $e('conflict').style.display = 'none'
+    void mergeRemote()
+  })
+  document.getElementById('conflict-export')?.addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(buildFile())], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `hoboquest-map-local-${Date.now()}.json`
+    a.click()
+  })
 
   // ── Live presence: co-editors as floating eyeballs ──────────────────
   interface PeerAvatar {
@@ -1830,6 +2213,7 @@ async function boot(): Promise<void> {
     return plane
   }
   let ws: WebSocket | null = null
+  let myPeerId = -1
   const connectPresence = (): void => {
     const key = $('key').value.trim()
     if (!key) return
@@ -1848,6 +2232,41 @@ async function boot(): Promise<void> {
         yaw?: number
         pitch?: number
       }
+      if (msg.t === 'welcome' && msg.id !== undefined) myPeerId = msg.id
+      if (msg.t === 'lock_result') {
+        const lm = msg as unknown as { granted: boolean; ids: string[]; owner?: string }
+        if (!lm.granted) {
+          lockDenied = { owner: lm.owner ?? 'another editor' }
+          if (painting && strokeTarget && strokeBefore) {
+            strokeTarget.heights.set(strokeBefore)
+            refreshTarget(strokeTarget)
+            strokeBefore = null
+            strokeTarget = null
+            painting = 0
+          }
+          gizmos.attachToMesh(null)
+          gizmos.attachToNode(null)
+          setInspectorLocked(true, lockDenied.owner)
+          status.textContent = `🔒 locked by ${lockDenied.owner} — read-only until they deselect`
+        }
+        return
+      }
+      if (msg.t === 'locks') {
+        const lm = msg as unknown as {
+          owners: Record<string, { id: number; name: string; color: string }>
+        }
+        lockOwners.clear()
+        for (const [oid, o] of Object.entries(lm.owners)) {
+          if (o.id !== myPeerId) lockOwners.set(oid, { name: o.name, color: o.color })
+        }
+        return
+      }
+      if (msg.t === 'peer_sel') {
+        const pm = msg as unknown as { id: number; color: string; ids: string[] }
+        remoteSel.set(pm.id, { color: Color3.FromHexString(pm.color), ids: pm.ids })
+        refreshSelectionVisuals()
+        return
+      }
       if (msg.t === 'peer' && msg.id !== undefined && msg.pos) {
         let avatar = peerAvatars.get(msg.id)
         if (!avatar) {
@@ -1864,6 +2283,8 @@ async function boot(): Promise<void> {
           peerAvatars.delete(msg.id)
           updatePeersLabel()
         }
+        remoteSel.delete(msg.id)
+        refreshSelectionVisuals()
       } else if (msg.t === 'map_saved') {
         void mergeRemote()
       }
@@ -1984,41 +2405,62 @@ async function boot(): Promise<void> {
 
   // ── Settings: remappable hotkeys ────────────────────────────────────
   const settingsEl = $e('settings')
+  let recording: string | null = null
   const renderKeys = (): void => {
     const list = $e('keys-list')
     list.replaceChildren()
-    const LABELS: Record<string, string> = {
-      sculpt: 'Raise/Lower tool',
-      smooth: 'Smooth tool',
-      flatten: 'Flatten tool',
-      paint: 'Paint tool',
-      entity: 'Entity tool',
-      mesh: 'Mesh tool',
-      select: 'Select tool',
-      grab: 'Gizmo: move (grab)',
-      rotate: 'Gizmo: rotate',
-      scale: 'Gizmo: scale',
-      freelook: 'Toggle free-look',
-    }
-    for (const action of Object.keys(DEFAULT_KEYS)) {
+    let lastGroup = ''
+    for (const a of ACTIONS) {
+      if (a.group !== lastGroup) {
+        lastGroup = a.group
+        const h = document.createElement('div')
+        h.textContent = a.group.toUpperCase()
+        h.style.cssText = 'color:#e8b54a;font-size:10px;letter-spacing:.1em;margin-top:6px'
+        list.appendChild(h)
+      }
       const row = document.createElement('div')
       row.className = 'krow'
       const lbl = document.createElement('span')
-      lbl.textContent = LABELS[action] ?? action
+      lbl.textContent = a.label
       const inp = document.createElement('input')
       inp.readOnly = true
-      inp.value = (keys[action] ?? '').toUpperCase()
+      inp.value = formatBinding(bindingOf(a.id))
+      inp.addEventListener('focus', () => {
+        recording = a.id
+        inp.value = 'press key…'
+      })
+      inp.addEventListener('blur', () => {
+        recording = null
+        inp.value = formatBinding(bindingOf(a.id))
+      })
       inp.addEventListener('keydown', (e) => {
         e.preventDefault()
-        if (e.key.length === 1) {
-          keys[action] = e.key.toLowerCase()
-          inp.value = e.key.toUpperCase()
-          localStorage.setItem('hobo.editor.keys', JSON.stringify(keys))
-          refreshToolButtons()
+        e.stopPropagation()
+        if (['ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight'].includes(e.code)) return
+        if (e.code === 'Escape') {
+          inp.blur()
+          return
         }
+        const b2 = bindingFromEvent(e)
+        const conflicts = findConflicts(bindings, b2, a.id)
+        if (conflicts.length > 0) {
+          const names = conflicts
+            .map((cid) => ACTIONS.find((x) => x.id === cid)?.label ?? cid)
+            .join(', ')
+          inp.value = `⚠ used by ${names}`
+          inp.style.color = '#ff8f6e'
+          setTimeout(() => {
+            inp.style.color = ''
+            inp.value = formatBinding(bindingOf(a.id))
+          }, 1600)
+          return
+        }
+        bindings[a.id] = b2
+        localStorage.setItem('hobo.editor.bindings', JSON.stringify(bindings))
+        inp.value = formatBinding(b2)
+        refreshToolButtons()
+        inp.blur()
       })
-      inp.addEventListener('focus', () => (inp.value = '…'))
-      inp.addEventListener('blur', () => (inp.value = (keys[action] ?? '').toUpperCase()))
       row.append(lbl, inp)
       list.appendChild(row)
     }
@@ -2027,7 +2469,7 @@ async function boot(): Promise<void> {
     toolsEl.querySelectorAll('button').forEach((b) => {
       const hk = b.querySelector('.hk')
       const t = b.dataset['tool']
-      if (hk && t) hk.textContent = (keys[t] ?? '').toUpperCase()
+      if (hk && t) hk.textContent = formatBinding(bindingOf(`tool.${t}`))
     })
   }
   document.getElementById('settings-btn')?.addEventListener('click', () => {
@@ -2038,12 +2480,14 @@ async function boot(): Promise<void> {
     settingsEl.style.display = 'none'
   })
   document.getElementById('keys-reset')?.addEventListener('click', () => {
-    for (const k of Object.keys(keys)) delete keys[k]
-    Object.assign(keys, DEFAULT_KEYS)
-    localStorage.removeItem('hobo.editor.keys')
+    localStorage.removeItem('hobo.editor.bindings')
+    const fresh = loadBindings(null)
+    for (const k of Object.keys(bindings)) delete bindings[k]
+    Object.assign(bindings, fresh)
     renderKeys()
     refreshToolButtons()
   })
+  void recording
 
   // ── Collapsible sidebar (Photoshop-style icon rail; expanded default) ─
   const panel = $e('panel')
@@ -2056,9 +2500,27 @@ async function boot(): Promise<void> {
   collapseBtn.addEventListener('click', () => setCollapsed(!panel.classList.contains('collapsed')))
   setCollapsed(localStorage.getItem('hobo.editor.panel') === 'collapsed')
 
-  setTool('terrain')
+  // Start with NO active tool: camera-only until the user picks one.
+  status.textContent =
+    'pick a tool (1-5) — camera: WASD+EC fly, MMB orbit, Shift+MMB pan, wheel zoom'
   engine.runRenderLoop(() => scene.render())
   window.addEventListener('resize', () => engine.resize())
+
+  // Test/debug handle (harness-only; not part of any API contract).
+  ;(window as unknown as Record<string, unknown>)['__editor'] = {
+    camera,
+    get tool() {
+      return tool
+    },
+    get dirty() {
+      return dirty
+    },
+    heightsSum() {
+      let sum = 0
+      for (const h of heights) sum += Math.abs(h)
+      return sum
+    },
+  }
 }
 
 void boot()

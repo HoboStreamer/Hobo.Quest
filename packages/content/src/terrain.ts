@@ -103,11 +103,13 @@ function padsFor(world: WorldDef): Pad[] {
 // prediction and rendering all sample the same grid.
 
 export interface MapNodeSpawn {
+  id?: string
   node: string
   pos: [number, number, number]
 }
 
 export interface MapPropSpawn {
+  id?: string
   item: string
   pos: [number, number, number]
   yaw?: number
