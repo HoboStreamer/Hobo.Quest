@@ -28,7 +28,6 @@ export declare function registerMapAssets(
     }[]
   } | null,
 ): void
-/** Extra terrain patches (mountains, cave shells) from the edited map. */
 export declare function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mesh[]
 export declare function rebuildTerrainPatchVisuals(scene: Scene, content: ContentRegistry): void
 export declare function buildStaticWorld(

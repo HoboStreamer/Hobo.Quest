@@ -30,18 +30,22 @@ import {
   type MapNodeSpawn,
   type MapTextureEntry,
   type StaticBody,
+  MAX_PAINT_LAYERS,
+  allocateLayer,
+  migrateLegacyMix,
+  removeLayer,
+  type PaintLayer,
+  type SurfaceMaterialData,
 } from '@hobo/content'
 import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer.js'
 import { meshForShape } from '../render/sceneSetup.js'
 import { Environment } from '../render/environment.js'
 import {
   LIGHT_DEFAULTS,
-  applyPatchTexture,
   applyStaticStyle,
   instantiateMapLight,
   prettyTexName,
   registerCustomTextures,
-  resolveTexInfo,
 } from '../render/mapStyle.js'
 import {
   createTexPicker,
@@ -62,6 +66,8 @@ import {
 import { EditorPicker, type MeshOwner } from './interaction/editorPicker.js'
 import { SelectionManager, selectModeFromEvent } from './selection/selectionManager.js'
 import { FaceOverlayManager, FaceSelection } from './selection/faceSelection.js'
+import { LayeredSurfaceMaterial } from '../render/layeredSurface.js'
+import { PaintMask, type MaskPatch } from './materials/paintMask.js'
 import {
   ACTIONS,
   bindingFromEvent,
@@ -176,8 +182,11 @@ interface PatchState {
   scale?: [number, number, number]
   tex?: string
   color?: string
+  /** Legacy three-way splat; migrated into `surface.paint` on first use. */
   mix?: string
   uv?: FaceStyle
+  /** Base style + paint layers (the v2 surface model). */
+  surface?: SurfaceMaterialData
 }
 
 type UndoOp =
@@ -217,7 +226,7 @@ type UndoOp =
       before: { tex?: string; color?: string; uv?: FaceStyle }
       after: { tex?: string; color?: string; uv?: FaceStyle }
     }
-  | { kind: 'ppaint'; patch: PatchState; before: ImageData; after: ImageData }
+  | { kind: 'maskpaint'; patchId: string; before: MaskPatch; after: MaskPatch }
   | { kind: 'lightadd'; light: MapLight }
   | { kind: 'lightdelete'; light: MapLight }
   | { kind: 'lightedit'; light: MapLight; before: MapLight; after: MapLight }
@@ -611,7 +620,9 @@ async function boot(): Promise<void> {
   /** Rough retained size, so paint/terrain strokes obey the memory budget. */
   const opBytes = (op: UndoOp): number => {
     if (op.kind === 'terrain') return op.before.byteLength * 2
-    if (op.kind === 'paint' || op.kind === 'ppaint') return op.before.data.length * 2
+    if (op.kind === 'paint') return op.before.data.length * 2
+    // Paint deltas are a rectangle, so a small stroke costs a few KB.
+    if (op.kind === 'maskpaint') return op.before.data.length + op.after.data.length
     if (op.kind === 'mainconvert') return op.prev.byteLength
     if (op.kind === 'group') return op.ops.reduce((n, o) => n + opBytes(o), 0)
     return 1024
@@ -738,8 +749,8 @@ async function boot(): Promise<void> {
       else delete op.patch.color
       if (src.uv) op.patch.uv = src.uv
       else delete op.patch.uv
-      for (const [m, pp] of patchMeshes) {
-        if (pp === op.patch && !pp.mix) applyPatchMaterial(m.material as StandardMaterial, op.patch)
+      for (const pp of patchMeshes.values()) {
+        if (pp === op.patch) applyPatchMaterial(null, op.patch)
       }
     } else if (op.kind === 'lightadd' || op.kind === 'lightdelete') {
       const removing = (op.kind === 'lightadd') === (dir === 'undo')
@@ -782,16 +793,17 @@ async function boot(): Promise<void> {
         const m = findMesh(it.body)
         if (m) rebuildSelectedMesh(it.body, m)
       }
+    } else if (op.kind === 'maskpaint') {
+      // Paint undo stores only the changed rectangle, not a full canvas.
+      const rt = surfaces.get(op.patchId)
+      if (rt) {
+        rt.mask.applyPatch(dir === 'undo' ? op.before : op.after)
+        const patch = patches.find((pp) => pp.id === op.patchId)
+        if (patch) surfaceDataOf(patch).paint!.mask = rt.mask.toDataURL()
+      }
     } else if (op.kind === 'paint') {
       mixCtx.putImageData(dir === 'undo' ? op.before : op.after, 0, 0)
       mixTex.update()
-    } else if (op.kind === 'ppaint') {
-      const cached = patchMixCtx.get(op.patch.id)
-      if (cached) {
-        cached.ctx.putImageData(dir === 'undo' ? op.before : op.after, 0, 0)
-        ;(scene.getTextureByName(`pmix:${op.patch.id}`) as DynamicTexture | null)?.update()
-        op.patch.mix = (cached.ctx.canvas as HTMLCanvasElement).toDataURL('image/png')
-      }
     } else if (op.kind === 'place' || op.kind === 'delete') {
       const removing = (op.kind === 'place') === (dir === 'undo')
       if (removing) {
@@ -977,58 +989,77 @@ async function boot(): Promise<void> {
   }
   for (const l of mapLightsArr) renderLight(l)
 
-  const PATCH_MIX = 256
-  const patchMixCtx = new Map<string, { ctx: CanvasRenderingContext2D; mat: TerrainMaterial }>()
-  /** Lazily give a patch its own paintable splat layer (like the main mix).
-   *  Cached entries RE-ATTACH their material — patch meshes get rebuilt by
-   *  undo/redo and merges, and a rebuilt mesh must not come back black. */
-  const ensurePatchMix = (patch: PatchState, mesh: Mesh): CanvasRenderingContext2D => {
-    const cached = patchMixCtx.get(patch.id)
-    if (cached) {
-      if (mesh.material !== cached.mat) mesh.material = cached.mat
-      return cached.ctx
-    }
-    const dt = new DynamicTexture(`pmix:${patch.id}`, PATCH_MIX, scene, false)
-    const ctx = dt.getContext() as CanvasRenderingContext2D
-    if (patch.mix) {
-      const img = new Image()
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0, PATCH_MIX, PATCH_MIX)
-        dt.update()
-      }
-      img.src = patch.mix
-    } else {
-      ctx.fillStyle = '#ff0000'
-      ctx.fillRect(0, 0, PATCH_MIX, PATCH_MIX)
-      dt.update()
-    }
-    const tmat = new TerrainMaterial(`pmixmat:${patch.id}`, scene)
-    tmat.mixTexture = dt
-    const ptile = (n: string, sc: number): Texture => {
-      const tx = new Texture(`/assets/tex/${n}.jpg`, scene)
-      tx.uScale = tx.vScale = sc
-      return tx
-    }
-    tmat.diffuseTexture1 = ptile('leafy_grass', Math.max(4, patch.halfExtent / 2))
-    tmat.diffuseTexture2 = ptile('gray_rocks', Math.max(3, patch.halfExtent / 2.5))
-    tmat.diffuseTexture3 = ptile('brown_mud_dry', Math.max(3, patch.halfExtent / 2))
-    tmat.specularColor = new Color3(0.02, 0.02, 0.02)
-    tmat.backFaceCulling = false
-    mesh.material = tmat
-    patchMixCtx.set(patch.id, { ctx, mat: tmat })
-    return ctx
+  /**
+   * Layered surface per terrain object: base texture (never touched by
+   * painting) + up to four paint layers blended through one RGBA mask.
+   * Replaces the TerrainMaterial splat, whose three slots were hard-wired to
+   * grass/rock/mud and which overwrote the surface's own texture the moment
+   * the Paint tool was used.
+   */
+  interface SurfaceRuntime {
+    material: LayeredSurfaceMaterial
+    mask: PaintMask
   }
-  const applyPatchMaterial = (pm: StandardMaterial, patch: PatchState): void => {
-    pm.diffuseTexture?.dispose()
-    pm.diffuseTexture = null
-    // 'none' = plain color; absent = default grass; custom:<name> uploads.
-    const info = resolveTexInfo(patch.tex ?? 'leafy_grass')
-    if (info) {
-      const tx = new Texture(info.url, scene)
-      applyPatchTexture(tx, patch.halfExtent, info, patch.uv)
-      pm.diffuseTexture = tx
+  const surfaces = new Map<string, SurfaceRuntime>()
+  /** The document-side surface data for a terrain patch. */
+  const surfaceDataOf = (patch: PatchState): SurfaceMaterialData => {
+    if (!patch.surface) {
+      // Legacy patches carry `tex`/`color` and an old three-way `mix`.
+      patch.surface = {
+        base: {
+          ...(patch.tex && patch.tex !== 'none' ? { tex: patch.tex } : {}),
+          ...(patch.color ? { color: patch.color } : {}),
+          ...(patch.uv ? { uv: patch.uv } : {}),
+        },
+        ...(patch.mix ? { paint: migrateLegacyMix(patch.mix, () => newId('pl'))! } : {}),
+      }
     }
-    pm.diffuseColor = patch.color ? Color3.FromHexString(patch.color) : new Color3(0.75, 0.75, 0.75)
+    return patch.surface
+  }
+  const ensureSurface = (patch: PatchState, mesh: Mesh): SurfaceRuntime => {
+    const existing = surfaces.get(patch.id)
+    if (existing) {
+      if (mesh.material !== existing.material.material) mesh.material = existing.material.material
+      return existing
+    }
+    const data = surfaceDataOf(patch)
+    const mask = new PaintMask(scene, `pmask:${patch.id}`)
+    if (data.paint?.mask) {
+      const img = new Image()
+      img.onload = () => mask.drawImage(img)
+      img.src = data.paint.mask
+    }
+    const material = new LayeredSurfaceMaterial(scene, `psurf:${patch.id}`, data, {
+      baseTiling: Math.max(2, patch.halfExtent / 2),
+      layerTiling: Math.max(2, patch.halfExtent / 2),
+      backFaceCulling: false,
+    })
+    material.setMaskTexture(mask.texture)
+    mesh.material = material.material
+    const rt: SurfaceRuntime = { material, mask }
+    surfaces.set(patch.id, rt)
+    return rt
+  }
+  /** Re-read a surface after a base-texture or layer change. */
+  const refreshSurface = (patch: PatchState): void => {
+    const rt = surfaces.get(patch.id)
+    if (!rt) return
+    rt.material.update(surfaceDataOf(patch))
+    rt.material.setMaskTexture(rt.mask.texture)
+  }
+  /**
+   * Push a patch's legacy tex/color/uv fields into its surface BASE and
+   * re-read the material. Painting is unaffected: layers and mask are
+   * separate data, so a base change never disturbs what has been painted.
+   */
+  const applyPatchMaterial = (_unused: unknown, patch: PatchState): void => {
+    const data = surfaceDataOf(patch)
+    data.base = {
+      ...(patch.tex && patch.tex !== 'none' ? { tex: patch.tex } : {}),
+      ...(patch.color ? { color: patch.color } : {}),
+      ...(patch.uv ? { uv: patch.uv } : {}),
+    }
+    refreshSurface(patch)
   }
   const buildPatchMesh = (patch: PatchState): Mesh => {
     const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
@@ -1056,15 +1087,9 @@ async function boot(): Promise<void> {
     mesh.onDisposeObservable.add(() => patchWires.delete(mesh))
     mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
     if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
-    if (patch.mix) {
-      ensurePatchMix(patch, mesh)
-    } else {
-      const pm = new StandardMaterial(`patchmat:${patch.id}`, scene)
-      applyPatchMaterial(pm, patch)
-      pm.specularColor = new Color3(0.02, 0.02, 0.02)
-      pm.backFaceCulling = false
-      mesh.material = pm
-    }
+    // Every terrain gets the layered surface — painted or not. Its base
+    // texture stays authoritative and paint layers sit on top of it.
+    ensureSurface(patch, mesh)
     patchMeshes.set(mesh, patch)
     terrainTargets.push({
       id: patch.id,
@@ -2369,7 +2394,7 @@ async function boot(): Promise<void> {
       }
       if (change.color !== undefined) patch.color = change.color
       if (change.tex !== undefined) patch.tex = change.tex ? change.tex : 'none'
-      if (!patch.mix) applyPatchMaterial(it.mesh.material as StandardMaterial, patch)
+      applyPatchMaterial(null, patch)
       subOps.push({
         kind: 'patchprop',
         patch,
@@ -2412,7 +2437,7 @@ async function boot(): Promise<void> {
         ...(patch.color ? { color: patch.color } : {}),
       }
       patch.color = ($('p-color') as HTMLInputElement).value
-      if (!patch.mix) applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
+      applyPatchMaterial(null, patch)
       pushUndo({
         kind: 'patchprop',
         patch,
@@ -2441,7 +2466,7 @@ async function boot(): Promise<void> {
       }
       // '' from the picker = Plain Color (explicit 'none'; default is grass).
       patch.tex = texSel.value ? texSel.value : 'none'
-      if (!patch.mix) applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
+      applyPatchMaterial(null, patch)
       pushUndo({
         kind: 'patchprop',
         patch,
@@ -2481,7 +2506,7 @@ async function boot(): Promise<void> {
         ...(patch.uv ? { uv: { ...patch.uv } } : {}),
       }
       delete patch.color
-      if (!patch.mix) applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
+      applyPatchMaterial(null, patch)
       ;($('p-color') as HTMLInputElement).value = '#bfbfbf'
       pushUndo({
         kind: 'patchprop',
@@ -2865,7 +2890,7 @@ async function boot(): Promise<void> {
         if (Object.keys(uv).length > 0) patch.uv = uv
         else delete patch.uv
       }
-      if (!patch.mix) applyPatchMaterial(fs.mesh.material as StandardMaterial, patch)
+      applyPatchMaterial(null, patch)
       subOps.push({ kind: 'patchprop', patch, before, after: patchPropSnapshot(patch) })
     }
     if (subOps.length === 1) pushUndo(subOps[0]!)
@@ -3142,8 +3167,9 @@ async function boot(): Promise<void> {
       if (t.target.id === 'main') {
         paintBefore = mixCtx.getImageData(0, 0, MIX, MIX)
       } else if (t.target.patch) {
-        const pctx = ensurePatchMix(t.target.patch, t.target.mesh)
-        paintBefore = pctx.getImageData(0, 0, PATCH_MIX, PATCH_MIX)
+        // Allocating the layer BEFORE the stroke means a full surface reports
+        // its budget instead of silently painting nothing.
+        if (!beginPaintStroke(t.target.patch)) return
       }
       painting = 1
       applyPaint()
@@ -3203,19 +3229,10 @@ async function boot(): Promise<void> {
       strokeBefore = null
       strokeTarget = null
     }
+    if (painting && paintTarget?.patch) endPaintStroke(paintTarget.patch)
     if (painting && paintBefore && paintTarget) {
       if (paintTarget.id === 'main') {
         pushUndo({ kind: 'paint', before: paintBefore, after: mixCtx.getImageData(0, 0, MIX, MIX) })
-      } else if (paintTarget.patch) {
-        const cached = patchMixCtx.get(paintTarget.patch.id)
-        if (cached) {
-          pushUndo({
-            kind: 'ppaint',
-            patch: paintTarget.patch,
-            before: paintBefore,
-            after: cached.ctx.getImageData(0, 0, PATCH_MIX, PATCH_MIX),
-          })
-        }
       }
       paintBefore = null
     }
@@ -3258,26 +3275,131 @@ async function boot(): Promise<void> {
     }
     const patch = t.target.patch
     if (!patch) return
-    const ctx = ensurePatchMix(patch, t.target.mesh)
-    const radius = Number($('radius').value)
-    const strength = Math.min(1, Number($('strength').value))
-    const feather = Number($('feather').value)
-    const u = ((t.local.x + patch.halfExtent) / (patch.halfExtent * 2)) * PATCH_MIX
-    const vpix = (1 - (t.local.z + patch.halfExtent) / (patch.halfExtent * 2)) * PATCH_MIX
-    const r = (radius / (patch.halfExtent * 2)) * PATCH_MIX
-    const g = ctx.createRadialGradient(u, vpix, 0, u, vpix, r)
-    const color = (document.getElementById('paint') as HTMLSelectElement).value
-    const core = Math.max(0.05, Math.min(0.95, 1 - 1 / (0.4 + feather)))
-    const alpha = Math.round(strength * 255)
-      .toString(16)
-      .padStart(2, '0')
-    g.addColorStop(0, `${color}${alpha}`)
-    g.addColorStop(core, `${color}${alpha}`)
-    g.addColorStop(1, `${color}00`)
-    ctx.fillStyle = g
-    ctx.fillRect(u - r, vpix - r, r * 2, r * 2)
-    patch.mix = (ctx.canvas as HTMLCanvasElement).toDataURL('image/png')
-    ;(scene.getTextureByName(`pmix:${patch.id}`) as DynamicTexture | null)?.update()
+    const layer = activePaintLayer(patch)
+    if (!layer) return
+    const rt = ensureSurface(patch, t.target.mesh)
+    const size = rt.mask.size
+    // Patch-local metres → mask pixels.
+    const u = ((t.local.x + patch.halfExtent) / (patch.halfExtent * 2)) * size
+    const v = (1 - (t.local.z + patch.halfExtent) / (patch.halfExtent * 2)) * size
+    rt.mask.stamp(layer.channel, {
+      u,
+      v,
+      radius: (Number($('radius').value) / (patch.halfExtent * 2)) * size,
+      strength: Math.min(1, Number($('strength').value)),
+      feather: Number($('feather').value),
+      erase: ($('paint-erase') as HTMLInputElement | null)?.checked ?? false,
+    })
+  }
+
+  // ── Paint layers ────────────────────────────────────────────────────
+  const paintTexSel = document.getElementById('paint-tex') as HTMLSelectElement
+  // NOTE: the picker itself is constructed further down, next to the other
+  // texture pickers — createTexPicker() reads its option provider eagerly,
+  // and `texOptions` is declared there (TDZ if we build it here).
+  /**
+   * The layer the brush writes into: the one already using the chosen
+   * texture, or a freshly allocated channel. Returns null (with a clear
+   * message) when the surface is at its four-layer budget — the base texture
+   * is NEVER swapped out to make room.
+   */
+  const activePaintLayer = (patch: PatchState): PaintLayer | null => {
+    const tex = paintTexSel.value
+    if (!tex) {
+      status.textContent = 'pick a paint texture first'
+      return null
+    }
+    const data = surfaceDataOf(patch)
+    const alloc = allocateLayer(data.paint, tex, () => newId('pl'))
+    if (!alloc) {
+      status.textContent = `⛔ this surface already uses ${MAX_PAINT_LAYERS} paint textures — remove one in the layer list`
+      renderPaintLayers()
+      return null
+    }
+    data.paint = alloc.paint
+    if (alloc.created) {
+      refreshSurface(patch)
+      renderPaintLayers()
+    }
+    return alloc.layer
+  }
+  const beginPaintStroke = (patch: PatchState): boolean => {
+    const mesh = [...patchMeshes].find(([, pp]) => pp === patch)?.[0]
+    if (!mesh) return false
+    if (!activePaintLayer(patch)) return false
+    ensureSurface(patch, mesh).mask.beginStroke()
+    return true
+  }
+  const endPaintStroke = (patch: PatchState): void => {
+    const rt = surfaces.get(patch.id)
+    if (!rt) return
+    const delta = rt.mask.endStroke()
+    if (!delta) return
+    const data = surfaceDataOf(patch)
+    if (data.paint) data.paint.mask = rt.mask.toDataURL()
+    pushUndo({ kind: 'maskpaint', patchId: patch.id, before: delta.before, after: delta.after })
+  }
+  /** Layer manager for the selected paintable surface. */
+  const renderPaintLayers = (): void => {
+    const host = document.getElementById('paint-layers')
+    if (!host) return
+    host.replaceChildren()
+    const patch = selectedPatch?.patch ?? paintTarget?.patch ?? null
+    if (!patch) {
+      const d = document.createElement('div')
+      d.style.color = '#78828e'
+      d.textContent = 'select a terrain to manage its layers'
+      host.appendChild(d)
+      return
+    }
+    const data = surfaceDataOf(patch)
+    const base = document.createElement('div')
+    base.style.color = '#9aa4b0'
+    base.textContent = `base: ${data.base.tex ? prettyTexName(data.base.tex) : 'plain colour'}`
+    host.appendChild(base)
+    for (const layer of data.paint?.layers ?? []) {
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;gap:4px;align-items:center'
+      const vis = document.createElement('input')
+      vis.type = 'checkbox'
+      vis.checked = !layer.hidden
+      vis.title = 'visible'
+      vis.addEventListener('change', () => {
+        if (vis.checked) delete layer.hidden
+        else layer.hidden = true
+        refreshSurface(patch)
+        markDirty()
+      })
+      const name = document.createElement('span')
+      name.style.flex = '1'
+      name.textContent = `${layer.channel.toUpperCase()} · ${prettyTexName(layer.tex)}`
+      const clear = document.createElement('button')
+      clear.className = 'mini'
+      clear.textContent = '␡'
+      clear.title = 'clear this layer’s painted area'
+      clear.addEventListener('click', () => {
+        surfaces.get(patch.id)?.mask.clearChannel(layer.channel)
+        const url = surfaces.get(patch.id)?.mask.toDataURL()
+        if (data.paint && url) data.paint.mask = url
+        markDirty()
+      })
+      const del = document.createElement('button')
+      del.className = 'mini'
+      del.textContent = '🗑'
+      del.title = 'remove the layer (frees its channel)'
+      del.addEventListener('click', () => {
+        if (!data.paint) return
+        surfaces.get(patch.id)?.mask.clearChannel(layer.channel)
+        removeLayer(data.paint, layer.id)
+        const url2 = surfaces.get(patch.id)?.mask.toDataURL()
+        if (url2) data.paint.mask = url2
+        refreshSurface(patch)
+        renderPaintLayers()
+        markDirty()
+      })
+      row.append(vis, name, clear, del)
+      host.appendChild(row)
+    }
   }
 
   // ── Input: one action system drives everything ──────────────────────
@@ -3512,8 +3634,10 @@ async function boot(): Promise<void> {
       ...(pp.rot ? { rot: pp.rot } : {}),
       ...(pp.tex ? { tex: pp.tex } : {}),
       ...(pp.color ? { color: pp.color } : {}),
-      ...(pp.mix ? { mix: pp.mix } : {}),
       ...(pp.uv ? { uv: pp.uv } : {}),
+      // v2 surface (base + paint layers). `mix` is deliberately NOT written
+      // back: once migrated, the layers own the paint.
+      ...(pp.surface ? { surface: pp.surface } : pp.mix ? { mix: pp.mix } : {}),
     })),
     models: mapModels,
     textures: mapTextures,
@@ -3826,8 +3950,10 @@ async function boot(): Promise<void> {
     registerCustomTextures(mapTextures)
     fillTexSelect(texSel)
     fillTexSelect(faceTexSel)
+    fillTexSelect(paintTexSel)
     texPicker.refresh()
     faceTexPicker.refresh()
+    paintTexPicker.refresh()
   }
   const texOptions = (): TexOption[] => [
     { value: '', label: 'Plain Color', thumb: null },
@@ -3844,6 +3970,13 @@ async function boot(): Promise<void> {
   ]
   const texPicker = createTexPicker(texSel, texOptions)
   const faceTexPicker = createTexPicker(faceTexSel, texOptions)
+  const paintTexPicker = createTexPicker(paintTexSel, texOptions)
+  // The Paint tool is usable immediately: default to a stock texture rather
+  // than making the first stroke a no-op with "pick a texture first".
+  if (!paintTexSel.value) {
+    paintTexSel.value = 'leafy_grass'
+    paintTexPicker.sync()
+  }
   refreshImportedPalette()
 
   const fileToDataUrl = (file: File): Promise<string> =>
@@ -4011,9 +4144,7 @@ async function boot(): Promise<void> {
   const restyleEverything = (): void => {
     deselect()
     for (const [m, b] of [...staticMeshes]) rebuildSelectedMesh(b, m)
-    for (const [m, pp] of patchMeshes) {
-      if (!pp.mix) applyPatchMaterial(m.material as StandardMaterial, pp)
-    }
+    for (const pp of patchMeshes.values()) applyPatchMaterial(null, pp)
   }
   const renderTexman = (): void => {
     const list = $e('texman-list')
@@ -4340,6 +4471,32 @@ async function boot(): Promise<void> {
     worldToScreen: probeWorldToScreen,
     /** What the editor's own picker resolves at a screen point (test aim). */
     pickIdAt: (x: number, y: number) => picker.pick(x, y)?.objectId ?? null,
+    /** Layered-surface state for a terrain object (base + paint layers). */
+    surfaceMaterialOf: (id: string) => {
+      const patch = patches.find((pp) => `terrain:${pp.id}` === id || pp.id === id)
+      if (!patch) return null
+      const data = surfaceDataOf(patch)
+      return {
+        base: data.base.tex ?? null,
+        baseColor: data.base.color ?? null,
+        layers: (data.paint?.layers ?? []).map((l) => ({
+          tex: l.tex,
+          channel: l.channel,
+          hidden: Boolean(l.hidden),
+        })),
+        hasMask: Boolean(data.paint?.mask),
+      }
+    },
+    /** Set the inspector's base texture exactly as the picker would. */
+    setInspectorTexture: (tex: string) => {
+      texSel.value = tex
+      texPicker.sync()
+      texSel.dispatchEvent(new Event('change'))
+    },
+    setPaintTexture: (tex: string) => {
+      paintTexSel.value = tex
+      paintTexPicker.sync()
+    },
     setToolByName: (t: string) => setTool(t as Tool),
     selectByIds: (ids: string[]) => {
       selectionMgr.replaceMany(ids)

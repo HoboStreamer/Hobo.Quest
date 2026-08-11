@@ -1,4 +1,5 @@
 import type { FaceStyle, StaticBody } from './schema/world.js'
+import type { SurfaceMaterialData } from './surface.js'
 import type { MapNodeSpawn, MapOverride, MapPropSpawn, TerrainPatchData } from './terrain.js'
 
 /**
@@ -77,6 +78,8 @@ export interface MapFile {
     color?: string
     mix?: string
     uv?: FaceStyle
+    /** Base style + paint layers (v2 surface model). */
+    surface?: SurfaceMaterialData
   }[]
   /** Imported glTF models (data URLs) placeable as statics via `model`. */
   models?: { id: string; name: string; glb: string; bounds: [number, number, number] }[]

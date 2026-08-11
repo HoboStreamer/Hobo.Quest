@@ -1,3 +1,4 @@
+import type { SurfaceMaterialData } from './surface.js'
 import type { FaceStyle, WorldDef } from './schema/world.js'
 
 /**
@@ -134,8 +135,10 @@ export interface TerrainPatchData {
   tex?: string
   /** Tint color (hex). */
   color?: string
-  /** Painted splat mix PNG data URL (R grass / G rock / B mud). */
+  /** Legacy painted splat (R grass / G rock / B mud); migrated to `surface`. */
   mix?: string
+  /** Base style + paint layers — the v2 surface model. */
+  surface?: SurfaceMaterialData
   /** Whole-surface UV transform from the face-edit tool. */
   uv?: FaceStyle
 }

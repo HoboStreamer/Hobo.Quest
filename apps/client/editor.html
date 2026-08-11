@@ -517,14 +517,19 @@
           <option value="0.95">🌙 Night</option>
         </select></label
       >
-      <label id="paint-row" style="display: none"
-        >Paint
-        <select id="paint">
-          <option value="#ff0000">Grass</option>
-          <option value="#00ff00">Rock</option>
-          <option value="#0000ff">Dirt / path</option>
-        </select></label
-      >
+      <div id="paint-row" style="display: none; flex-direction: column; gap: 6px">
+        <label
+          >Paint
+          <select id="paint-tex"></select>
+        </label>
+        <label title="remove this layer's coverage instead of adding it"
+          ><span>Erase</span> <input id="paint-erase" type="checkbox"
+        /></label>
+        <div
+          id="paint-layers"
+          style="display: flex; flex-direction: column; gap: 4px; font-size: 11px"
+        ></div>
+      </div>
       <label id="mesh-row" style="display: none"
         >Mesh
         <select id="mesh-sel"></select
