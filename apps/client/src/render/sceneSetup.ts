@@ -150,6 +150,23 @@ export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mes
     vd.applyToMesh(mesh, false)
     mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
     if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
+    if (patch.mix) {
+      // Painted patch: same splat pipeline as the main terrain.
+      const tmat = new TerrainMaterial(`patchmix:${patch.id}`, scene)
+      const mixTex = new Texture(patch.mix, scene)
+      tmat.mixTexture = mixTex
+      const t1 = tiled(scene, 'leafy_grass', Math.max(4, patch.halfExtent / 2))
+      const t2 = tiled(scene, 'gray_rocks', Math.max(3, patch.halfExtent / 2.5))
+      const t3 = tiled(scene, 'brown_mud_dry', Math.max(3, patch.halfExtent / 2))
+      tmat.diffuseTexture1 = t1
+      tmat.diffuseTexture2 = t2
+      tmat.diffuseTexture3 = t3
+      tmat.specularColor = new Color3(0.02, 0.02, 0.02)
+      mesh.material = tmat
+      mesh.receiveShadows = true
+      meshes.push(mesh)
+      continue
+    }
     const mat = new StandardMaterial(`patchmat:${patch.id}`, scene)
     const texName = patch.tex ?? 'leafy_grass'
     const custom = texName.startsWith('custom:') ? customTextures.get(texName.slice(7)) : undefined

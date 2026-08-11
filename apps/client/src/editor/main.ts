@@ -143,6 +143,7 @@ interface PatchState {
   rot?: [number, number, number]
   tex?: string
   color?: string
+  mix?: string
 }
 
 type UndoOp =
@@ -781,6 +782,42 @@ async function boot(): Promise<void> {
   placeSpawnFlag()
   for (const pr of placedProps) renderProp(pr)
 
+  const PATCH_MIX = 256
+  const patchMixCtx = new Map<string, CanvasRenderingContext2D>()
+  /** Lazily give a patch its own paintable splat layer (like the main mix). */
+  const ensurePatchMix = (patch: PatchState, mesh: Mesh): CanvasRenderingContext2D => {
+    let ctx = patchMixCtx.get(patch.id)
+    if (ctx) return ctx
+    const dt = new DynamicTexture(`pmix:${patch.id}`, PATCH_MIX, scene, false)
+    ctx = dt.getContext() as CanvasRenderingContext2D
+    if (patch.mix) {
+      const img = new Image()
+      img.onload = () => {
+        ctx!.drawImage(img, 0, 0, PATCH_MIX, PATCH_MIX)
+        dt.update()
+      }
+      img.src = patch.mix
+    } else {
+      ctx.fillStyle = '#ff0000'
+      ctx.fillRect(0, 0, PATCH_MIX, PATCH_MIX)
+      dt.update()
+    }
+    patchMixCtx.set(patch.id, ctx)
+    const tmat = new TerrainMaterial(`pmixmat:${patch.id}`, scene)
+    tmat.mixTexture = dt
+    const ptile = (n: string, sc: number): Texture => {
+      const tx = new Texture(`/assets/tex/${n}.jpg`, scene)
+      tx.uScale = tx.vScale = sc
+      return tx
+    }
+    tmat.diffuseTexture1 = ptile('leafy_grass', Math.max(4, patch.halfExtent / 2))
+    tmat.diffuseTexture2 = ptile('gray_rocks', Math.max(3, patch.halfExtent / 2.5))
+    tmat.diffuseTexture3 = ptile('brown_mud_dry', Math.max(3, patch.halfExtent / 2))
+    tmat.specularColor = new Color3(0.02, 0.02, 0.02)
+    tmat.backFaceCulling = false
+    mesh.material = tmat
+    return ctx
+  }
   const applyPatchMaterial = (pm: StandardMaterial, patch: PatchState): void => {
     pm.diffuseTexture?.dispose()
     const texName = patch.tex ?? 'leafy_grass'
@@ -805,11 +842,15 @@ async function boot(): Promise<void> {
     pvd.applyToMesh(mesh, true)
     mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
     if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
-    const pm = new StandardMaterial(`patchmat:${patch.id}`, scene)
-    applyPatchMaterial(pm, patch)
-    pm.specularColor = new Color3(0.02, 0.02, 0.02)
-    pm.backFaceCulling = false
-    mesh.material = pm
+    if (patch.mix) {
+      ensurePatchMix(patch, mesh)
+    } else {
+      const pm = new StandardMaterial(`patchmat:${patch.id}`, scene)
+      applyPatchMaterial(pm, patch)
+      pm.specularColor = new Color3(0.02, 0.02, 0.02)
+      pm.backFaceCulling = false
+      mesh.material = pm
+    }
     patchMeshes.set(mesh, patch)
     terrainTargets.push({
       id: patch.id,
@@ -2022,8 +2063,35 @@ async function boot(): Promise<void> {
     sculpt(t.target, t.local.x, t.local.z, sign)
   }
   function applyPaint(): void {
-    const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m === terrain)
-    if (pick?.hit && pick.pickedPoint) paint(pick.pickedPoint.x, pick.pickedPoint.z)
+    const t = pickTerrainTarget()
+    if (!t) return
+    if (t.target.id === 'main') {
+      paint(t.local.x, t.local.z)
+      return
+    }
+    const patch = t.target.patch
+    if (!patch) return
+    const ctx = ensurePatchMix(patch, t.target.mesh)
+    const radius = Number($('radius').value)
+    const strength = Math.min(1, Number($('strength').value))
+    const feather = Number($('feather').value)
+    const u = ((t.local.x + patch.halfExtent) / (patch.halfExtent * 2)) * PATCH_MIX
+    const vpix = (1 - (t.local.z + patch.halfExtent) / (patch.halfExtent * 2)) * PATCH_MIX
+    const r = (radius / (patch.halfExtent * 2)) * PATCH_MIX
+    const g = ctx.createRadialGradient(u, vpix, 0, u, vpix, r)
+    const color = (document.getElementById('paint') as HTMLSelectElement).value
+    const core = Math.max(0.05, Math.min(0.95, 1 - 1 / (0.4 + feather)))
+    const alpha = Math.round(strength * 255)
+      .toString(16)
+      .padStart(2, '0')
+    g.addColorStop(0, `${color}${alpha}`)
+    g.addColorStop(core, `${color}${alpha}`)
+    g.addColorStop(1, `${color}00`)
+    ctx.fillStyle = g
+    ctx.fillRect(u - r, vpix - r, r * 2, r * 2)
+    patch.mix = (ctx.canvas as HTMLCanvasElement).toDataURL('image/png')
+    ;(scene.getTextureByName(`pmix:${patch.id}`) as DynamicTexture | null)?.update()
+    markDirty()
   }
 
   // ── Input: one action system drives everything ──────────────────────
@@ -2173,8 +2241,10 @@ async function boot(): Promise<void> {
   let frameTick = 0
   scene.onBeforeRenderObservable.add(() => {
     const sculpting = tool === 'terrain' || tool === 'paint'
-    const pick = scene.pick(scene.pointerX, scene.pointerY, (m) =>
-      tool === 'paint' ? m === terrain : m === terrain || patchMeshes.has(m as Mesh),
+    const pick = scene.pick(
+      scene.pointerX,
+      scene.pointerY,
+      (m) => m === terrain || patchMeshes.has(m as Mesh),
     )
     const overTerrain = Boolean(pick?.hit && pick.pickedPoint)
     // Hover highlight for the Select tool (cheap: every 6th frame).
@@ -2234,6 +2304,7 @@ async function boot(): Promise<void> {
       ...(pp.rot ? { rot: pp.rot } : {}),
       ...(pp.tex ? { tex: pp.tex } : {}),
       ...(pp.color ? { color: pp.color } : {}),
+      ...(pp.mix ? { mix: pp.mix } : {}),
     })),
     models: mapModels,
     textures: mapTextures,

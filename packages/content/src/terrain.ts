@@ -127,6 +127,8 @@ export interface TerrainPatchData {
   tex?: string
   /** Tint color (hex). */
   color?: string
+  /** Painted splat mix PNG data URL (R grass / G rock / B mud). */
+  mix?: string
 }
 
 export interface MapOverride {
