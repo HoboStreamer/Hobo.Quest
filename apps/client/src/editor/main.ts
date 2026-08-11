@@ -61,6 +61,7 @@ import {
 } from './viewport/transformMath.js'
 import { EditorPicker, type MeshOwner } from './interaction/editorPicker.js'
 import { SelectionManager, selectModeFromEvent } from './selection/selectionManager.js'
+import { FaceOverlayManager, FaceSelection } from './selection/faceSelection.js'
 import {
   ACTIONS,
   bindingFromEvent,
@@ -1442,7 +1443,6 @@ async function boot(): Promise<void> {
     if (selectedProp) hl.addMesh(selectedProp.mesh, C_PRIMARY)
     if (selectedPatch) hl.addMesh(selectedPatch.mesh, C_PRIMARY)
     if (selectedLight) hl.addMesh(selectedLight.mesh, C_PRIMARY)
-    for (const fs of faceSel) hl.addMesh(fs.mesh, fs === faceSel[0] ? C_PRIMARY : C_SECONDARY)
     if (spawnSelected) for (const c of spawnFlag.getChildMeshes()) hl.addMesh(c as Mesh, C_PRIMARY)
     if (hoverMesh && tool === 'select') hl.addMesh(hoverMesh, C_HOVER)
     // Starter island: persistent wireframe while selected (not hover-only).
@@ -2709,30 +2709,42 @@ async function boot(): Promise<void> {
     /** Box face index 0..5, or null = whole surface. */
     face: number | null
   }
-  const faceSel: FaceSel[] = []
-  const FACE_NAMES = ['Front', 'Back', 'Right', 'Left', 'Top', 'Bottom']
+  /**
+   * Face selection is stored as objectId:face keys and RESOLVED to meshes on
+   * demand, so a material change or an undo that rebuilds a mesh can never
+   * strand it. Each selected face draws its own overlay — selecting one face
+   * of a box no longer lights up all six.
+   */
+  const faceSelection = new FaceSelection()
+  const faceOverlays = new FaceOverlayManager(scene)
   let fColorOn = false
+  const meshForObjectId = (oid: string): Mesh | null => {
+    for (const [m, b] of staticMeshes) if (b.id === oid) return m
+    for (const [m, pp] of patchMeshes) if (`terrain:${pp.id}` === oid) return m
+    return null
+  }
+  /** Current face selection resolved against live meshes. */
+  const faceSel = (): FaceSel[] => {
+    const out: FaceSel[] = []
+    for (const r of faceSelection.refs()) {
+      const mesh = meshForObjectId(r.objectId)
+      if (!mesh) continue
+      const body = staticMeshes.get(mesh)
+      const patch = patchMeshes.get(mesh)
+      out.push({ mesh, ...(body ? { body } : {}), ...(patch ? { patch } : {}), face: r.face })
+    }
+    return out
+  }
+  const syncFaceOverlays = (): void => {
+    faceOverlays.sync(faceSelection.refs(), meshForObjectId)
+  }
   const clearFaceSel = (): void => {
-    faceSel.length = 0
+    faceSelection.clear()
     updateFaceInfo()
-    refreshSelectionVisuals()
+    syncFaceOverlays()
   }
   const updateFaceInfo = (): void => {
-    const info = $e('face-info')
-    if (faceSel.length === 0) {
-      info.textContent = 'click a face · Shift adds · RMB applies current'
-      return
-    }
-    info.textContent = faceSel
-      .map((fs) =>
-        fs.patch
-          ? `patch ${fs.patch.halfExtent * 2}m`
-          : fs.face === null
-            ? fs.body!.shape.type
-            : `${fs.body!.shape.type} ${FACE_NAMES[fs.face]}`,
-      )
-      .join(' · ')
-      .slice(0, 90)
+    $e('face-info').textContent = faceSelection.describe()
   }
   const faceStyleOf = (fs: FaceSel): FaceStyle => {
     if (fs.body) {
@@ -2832,7 +2844,8 @@ async function boot(): Promise<void> {
         }
       }
       const nm = rebuildSelectedMesh(body, list[0]!.mesh)
-      for (const fs of faceSel) if (fs.body === body) fs.mesh = nm
+      // No fix-up needed for the selection itself: it is keyed by id, and
+      // the overlays are rebuilt from the live mesh below.
       for (const fs of targets) if (fs.body === body) fs.mesh = nm
       items.push({ body, before, after: snapshotBody(body) })
     }
@@ -2858,6 +2871,7 @@ async function boot(): Promise<void> {
     if (subOps.length === 1) pushUndo(subOps[0]!)
     else if (subOps.length > 1)
       pushUndo({ kind: 'group', label: reset ? 'face reset' : 'face edit', ops: subOps })
+    syncFaceOverlays()
     refreshSelectionVisuals()
     status.textContent = reset
       ? `${targets.length} surface(s) reset to defaults`
@@ -2865,48 +2879,105 @@ async function boot(): Promise<void> {
   }
   const handleFacePointer = (e: PointerEvent): void => {
     if (e.button !== 0 && e.button !== 2) return
-    const pick = scene.pick(
-      scene.pointerX,
-      scene.pointerY,
-      (m) => m.isEnabled() && (staticMeshes.has(m as Mesh) || patchMeshes.has(m as Mesh)),
-    )
-    if (!pick?.hit || !pick.pickedMesh) {
-      if (e.button === 0 && !e.shiftKey) clearFaceSel()
+    // Faces come from the SAME central picker as object selection, so the
+    // same exclusions (sky, brush, ghosts, overlays, gizmos) apply.
+    const hit = picker.pickAtPointer({ kinds: ['static', 'model', 'terrain'] })
+    if (!hit) {
+      if (e.button === 0 && !e.ctrlKey && !e.metaKey) clearFaceSel()
       return
     }
-    const mesh = pick.pickedMesh as Mesh
+    const mesh = hit.mesh as Mesh
     const body = staticMeshes.get(mesh)
-    const patch = patchMeshes.get(mesh)
     const face =
-      body && body.shape.type === 'box' && pick.faceId >= 0 ? Math.floor(pick.faceId / 2) : null
-    const fs: FaceSel = { mesh, ...(body ? { body } : {}), ...(patch ? { patch } : {}), face }
+      body && body.shape.type === 'box' && hit.faceId >= 0 ? Math.floor(hit.faceId / 2) : null
+    const ref = { objectId: hit.objectId, face }
     if (e.button === 2) {
-      // Hammer right-click: paint the face with the current settings.
-      applyFaceStyleTo([fs])
+      // Hammer right-click: paint that one face with the current settings.
+      const patch = patchMeshes.get(mesh)
+      applyFaceStyleTo([{ mesh, ...(body ? { body } : {}), ...(patch ? { patch } : {}), face }])
       return
     }
-    const idx = faceSel.findIndex((x) => x.mesh === mesh && x.face === face)
-    if (e.shiftKey || e.ctrlKey) {
-      if (idx >= 0) faceSel.splice(idx, 1)
-      else faceSel.push(fs)
-    } else {
-      faceSel.length = 0
-      faceSel.push(fs)
-      if (e.altKey) {
-        liftFace(fs) // Alt+click = pure lift (Hammer's eyedropper)
-      }
-    }
-    if (faceSel[0]) liftFace(faceSel[0])
+    // Ctrl adds/toggles (Shift kept as a legacy alias); Alt is the eyedropper.
+    if (e.ctrlKey || e.metaKey || e.shiftKey) faceSelection.toggle(ref)
+    else faceSelection.replace(ref)
+    const first = faceSel()[0]
+    if (first) liftFace(first)
     updateFaceInfo()
+    syncFaceOverlays()
     refreshSelectionVisuals()
   }
-  $e('f-apply').addEventListener('click', () => applyFaceStyleTo(faceSel))
+
+  // ── Face Auto Apply ─────────────────────────────────────────────────
+  // With Auto Apply on, every style control writes to the selected faces
+  // immediately. Scrubbing a numeric field opens a transaction on pointer
+  // down and commits ONE history entry on release — not one per frame.
+  const autoApplyChk = document.getElementById('f-auto') as HTMLInputElement | null
+  let autoApply = localStorage.getItem('hobo.editor.faceAutoApply') === 'on'
+  if (autoApplyChk) {
+    autoApplyChk.checked = autoApply
+    autoApplyChk.addEventListener('change', () => {
+      autoApply = autoApplyChk.checked
+      localStorage.setItem('hobo.editor.faceAutoApply', autoApply ? 'on' : 'off')
+      status.textContent = autoApply
+        ? 'Auto Apply on — face style changes preview live'
+        : 'Auto Apply off — use Apply'
+    })
+  }
+  const autoApplyNow = (): void => {
+    if (!autoApply || faceSelection.size === 0) return
+    applyFaceStyleTo(faceSel())
+  }
+  /** Wrap a face control so a continuous interaction is ONE undo entry. */
+  const wireFaceControl = (id: string): void => {
+    const el = document.getElementById(id) as HTMLInputElement | null
+    if (!el) return
+    let open = false
+    const begin = (): void => {
+      if (open || !autoApply) return
+      open = true
+      history.beginTransaction('face style')
+    }
+    const end = (): void => {
+      if (!open) return
+      open = false
+      history.commitTransaction('face style')
+      updateDirty()
+    }
+    el.addEventListener('pointerdown', begin)
+    el.addEventListener('focus', begin)
+    el.addEventListener('input', () => {
+      if (open) autoApplyNow()
+    })
+    el.addEventListener('change', () => {
+      if (!open) begin()
+      autoApplyNow()
+      end()
+    })
+    el.addEventListener('blur', end)
+    window.addEventListener('pointerup', () => {
+      if (open) end()
+    })
+    el.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') {
+        history.cancelTransaction()
+        open = false
+        syncFaceOverlays()
+      }
+    })
+  }
+  for (const id of ['f-sx', 'f-sy', 'f-ox', 'f-oy', 'f-rot', 'f-color']) wireFaceControl(id)
+  faceTexSel.addEventListener('change', () => {
+    if (autoApply) applyFaceStyleTo(faceSel())
+  })
+
+  $e('f-apply').addEventListener('click', () => applyFaceStyleTo(faceSel()))
   $e('f-apply-all').addEventListener('click', () =>
-    applyFaceStyleTo(faceSel.map((fs) => ({ ...fs, face: null }))),
+    applyFaceStyleTo(faceSel().map((fs) => ({ ...fs, face: null }))),
   )
-  $e('f-clear').addEventListener('click', () => applyFaceStyleTo(faceSel, true))
+  $e('f-clear').addEventListener('click', () => applyFaceStyleTo(faceSel(), true))
   $e('f-lift').addEventListener('click', () => {
-    if (faceSel[0]) liftFace(faceSel[0])
+    const first = faceSel()[0]
+    if (first) liftFace(first)
   })
   $('f-color').addEventListener('input', () => (fColorOn = true))
   $e('f-color-clear').addEventListener('click', () => {
@@ -2915,7 +2986,7 @@ async function boot(): Promise<void> {
   })
   const justify = (patchVals: Partial<Record<'f-sx' | 'f-sy' | 'f-ox' | 'f-oy', number>>): void => {
     for (const [id, v] of Object.entries(patchVals)) $(id).value = String(v)
-    applyFaceStyleTo(faceSel)
+    applyFaceStyleTo(faceSel())
   }
   $e('f-fit').addEventListener('click', () =>
     justify({ 'f-sx': 1, 'f-sy': 1, 'f-ox': 0, 'f-oy': 0 }),
@@ -4255,10 +4326,8 @@ async function boot(): Promise<void> {
     }),
     history: () => ({ depth: history.depth, redo: history.redoDepth }),
     terrainWires: probeTerrainWires,
-    faceSelKeys: () =>
-      faceSel.map(
-        (fs) => `${fs.body?.id ?? (fs.patch ? `terrain:${fs.patch.id}` : '?')}:${fs.face ?? 'all'}`,
-      ),
+    faceSelKeys: () => faceSelection.keys(),
+    faceOverlayCount: () => faceOverlays.count,
     paintSurface: () =>
       paintTarget
         ? {
@@ -4269,6 +4338,8 @@ async function boot(): Promise<void> {
         : null,
     transformOf: probeTransform,
     worldToScreen: probeWorldToScreen,
+    /** What the editor's own picker resolves at a screen point (test aim). */
+    pickIdAt: (x: number, y: number) => picker.pick(x, y)?.objectId ?? null,
     setToolByName: (t: string) => setTool(t as Tool),
     selectByIds: (ids: string[]) => {
       selectionMgr.replaceMany(ids)
@@ -4340,7 +4411,7 @@ async function boot(): Promise<void> {
       return JSON.parse(JSON.stringify(placedStatics)) as unknown
     },
     faceSelCount() {
-      return faceSel.length
+      return faceSelection.size
     },
     patchWireCount() {
       return patchWires.size
