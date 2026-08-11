@@ -328,7 +328,9 @@ async function boot(): Promise<void> {
   let placedNodes: MapNodeSpawn[] = []
   let savedMix: string | undefined
   // ONE boot fetch: every loader below reads this same artifact.
-  const bootMap = (await (await fetch('/map.json')).json().catch(() => null)) as MapFile | null
+  const bootResp = await fetch('/map.json')
+  const bootRevision = bootResp.headers.get('etag')?.replace(/"/g, '') ?? ''
+  const bootMap = (await bootResp.json().catch(() => null)) as MapFile | null
   if (bootMap && bootMap.v === 1 && bootMap.sub === SUB) {
     heights = decodeHeights(bootMap.heights)
     placedStatics = bootMap.statics
@@ -3594,11 +3596,15 @@ async function boot(): Promise<void> {
       (tool === 'terrain' && hoverMeshT === terrain) ||
       (painting !== 0 && strokeTarget?.id === 'main')
     wire.setEnabled(wireHover || mainSelected)
+    // Selection visuals derive from the selection SET, never from mesh
+    // identity: undo, a remote merge or a material change all rebuild meshes,
+    // and a selected terrain's wire must survive every one of them.
+    const selectedTerrains = new Set(selectionMgr.ids().filter((id) => id.startsWith('terrain:')))
     for (const [pm, pw] of patchWires) {
+      const p = patchMeshes.get(pm)
       const on =
         (tool === 'terrain' && hoverMeshT === pm) ||
-        selectedPatch?.mesh === pm ||
-        multiPatches.some((it) => it.mesh === pm) ||
+        (p !== undefined && selectedTerrains.has(`terrain:${p.id}`)) ||
         (painting !== 0 && strokeTarget?.mesh === pm)
       pw.setEnabled(on)
     }
@@ -3614,6 +3620,8 @@ async function boot(): Promise<void> {
   })
 
   let lastSig = ''
+  /** Revision of the map we last loaded — sent as If-Match on save. */
+  let baseRevision = bootRevision
 
   // ── Save ────────────────────────────────────────────────────────────
   const buildFile = (): MapFile => ({
@@ -3652,20 +3660,40 @@ async function boot(): Promise<void> {
       const file = buildFile()
       const resp = await fetch('/api/map', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-editor-key': key },
+        headers: {
+          'content-type': 'application/json',
+          'x-editor-key': key,
+          // The revision we last loaded: the server 409s a stale save rather
+          // than letting it overwrite another admin's work.
+          ...(baseRevision ? { 'if-match': baseRevision } : {}),
+        },
         body: JSON.stringify(file),
       })
+      const served = resp.headers.get('etag')?.replace(/"/g, '')
+      if (served) baseRevision = served
       if (resp.ok) {
         history.markSaved()
         nonHistoryDirt = false
         updateDirty()
         lastSig = `${file.heights.length}:${file.statics.length}:${(file.nodes ?? []).length}:${(file.mix ?? '').length}:${(file.terrains ?? []).length}:${(file.models ?? []).length}:${(file.textures ?? []).length}:${(file.lights ?? []).length}`
       }
+      if (resp.status === 409) {
+        $e('conflict').style.display = 'flex'
+        status.textContent = '⚠ another admin saved first — your revision is stale'
+        return
+      }
+      if (resp.status === 422) {
+        const j = (await resp.json().catch(() => null)) as { issues?: string[] } | null
+        status.textContent = `⛔ map rejected: ${(j?.issues ?? ['invalid']).slice(0, 2).join('; ')}`
+        return
+      }
       status.textContent = resp.ok
         ? '✅ saved — live in game'
         : resp.status === 403
           ? '⛔ not authorized (admin token/key required)'
-          : `save failed (${resp.status})`
+          : resp.status === 413
+            ? '⛔ map too large'
+            : `save failed (${resp.status})`
     })()
   })
 
@@ -3673,7 +3701,12 @@ async function boot(): Promise<void> {
   const mergeRemote = async (): Promise<void> => {
     if (painting) return
     try {
-      const map = (await (await fetch('/map.json')).json()) as MapFile | null
+      const resp2 = await fetch('/map.json')
+      const served = resp2.headers.get('etag')?.replace(/"/g, '')
+      // Unchanged revision = nothing to do. Rebuilding the world on every
+      // poll was dropping selections and flickering terrain wires.
+      if (served && served === baseRevision) return
+      const map = (await resp2.json()) as MapFile | null
       if (!map || map.v !== 1 || map.sub !== SUB) return
       // Revision safety: a remote save must never wipe local dirty work.
       if (dirty) {
@@ -3688,6 +3721,7 @@ async function boot(): Promise<void> {
       const sig = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}:${(map.lights ?? []).length}`
       if (sig === lastSig) return
       lastSig = sig
+      if (served) baseRevision = served
       heights.set(decodeHeights(map.heights))
       refreshTerrainMesh()
       if (map.mix) {

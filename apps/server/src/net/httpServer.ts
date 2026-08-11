@@ -5,6 +5,7 @@ import { dirname, extname, join, normalize, resolve } from 'node:path'
 import type { Logger } from '@hobo/shared'
 import type { ServerMetrics } from '../observability/metrics.js'
 import { canEditMap, resolveHoboToolsUser } from './hoboToolsAuth.js'
+import { MAX_MAP_BYTES, loadMap, saveMap } from './mapStore.js'
 
 /**
  * Minimal HTTP layer: health/metrics endpoints and (in production) the
@@ -75,13 +76,17 @@ export function createHttpServer(
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = (req.url ?? '/').split('?')[0] ?? '/'
     if (url === '/map.json' && mapPath) {
-      if (existsSync(mapPath)) {
-        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' })
-        createReadStream(mapPath).pipe(res)
-      } else {
-        res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-cache' })
-        res.end('null')
-      }
+      // Always serve the CANONICAL v2 form with its revision as an ETag, so
+      // editors have something real to send back as If-Match.
+      void loadMap(mapPath).then((rec) => {
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'cache-control': 'no-cache',
+          etag: `"${rec.revision}"`,
+        })
+        // v1 projection: the game client and editor have not migrated yet.
+        res.end(JSON.stringify(rec.wire))
+      })
       return
     }
     if (url === '/api/map' && req.method === 'POST' && mapPath && editorAuth) {
@@ -95,25 +100,54 @@ export function createHttpServer(
         }
         const chunks: Buffer[] = []
         let size = 0
+        let aborted = false
         req.on('data', (c: Buffer) => {
           size += c.length
-          if (size > 64 * 1024 * 1024) req.destroy()
-          else chunks.push(c)
+          if (size > MAX_MAP_BYTES) {
+            aborted = true
+            req.destroy()
+          } else chunks.push(c)
+        })
+        req.on('close', () => {
+          if (!aborted || res.headersSent) return
+          res.writeHead(413, { 'content-type': 'application/json' })
+          res.end('{"error":"map_too_large"}')
         })
         req.on('end', () => {
-          try {
+          void (async () => {
             const body = Buffer.concat(chunks).toString('utf8')
-            JSON.parse(body) // must at least be JSON
-            mkdirSync(dirname(mapPath), { recursive: true })
-            writeFileSync(mapPath, body)
-            log.info('map saved by editor', { bytes: body.length })
-            onMapSaved?.(body)
-            res.writeHead(200, { 'content-type': 'application/json' })
-            res.end('{"ok":true,"live":true}')
-          } catch {
-            res.writeHead(400, { 'content-type': 'application/json' })
-            res.end('{"error":"bad_map"}')
-          }
+            // If-Match carries the revision the editor last loaded; a
+            // mismatch is a 409 rather than a silent overwrite.
+            const ifMatch = (req.headers['if-match'] as string | undefined)?.replace(/"/g, '')
+            const current = await loadMap(mapPath)
+            const outcome = await saveMap(mapPath, body, current, ifMatch)
+            if (outcome.status !== 200) {
+              log.warn('map save rejected', { status: outcome.status, error: outcome.error })
+              res.writeHead(outcome.status, { 'content-type': 'application/json' })
+              res.end(
+                JSON.stringify({
+                  error: outcome.error,
+                  ...(outcome.issues ? { issues: outcome.issues.slice(0, 40) } : {}),
+                  ...(outcome.revision ? { revision: outcome.revision } : {}),
+                }),
+              )
+              return
+            }
+            log.info('map saved by editor', {
+              bytes: body.length,
+              revision: outcome.record.revision,
+            })
+            onMapSaved?.(JSON.stringify(outcome.record.wire))
+            res.writeHead(200, {
+              'content-type': 'application/json',
+              etag: `"${outcome.record.revision}"`,
+            })
+            res.end(JSON.stringify({ ok: true, live: true, revision: outcome.record.revision }))
+          })().catch(() => {
+            if (res.headersSent) return
+            res.writeHead(500, { 'content-type': 'application/json' })
+            res.end('{"error":"save_failed"}')
+          })
         })
       })
       return
