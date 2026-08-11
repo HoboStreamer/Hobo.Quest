@@ -383,6 +383,13 @@ export function rebuildTerrainVisual(scene: Scene, content: ContentRegistry, mix
 function buildTerrainMesh(scene: Scene, content: ContentRegistry, mapMix?: string): Mesh[] {
   const world = content.world
   const grid = buildTerrainGrid(world)
+  // A fully-removed starter island (every height sunk below -4.5) renders
+  // nothing — the world is whatever patches the editors built.
+  let maxH = -Infinity
+  for (let i = 1; i < grid.positions.length; i += 3) {
+    if (grid.positions[i]! > maxH) maxH = grid.positions[i]!
+  }
+  if (maxH <= -4.5) return []
   const mesh = new Mesh('terrain', scene)
   const vd = new VertexData()
   vd.positions = grid.positions

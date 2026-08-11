@@ -17,6 +17,7 @@ import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { GizmoManager } from '@babylonjs/core/Gizmos/gizmoManager.js'
 import { TerrainMaterial } from '@babylonjs/materials/terrain/terrainMaterial.js'
 import '@babylonjs/core/Culling/ray.js'
+import '@babylonjs/core/Rendering/outlineRenderer.js'
 import {
   buildPatchGrid,
   buildTerrainGrid,
@@ -864,7 +865,12 @@ async function boot(): Promise<void> {
   }
   for (const patch of patches) buildPatchMesh(patch)
 
+  const mainGone = (): boolean => {
+    for (const h of heights) if (h > -4.5) return false
+    return true
+  }
   const refreshTarget = (t: TerrainTarget): void => {
+    if (t.id === 'main') terrain.setEnabled(!mainGone())
     const buf = t.mesh.getVerticesData(VertexBuffer.PositionKind) as Float32Array
     const n = t.sub
     for (let j = 0; j <= n; j++) {
@@ -883,6 +889,7 @@ async function boot(): Promise<void> {
   // ── Sculpt core ─────────────────────────────────────────────────────
   const posBuf = terrain.getVerticesData(VertexBuffer.PositionKind) as Float32Array
   terrainTargets.push({ id: 'main', mesh: terrain, heights, sub: SUB, half: HALF, patch: null })
+  if (mainGone()) terrain.setEnabled(false)
   let shift = false
   let strokeBefore: Float32Array | null = null
   let strokeTarget: TerrainTarget | null = null
@@ -1199,6 +1206,7 @@ async function boot(): Promise<void> {
     if (remoteMain) wire.setEnabled(true)
     for (const it of multiSel)
       hl.addMesh(it.mesh, it.mesh === multiSel[0]?.mesh ? C_PRIMARY : C_SECONDARY)
+    for (const it of multiPatches) hl.addMesh(it.mesh, C_SECONDARY)
     if (selected) hl.addMesh(selected.mesh, C_PRIMARY)
     if (selectedNode) hl.addMesh(selectedNode.mesh, C_PRIMARY)
     if (selectedProp) hl.addMesh(selectedProp.mesh, C_PRIMARY)
@@ -1379,23 +1387,34 @@ async function boot(): Promise<void> {
   // the gizmo and the meshes ride it, then transforms bake into each body
   // as one undoable batch.
   const multiSel: { mesh: Mesh; body: StaticBody; before: StaticBody }[] = []
+  const multiPatches: {
+    mesh: Mesh
+    patch: PatchState
+    before: { origin: [number, number, number]; rot?: [number, number, number] }
+  }[] = []
   const multiPivot = new TransformNode('multipivot', scene)
   const clearMulti = (): void => {
     for (const it of multiSel) {
       it.mesh.setParent(null)
       it.mesh.renderOutline = false
     }
+    for (const it of multiPatches) {
+      it.mesh.setParent(null)
+      it.mesh.renderOutline = false
+    }
     multiSel.length = 0
+    multiPatches.length = 0
   }
   const refreshMultiPivot = (): void => {
-    for (const it of multiSel) it.mesh.setParent(null)
+    const all = [...multiSel, ...multiPatches]
+    for (const it of all) it.mesh.setParent(null)
     const c = new Vector3()
-    for (const it of multiSel) c.addInPlace(it.mesh.position)
-    c.scaleInPlace(1 / Math.max(1, multiSel.length))
+    for (const it of all) c.addInPlace(it.mesh.position)
+    c.scaleInPlace(1 / Math.max(1, all.length))
     multiPivot.position.copyFrom(c)
     multiPivot.rotationQuaternion = Quaternion.Identity()
     multiPivot.scaling.setAll(1)
-    for (const it of multiSel) it.mesh.setParent(multiPivot)
+    for (const it of all) it.mesh.setParent(multiPivot)
   }
   const addToMulti = (mesh: Mesh, body: StaticBody): void => {
     if (selected) {
@@ -1427,8 +1446,51 @@ async function boot(): Promise<void> {
     afterSelect(ids, () => gizmos.attachToNode(multiPivot))
     status.textContent = `${multiSel.length} selected — G/R to move/rotate together, Del deletes all`
   }
+  const addPatchToMulti = (mesh: Mesh, patch: PatchState): void => {
+    if (selectedPatch) {
+      const prev = selectedPatch
+      selectedPatch = null
+      if (!multiPatches.some((it) => it.mesh === prev.mesh))
+        multiPatches.push({
+          mesh: prev.mesh,
+          patch: prev.patch,
+          before: {
+            origin: [...prev.patch.origin],
+            ...(prev.patch.rot ? { rot: [...prev.patch.rot] } : {}),
+          },
+        })
+    }
+    const i = multiPatches.findIndex((it) => it.mesh === mesh)
+    if (i >= 0) {
+      multiPatches[i]!.mesh.setParent(null)
+      multiPatches[i]!.mesh.renderOutline = false
+      multiPatches.splice(i, 1)
+    } else {
+      multiPatches.push({
+        mesh,
+        patch,
+        before: { origin: [...patch.origin], ...(patch.rot ? { rot: [...patch.rot] } : {}) },
+      })
+      mesh.renderOutline = true
+      mesh.outlineColor = new Color3(0.4, 0.8, 1)
+      mesh.outlineWidth = 0.06
+    }
+    props.style.display = 'none'
+    if (multiSel.length + multiPatches.length === 0) {
+      gizmos.attachToMesh(null)
+      return
+    }
+    refreshMultiPivot()
+    if (gizmoMode === 'scale') setGizmoMode('move')
+    const ids = [
+      ...multiSel.map((it) => it.body.id).filter((x): x is string => Boolean(x)),
+      ...multiPatches.map((it) => `terrain:${it.patch.id}`),
+    ]
+    afterSelect(ids, () => gizmos.attachToNode(multiPivot))
+    status.textContent = `${multiSel.length + multiPatches.length} selected — move/rotate together, Del deletes`
+  }
   const bakeMulti = (): void => {
-    if (multiSel.length === 0) return
+    if (multiSel.length === 0 && multiPatches.length === 0) return
     const items: { body: StaticBody; before: StaticBody; after: StaticBody }[] = []
     for (const it of multiSel) {
       it.mesh.setParent(null)
@@ -1443,7 +1505,29 @@ async function boot(): Promise<void> {
       items.push({ body: b, before: it.before, after: snapshotBody(b) })
       it.before = snapshotBody(b)
     }
-    pushUndo({ kind: 'batch', items })
+    if (items.length > 0) pushUndo({ kind: 'batch', items })
+    for (const it of multiPatches) {
+      it.mesh.setParent(null)
+      const m = it.mesh
+      const patch = it.patch
+      const before = {
+        origin: [...it.before.origin] as [number, number, number],
+        ...(it.before.rot ? { rot: [...it.before.rot] as [number, number, number] } : {}),
+      }
+      patch.origin = [m.position.x, m.position.y, m.position.z]
+      const q = m.rotationQuaternion ?? Quaternion.FromEulerAngles(0, m.rotation.y, 0)
+      const e2 = q.toEulerAngles()
+      if (Math.abs(e2.x) > 0.001 || Math.abs(e2.y) > 0.001 || Math.abs(e2.z) > 0.001)
+        patch.rot = [e2.x, e2.y, e2.z]
+      else delete patch.rot
+      pushUndo({
+        kind: 'patchedit',
+        id: patch.id,
+        before,
+        after: { origin: [...patch.origin], ...(patch.rot ? { rot: [...patch.rot] } : {}) },
+      })
+      it.before = { origin: [...patch.origin], ...(patch.rot ? { rot: [...patch.rot] } : {}) }
+    }
     refreshMultiPivot()
   }
 
@@ -1617,7 +1701,7 @@ async function boot(): Promise<void> {
           }
           return
         }
-        if (multiSel.length > 0) {
+        if (multiSel.length > 0 || multiPatches.length > 0) {
           bakeMulti()
           return
         }
@@ -1877,6 +1961,27 @@ async function boot(): Promise<void> {
       status.textContent = '🌊 starter island removed — one Ctrl+Z brings it back'
       return
     }
+    if (multiPatches.length > 0) {
+      const pitems = [...multiPatches]
+      const sitems = [...multiSel]
+      clearMulti()
+      for (const it of pitems) {
+        patches = patches.filter((pp) => pp !== it.patch)
+        patchMeshes.delete(it.mesh)
+        const ti = terrainTargets.findIndex((t) => t.patch === it.patch)
+        if (ti >= 0) terrainTargets.splice(ti, 1)
+        it.mesh.dispose()
+        pushUndo({ kind: 'patchdelete', patch: it.patch })
+      }
+      for (const it of sitems) {
+        placedStatics = placedStatics.filter((b) => b !== it.body)
+        staticMeshes.delete(it.mesh)
+        it.mesh.dispose()
+      }
+      if (sitems.length > 0) pushUndo({ kind: 'batchdelete', bodies: sitems.map((it) => it.body) })
+      status.textContent = `${pitems.length + sitems.length} deleted`
+      return
+    }
     if (multiSel.length > 0) {
       const items = [...multiSel]
       clearMulti()
@@ -1997,6 +2102,20 @@ async function boot(): Promise<void> {
           staticMeshes.has(m as Mesh) || nodeMeshes.has(m as Mesh) || propMeshes.has(m as Mesh),
       )
       const mesh = pick?.pickedMesh as Mesh | undefined
+      if (e.shiftKey) {
+        // Shift+click accumulates: statics and terrain patches mix freely.
+        if (mesh && staticMeshes.has(mesh)) {
+          addToMulti(mesh, staticMeshes.get(mesh)!)
+          return
+        }
+        const shiftPatch = scene.pick(scene.pointerX, scene.pointerY, (m) =>
+          patchMeshes.has(m as Mesh),
+        )?.pickedMesh as Mesh | undefined
+        if (shiftPatch && patchMeshes.has(shiftPatch)) {
+          addPatchToMulti(shiftPatch, patchMeshes.get(shiftPatch)!)
+          return
+        }
+      }
       if (mesh && staticMeshes.has(mesh) && e.shiftKey) {
         addToMulti(mesh, staticMeshes.get(mesh)!)
         return
@@ -2823,6 +2942,12 @@ async function boot(): Promise<void> {
     selectMain() {
       setTool('select')
       selectMainTerrain()
+    },
+    multiCount() {
+      return multiSel.length + multiPatches.length
+    },
+    mainVisible() {
+      return terrain.isEnabled()
     },
   }
 }
