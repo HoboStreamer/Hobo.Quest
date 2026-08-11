@@ -161,6 +161,7 @@ export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mes
     } else {
       mat.diffuseTexture = tiled(scene, texName, scale)
     }
+    if (patch.color) mat.diffuseColor = Color3.FromHexString(patch.color)
     mat.specularColor = new Color3(0.02, 0.02, 0.02)
     mat.maxSimultaneousLights = 8
     mesh.material = mat

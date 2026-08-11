@@ -31,6 +31,7 @@ export interface MapFile {
     heights: string
     rot?: [number, number, number]
     tex?: string
+    color?: string
   }[]
   /** Imported glTF models (data URLs) placeable as statics via `model`. */
   models?: { id: string; name: string; glb: string; bounds: [number, number, number] }[]

@@ -47,16 +47,14 @@ const HALF = world.groundHalfExtent
 const SUB = 128
 const MIX = 512
 
-type Tool = 'sculpt' | 'smooth' | 'flatten' | 'paint' | 'entity' | 'mesh' | 'select'
+type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select'
 
 /** Blender-flavored, user-configurable hotkeys (settings ⚙). */
 const DEFAULT_KEYS: Record<string, string> = {
-  sculpt: '1',
-  smooth: '2',
-  flatten: '3',
-  paint: '4',
-  entity: '5',
-  mesh: '6',
+  terrain: '1',
+  paint: '2',
+  entity: '3',
+  mesh: '4',
   select: 'q',
   grab: 'g',
   rotate: 'r',
@@ -76,7 +74,7 @@ function loadKeys(): Record<string, string> {
 
 interface Placeable {
   name: string
-  kind: 'static' | 'node' | 'spawn' | 'model' | 'prop'
+  kind: 'static' | 'node' | 'spawn' | 'model' | 'prop' | 'patch'
   shape?: StaticBody['shape']
   color?: string
   tex?: string
@@ -103,6 +101,7 @@ const PLACEABLES: Placeable[] = [
     color: '#8f8a82',
   },
   { name: '🔘 Sphere', kind: 'static', shape: { type: 'sphere', radius: 1 }, color: '#7b7f83' },
+  { name: '⛰ Terrain patch (32m sculptable)', kind: 'patch' },
 ]
 
 /** Entity tool: gameplay spawns — not geometry. */
@@ -143,6 +142,17 @@ const NODE_LOOKS: Record<string, { color: string; shape: StaticBody['shape'] }> 
   scrap_pile: { color: '#6d6f72', shape: { type: 'box', size: [1.4, 0.6, 1.4] } },
 }
 
+interface PatchState {
+  id: string
+  origin: [number, number, number]
+  halfExtent: number
+  sub: number
+  heights: Float32Array
+  rot?: [number, number, number]
+  tex?: string
+  color?: string
+}
+
 type UndoOp =
   | { kind: 'terrain'; target: string; before: Float32Array; after: Float32Array }
   | { kind: 'paint'; before: ImageData; after: ImageData }
@@ -155,6 +165,14 @@ type UndoOp =
       before: [number, number, number]
       after: [number, number, number]
     }
+  | { kind: 'patchadd'; patch: PatchState }
+  | { kind: 'patchdelete'; patch: PatchState }
+  | {
+      kind: 'propedit'
+      add: boolean
+      prop: { item: string; pos: [number, number, number]; yaw?: number }
+    }
+  | { kind: 'batch'; items: { body: StaticBody; before: StaticBody; after: StaticBody }[] }
   | {
       kind: 'patchedit'
       id: string
@@ -188,6 +206,9 @@ async function boot(): Promise<void> {
     freeLook = document.pointerLockElement === canvas
   })
   let mmb: 'orbit' | 'pan' | null = null
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 1) e.preventDefault() // stop browser autoscroll
+  })
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button === 1) {
       e.preventDefault()
@@ -379,18 +400,19 @@ async function boot(): Promise<void> {
   // ── UI ──────────────────────────────────────────────────────────────
   const $ = (id: string) => document.getElementById(id) as HTMLInputElement
   const $e = (id: string) => document.getElementById(id) as HTMLElement
-  let tool: Tool = 'sculpt'
+  let tool: Tool = 'terrain'
   const toolsEl = $e('tools')
   const keys = loadKeys()
   const TOOLS: [Tool, string][] = [
-    ['sculpt', '⛰ Raise/Lower'],
-    ['smooth', '〰 Smooth'],
-    ['flatten', '▭ Flatten'],
+    ['terrain', '⛰ Terrain'],
     ['paint', '🖌 Paint'],
     ['entity', '🌱 Entity'],
     ['mesh', '🧱 Mesh'],
     ['select', '🖱 Select'],
   ]
+  const terrainMode = (): 'sculpt' | 'smooth' | 'flatten' =>
+    (document.getElementById('terrain-mode') as HTMLSelectElement).value as
+      'sculpt' | 'smooth' | 'flatten'
   const setTool = (id: Tool): void => {
     tool = id
     toolsEl
@@ -399,6 +421,9 @@ async function boot(): Promise<void> {
     $e('paint-row').style.display = id === 'paint' ? 'flex' : 'none'
     $e('mesh-row').style.display = id === 'mesh' ? 'flex' : 'none'
     $e('entity-row').style.display = id === 'entity' ? 'flex' : 'none'
+    // Brush widget floats bottom-left, only for brush-driven tools.
+    $e('brush').style.display = id === 'terrain' || id === 'paint' ? 'flex' : 'none'
+    $e('mode-row').style.display = id === 'terrain' ? 'flex' : 'none'
     $e('snap-row').style.display =
       id === 'mesh' || id === 'entity' || id === 'select' ? 'flex' : 'none'
     if (id !== 'select') deselect()
@@ -490,6 +515,44 @@ async function boot(): Promise<void> {
           }
         }
       }
+    } else if (op.kind === 'patchadd' || op.kind === 'patchdelete') {
+      const removing = (op.kind === 'patchadd') === (dir === 'undo')
+      if (removing) {
+        patches = patches.filter((pp) => pp !== op.patch)
+        for (const [m, pp] of patchMeshes) {
+          if (pp === op.patch) {
+            if (selectedPatch?.mesh === m) deselect()
+            patchMeshes.delete(m)
+            m.dispose()
+          }
+        }
+        const ti = terrainTargets.findIndex((t) => t.patch === op.patch)
+        if (ti >= 0) terrainTargets.splice(ti, 1)
+      } else {
+        patches.push(op.patch)
+        buildPatchMesh(op.patch)
+      }
+    } else if (op.kind === 'propedit') {
+      const removing = op.add === (dir === 'undo')
+      if (removing) {
+        placedProps = placedProps.filter((x) => x !== op.prop)
+        for (const [m, pr] of propMeshes) {
+          if (pr === op.prop) {
+            propMeshes.delete(m)
+            m.dispose()
+          }
+        }
+      } else {
+        placedProps.push(op.prop)
+        renderProp(op.prop)
+      }
+    } else if (op.kind === 'batch') {
+      for (const it of op.items) {
+        const src = dir === 'undo' ? it.before : it.after
+        Object.assign(it.body, JSON.parse(JSON.stringify(src)) as StaticBody)
+        const m = findMesh(it.body)
+        if (m) rebuildSelectedMesh(it.body, m)
+      }
     } else if (op.kind === 'paint') {
       mixCtx.putImageData(dir === 'undo' ? op.before : op.after, 0, 0)
       mixTex.update()
@@ -540,15 +603,6 @@ async function boot(): Promise<void> {
   }
 
   // ── Terrain targets: the main ground plus free-floating patches ─────
-  interface PatchState {
-    id: string
-    origin: [number, number, number]
-    halfExtent: number
-    sub: number
-    heights: Float32Array
-    rot?: [number, number, number]
-    tex?: string
-  }
   interface TerrainTarget {
     id: string
     mesh: Mesh
@@ -598,6 +652,17 @@ async function boot(): Promise<void> {
   placeSpawnFlag()
   for (const pr of placedProps) renderProp(pr)
 
+  const applyPatchMaterial = (pm: StandardMaterial, patch: PatchState): void => {
+    pm.diffuseTexture?.dispose()
+    const texName = patch.tex ?? 'leafy_grass'
+    const custom = texName.startsWith('custom:')
+      ? mapTextures.find((t) => t.name === texName.slice(7))?.dataUrl
+      : undefined
+    const tx = new Texture(custom ?? `/assets/tex/${texName}.jpg`, scene)
+    tx.uScale = tx.vScale = Math.max(4, patch.halfExtent / 2)
+    pm.diffuseTexture = tx
+    pm.diffuseColor = patch.color ? Color3.FromHexString(patch.color) : new Color3(0.75, 0.75, 0.75)
+  }
   const buildPatchMesh = (patch: PatchState): Mesh => {
     const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
     const mesh = new Mesh(`patch:${patch.id}`, scene)
@@ -612,7 +677,7 @@ async function boot(): Promise<void> {
     mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
     if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
     const pm = new StandardMaterial(`patchmat:${patch.id}`, scene)
-    pm.diffuseColor = new Color3(0.45, 0.58, 0.35)
+    applyPatchMaterial(pm, patch)
     pm.specularColor = new Color3(0.02, 0.02, 0.02)
     pm.backFaceCulling = false
     mesh.material = pm
@@ -657,7 +722,7 @@ async function boot(): Promise<void> {
     const radius = Number($('radius').value)
     const strength = Number($('strength').value) * sign
     const feather = Number($('feather').value)
-    const mode = tool
+    const mode = terrainMode()
     const n = target.sub
     const half = target.half
     const tcell = (half * 2) / n
@@ -841,6 +906,22 @@ async function boot(): Promise<void> {
       pushUndo({ kind: 'place', body })
       return
     }
+    if (def.kind === 'patch') {
+      const half = 16
+      const sub = 32
+      const patch: PatchState = {
+        id: `patch-${Date.now().toString(36)}`,
+        origin: [snapVal(pose.pos.x), pose.pos.y, snapVal(pose.pos.z)],
+        halfExtent: half,
+        sub,
+        heights: new Float32Array((sub + 1) * (sub + 1)),
+      }
+      patches.push(patch)
+      buildPatchMesh(patch)
+      pushUndo({ kind: 'patchadd', patch })
+      status.textContent = '⛰ patch placed — sculpt it with the Terrain tool, Select to move/tilt'
+      return
+    }
     if (def.kind === 'prop') {
       const e = pose.rot.toEulerAngles()
       const pr = {
@@ -850,7 +931,7 @@ async function boot(): Promise<void> {
       }
       placedProps.push(pr)
       renderProp(pr)
-      markDirty()
+      pushUndo({ kind: 'propedit', add: true, prop: pr })
       status.textContent = `${def.name} placed — spawns live on save (physgun-movable in game)`
       return
     }
@@ -914,6 +995,8 @@ async function boot(): Promise<void> {
   let selectedPatch: { mesh: Mesh; patch: PatchState } | null = null
 
   const deselect = (): void => {
+    mainSelected = false
+    clearMulti()
     gizmos.attachToMesh(null)
     props.style.display = 'none'
     selected = null
@@ -938,6 +1021,91 @@ async function boot(): Promise<void> {
     status.textContent = 'drag arrows to move the node · Del removes it'
   }
 
+  // ── Multi-select: Shift+click accumulates statics; a pivot node carries
+  // the gizmo and the meshes ride it, then transforms bake into each body
+  // as one undoable batch.
+  const multiSel: { mesh: Mesh; body: StaticBody; before: StaticBody }[] = []
+  const multiPivot = new TransformNode('multipivot', scene)
+  const clearMulti = (): void => {
+    for (const it of multiSel) {
+      it.mesh.setParent(null)
+      it.mesh.renderOutline = false
+    }
+    multiSel.length = 0
+  }
+  const refreshMultiPivot = (): void => {
+    for (const it of multiSel) it.mesh.setParent(null)
+    const c = new Vector3()
+    for (const it of multiSel) c.addInPlace(it.mesh.position)
+    c.scaleInPlace(1 / Math.max(1, multiSel.length))
+    multiPivot.position.copyFrom(c)
+    multiPivot.rotationQuaternion = Quaternion.Identity()
+    multiPivot.scaling.setAll(1)
+    for (const it of multiSel) it.mesh.setParent(multiPivot)
+  }
+  const addToMulti = (mesh: Mesh, body: StaticBody): void => {
+    if (selected) {
+      // Promote the single selection into the set first.
+      const prev = selected
+      selected = null
+      if (!multiSel.some((it) => it.mesh === prev.mesh))
+        multiSel.push({ mesh: prev.mesh, body: prev.body, before: snapshotBody(prev.body) })
+    }
+    const i = multiSel.findIndex((it) => it.mesh === mesh)
+    if (i >= 0) {
+      multiSel[i]!.mesh.setParent(null)
+      multiSel[i]!.mesh.renderOutline = false
+      multiSel.splice(i, 1)
+    } else {
+      multiSel.push({ mesh, body, before: snapshotBody(body) })
+      mesh.renderOutline = true
+      mesh.outlineColor = new Color3(0.4, 0.8, 1)
+      mesh.outlineWidth = 0.06
+    }
+    props.style.display = 'none'
+    if (multiSel.length === 0) {
+      gizmos.attachToMesh(null)
+      return
+    }
+    refreshMultiPivot()
+    if (gizmoMode === 'scale') setGizmoMode('move')
+    gizmos.attachToNode(multiPivot)
+    status.textContent = `${multiSel.length} selected — G/R to move/rotate together, Del deletes all`
+  }
+  const bakeMulti = (): void => {
+    if (multiSel.length === 0) return
+    const items: { body: StaticBody; before: StaticBody; after: StaticBody }[] = []
+    for (const it of multiSel) {
+      it.mesh.setParent(null)
+      const m = it.mesh
+      const b = it.body
+      b.pos = [m.position.x, m.position.y, m.position.z]
+      const q = m.rotationQuaternion ?? Quaternion.FromEulerAngles(0, m.rotation.y, 0)
+      const e2 = q.toEulerAngles()
+      b.yaw = e2.y
+      if (Math.abs(e2.x) > 0.01 || Math.abs(e2.z) > 0.01) b.rot = [e2.x, e2.y, e2.z]
+      else delete b.rot
+      items.push({ body: b, before: it.before, after: snapshotBody(b) })
+      it.before = snapshotBody(b)
+    }
+    pushUndo({ kind: 'batch', items })
+    refreshMultiPivot()
+  }
+
+  /** The starter island is placeholder — selectable so it can be wiped. */
+  let mainSelected = false
+  const selectMainTerrain = (): void => {
+    deselect()
+    mainSelected = true
+    props.style.display = 'flex'
+    props.style.left = '274px'
+    props.style.top = '12px'
+    $e('props-title').textContent = 'starter island terrain'
+    for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
+    status.textContent =
+      'the default island — sculpt it, or press Del to sink it and build from patches'
+  }
+
   /** Patches: move + tilt the whole terrain patch. */
   const selectPatch = (mesh: Mesh, patch: PatchState): void => {
     deselect()
@@ -957,7 +1125,9 @@ async function boot(): Promise<void> {
     $('r-x').value = String(deg(rot[0]))
     $('r-y').value = String(deg(rot[1]))
     $('r-z').value = String(deg(rot[2]))
-    status.textContent = 'sculpt patches with the terrain tools · tilt for caves/overhangs'
+    texSel.value = patch.tex ?? ''
+    ;($('p-color') as HTMLInputElement).value = patch.color ?? '#bfbfbf'
+    status.textContent = 'sculpt patches with the Terrain tool · tilt for caves/overhangs'
   }
   const rebuildSelectedMesh = (body: StaticBody, oldMesh: Mesh): Mesh => {
     const wasSelected = selected?.mesh === oldMesh
@@ -1036,6 +1206,10 @@ async function boot(): Promise<void> {
       wiredGizmos.add(g)
       g.onDragStartObservable.add(beginEdit)
       g.onDragEndObservable.add(() => {
+        if (multiSel.length > 0) {
+          bakeMulti()
+          return
+        }
         if (selectedNode) {
           const m = selectedNode.mesh
           const node = selectedNode.node
@@ -1205,6 +1379,12 @@ async function boot(): Promise<void> {
     })
   }
   $('p-color').addEventListener('change', () => {
+    if (selectedPatch) {
+      selectedPatch.patch.color = ($('p-color') as HTMLInputElement).value
+      applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, selectedPatch.patch)
+      markDirty()
+      return
+    }
     if (!selected) return
     beginEdit()
     selected.body.color = ($('p-color') as HTMLInputElement).value
@@ -1216,8 +1396,9 @@ async function boot(): Promise<void> {
       const patch = selectedPatch.patch
       if (texSel.value) patch.tex = texSel.value
       else delete patch.tex
+      applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
       markDirty()
-      status.textContent = `patch texture: ${texSel.value || 'default grass'} (shows in game after save)`
+      status.textContent = `patch texture: ${texSel.value || 'default grass'}`
       return
     }
     if (!selected) return
@@ -1239,6 +1420,29 @@ async function boot(): Promise<void> {
       : 'lamplight removed'
   })
   const deleteSelected = (): void => {
+    if (mainSelected) {
+      // Sink the starter island below the waterline (fully undoable).
+      const main = terrainTargets.find((t) => t.id === 'main')!
+      const before = main.heights.slice()
+      main.heights.fill(-3)
+      refreshTarget(main)
+      pushUndo({ kind: 'terrain', target: 'main', before, after: main.heights.slice() })
+      deselect()
+      status.textContent = '🌊 starter island sunk — build your world from terrain patches'
+      return
+    }
+    if (multiSel.length > 0) {
+      const items = [...multiSel]
+      clearMulti()
+      for (const it of items) {
+        placedStatics = placedStatics.filter((b) => b !== it.body)
+        staticMeshes.delete(it.mesh)
+        it.mesh.dispose()
+        pushUndo({ kind: 'delete', body: it.body })
+      }
+      status.textContent = `${items.length} objects deleted`
+      return
+    }
     if (selectedNode) {
       const { mesh, node } = selectedNode
       deselect()
@@ -1256,8 +1460,7 @@ async function boot(): Promise<void> {
       const ti = terrainTargets.findIndex((t) => t.patch === patch)
       if (ti >= 0) terrainTargets.splice(ti, 1)
       mesh.dispose()
-      markDirty()
-      status.textContent = 'patch removed (no undo for patches — save carefully)'
+      pushUndo({ kind: 'patchdelete', patch })
       return
     }
     if (!selected) return
@@ -1286,7 +1489,7 @@ async function boot(): Promise<void> {
     if (freeLook) return
     if (e.button !== 0 && e.button !== 2) return
     const sign = e.button === 2 ? -1 : 1
-    if (tool === 'sculpt' || tool === 'smooth' || tool === 'flatten') {
+    if (tool === 'terrain') {
       const t = pickTerrainTarget()
       if (!t) return
       strokeTarget = t.target
@@ -1308,6 +1511,10 @@ async function boot(): Promise<void> {
           staticMeshes.has(m as Mesh) || nodeMeshes.has(m as Mesh) || propMeshes.has(m as Mesh),
       )
       const mesh = pick?.pickedMesh as Mesh | undefined
+      if (mesh && staticMeshes.has(mesh) && e.shiftKey) {
+        addToMulti(mesh, staticMeshes.get(mesh)!)
+        return
+      }
       if (mesh && staticMeshes.has(mesh)) select(mesh, staticMeshes.get(mesh)!)
       else if (mesh && nodeMeshes.has(mesh)) selectNode(mesh, nodeMeshes.get(mesh)!)
       else if (mesh && propMeshes.has(mesh)) {
@@ -1315,14 +1522,18 @@ async function boot(): Promise<void> {
         placedProps = placedProps.filter((x) => x !== pr)
         propMeshes.delete(mesh)
         mesh.dispose()
-        markDirty()
+        pushUndo({ kind: 'propedit', add: false, prop: pr })
         status.textContent = 'prop removed from the map seed list'
       } else {
         // Patches are selectable too (move/tilt/delete whole patch).
         const ppick = scene.pick(scene.pointerX, scene.pointerY, (m) => patchMeshes.has(m as Mesh))
         const pmesh = ppick?.pickedMesh as Mesh | undefined
         if (pmesh && patchMeshes.has(pmesh)) selectPatch(pmesh, patchMeshes.get(pmesh)!)
-        else deselect()
+        else {
+          const tpick = scene.pick(scene.pointerX, scene.pointerY, (m) => m === terrain)
+          if (tpick?.hit) selectMainTerrain()
+          else deselect()
+        }
       }
     }
   })
@@ -1431,9 +1642,10 @@ async function boot(): Promise<void> {
   brush.material = bm
   brush.isPickable = false
   scene.onBeforeRenderObservable.add(() => {
-    const sculpting =
-      tool === 'sculpt' || tool === 'smooth' || tool === 'flatten' || tool === 'paint'
-    const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m === terrain)
+    const sculpting = tool === 'terrain' || tool === 'paint'
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (m) =>
+      tool === 'paint' ? m === terrain : m === terrain || patchMeshes.has(m as Mesh),
+    )
     const overTerrain = Boolean(pick?.hit && pick.pickedPoint)
     if (sculpting && overTerrain && pick!.pickedPoint) {
       brush.position.copyFrom(pick!.pickedPoint)
@@ -1704,27 +1916,6 @@ async function boot(): Promise<void> {
   }
   refreshImportedPalette()
 
-  document.getElementById('add-patch')?.addEventListener('click', () => {
-    const half = 16
-    const sub = 32
-    const id = `patch-${Date.now().toString(36)}`
-    const fwd = camera.getForwardRay(40)
-    const at = fwd.origin.add(fwd.direction.scale(30))
-    const patch: PatchState = {
-      id,
-      origin: [Math.round(at.x), Math.max(1, Math.round(at.y - 8)), Math.round(at.z)],
-      halfExtent: half,
-      sub,
-      heights: new Float32Array((sub + 1) * (sub + 1)),
-    }
-    patches.push(patch)
-    const mesh = buildPatchMesh(patch)
-    markDirty()
-    setTool('select')
-    selectPatch(mesh, patch)
-    status.textContent = '⛰ patch added — sculpt it with the terrain tools, tilt it for caves'
-  })
-
   const fileToDataUrl = (file: File): Promise<string> =>
     new Promise((res, rej) => {
       const r = new FileReader()
@@ -1865,7 +2056,7 @@ async function boot(): Promise<void> {
   collapseBtn.addEventListener('click', () => setCollapsed(!panel.classList.contains('collapsed')))
   setCollapsed(localStorage.getItem('hobo.editor.panel') === 'collapsed')
 
-  setTool('sculpt')
+  setTool('terrain')
   engine.runRenderLoop(() => scene.render())
   window.addEventListener('resize', () => engine.resize())
 }

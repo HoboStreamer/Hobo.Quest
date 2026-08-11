@@ -121,6 +121,39 @@
         padding: 0 4px;
         margin-left: 4px;
       }
+      #brush {
+        position: fixed;
+        display: none;
+        left: 12px;
+        bottom: 12px;
+        width: 240px;
+        color: #dde3ea;
+        background: rgba(16, 20, 26, 0.94);
+        border: 1px solid #2a3340;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 13px;
+        z-index: 10;
+        flex-direction: column;
+        gap: 8px;
+      }
+      #brush label {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+      }
+      #brush input[type='range'] {
+        flex: 1;
+      }
+      #brush select {
+        flex: 1;
+        background: #1c232c;
+        color: #dde3ea;
+        border: 1px solid #2a3340;
+        border-radius: 6px;
+        padding: 4px;
+      }
       #settings {
         position: fixed;
         display: none;
@@ -264,6 +297,60 @@
       </div>
       <div id="peers"></div>
       <div class="tools" id="tools"></div>
+      <label id="snap-row"
+        >Snap <input id="snap" type="number" min="0" max="8" step="0.25" value="0.5" /> m</label
+      >
+      <label id="paint-row" style="display: none"
+        >Paint
+        <select id="paint">
+          <option value="#ff0000">Grass</option>
+          <option value="#00ff00">Rock</option>
+          <option value="#0000ff">Dirt / path</option>
+        </select></label
+      >
+      <label id="mesh-row" style="display: none"
+        >Mesh
+        <select id="mesh-sel"></select
+      ></label>
+      <label id="entity-row" style="display: none"
+        >Entity
+        <select id="entity-sel"></select
+      ></label>
+      <label class="import-row"
+        >📥 Import model (.glb)<input
+          id="model-file"
+          type="file"
+          accept=".glb,.gltf"
+          style="display: none"
+      /></label>
+      <label class="import-row"
+        >🖼 Import texture<input
+          id="texture-file"
+          type="file"
+          accept="image/*"
+          style="display: none"
+      /></label>
+      <input id="key" type="password" placeholder="hobo.tools admin token / editor key" />
+      <button id="save">💾 Save map (applies live)</button>
+      <div id="status"></div>
+      <div class="hint">
+        <b>1-4/Q</b> tools · <b>Z</b> free-look · WASD+QE fly (<b>Shift</b> = fast) ·
+        <b>LMB</b> raise / <b>RMB</b> lower · <b>[ ]</b> radius · <b>Shift+[ ]</b> strength · wheel
+        rotates placement · <b>Shift</b> = no snap · <b>Ctrl+Z/Ctrl+Shift+Z</b> undo/redo ·
+        <b>Ctrl+D</b> duplicate · <b>Select</b> works on objects, resource nodes AND terrain patches
+        (gizmos + properties) · <b>Del</b> removes selection · patches sculpt with the terrain tools
+        and tilt into caves/overhangs
+      </div>
+    </div>
+    <div id="brush">
+      <label id="mode-row"
+        >Mode
+        <select id="terrain-mode">
+          <option value="sculpt">⛰ Raise/Lower</option>
+          <option value="smooth">〰 Smooth</option>
+          <option value="flatten">▭ Flatten</option>
+        </select></label
+      >
       <label
         >Radius <input id="radius" type="range" min="1" max="30" step="0.5" value="6" /><span
           class="val"
@@ -286,51 +373,6 @@
           >1</span
         ></label
       >
-      <label id="snap-row"
-        >Snap <input id="snap" type="number" min="0" max="8" step="0.25" value="0.5" /> m</label
-      >
-      <label id="paint-row" style="display: none"
-        >Paint
-        <select id="paint">
-          <option value="#ff0000">Grass</option>
-          <option value="#00ff00">Rock</option>
-          <option value="#0000ff">Dirt / path</option>
-        </select></label
-      >
-      <label id="mesh-row" style="display: none"
-        >Mesh
-        <select id="mesh-sel"></select
-      ></label>
-      <label id="entity-row" style="display: none"
-        >Entity
-        <select id="entity-sel"></select
-      ></label>
-      <button id="add-patch">⛰ ＋ Terrain patch (mountains/caves)</button>
-      <label class="import-row"
-        >📥 Import model (.glb)<input
-          id="model-file"
-          type="file"
-          accept=".glb,.gltf"
-          style="display: none"
-      /></label>
-      <label class="import-row"
-        >🖼 Import texture<input
-          id="texture-file"
-          type="file"
-          accept="image/*"
-          style="display: none"
-      /></label>
-      <input id="key" type="password" placeholder="hobo.tools admin token / editor key" />
-      <button id="save">💾 Save map (applies live)</button>
-      <div id="status"></div>
-      <div class="hint">
-        <b>1-6</b> tools · <b>Z</b> free-look · WASD+QE fly (<b>Shift</b> = fast) · <b>LMB</b> raise
-        / <b>RMB</b> lower · <b>[ ]</b> radius · <b>Shift+[ ]</b> strength · wheel rotates placement
-        · <b>Shift</b> = no snap · <b>Ctrl+Z/Ctrl+Shift+Z</b> undo/redo · <b>Ctrl+D</b> duplicate ·
-        <b>Select</b> works on objects, resource nodes AND terrain patches (gizmos + properties) ·
-        <b>Del</b> removes selection · patches sculpt with the terrain tools and tilt into
-        caves/overhangs
-      </div>
     </div>
     <div id="settings">
       <h2 style="margin: 0; font-size: 13px; color: #e8b54a">Hotkeys</h2>

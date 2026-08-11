@@ -123,6 +123,8 @@ export interface TerrainPatchData {
   rot?: [number, number, number]
   /** Tiling texture basename (or custom:<name>); default grass. */
   tex?: string
+  /** Tint color (hex). */
+  color?: string
 }
 
 export interface MapOverride {
