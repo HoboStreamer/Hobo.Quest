@@ -5,7 +5,7 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import { Texture } from '@babylonjs/core/Materials/Textures/texture.js'
 import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture.js'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color.js'
-import { Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
+import { Matrix, Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import { CreateCylinder } from '@babylonjs/core/Meshes/Builders/cylinderBuilder.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
@@ -50,6 +50,9 @@ import {
   scrubAllNumbers,
   type TexOption,
 } from './ui.js'
+import { InteractionController } from './interaction/interactionController.js'
+import { EditorPicker, type MeshOwner } from './interaction/editorPicker.js'
+import { SelectionManager, selectModeFromEvent } from './selection/selectionManager.js'
 import {
   ACTIONS,
   bindingFromEvent,
@@ -252,7 +255,18 @@ async function boot(): Promise<void> {
   canvas.addEventListener('pointerdown', (e) => {
     if (e.button === 1) {
       e.preventDefault()
-      mmb = holding('cam.pan') || e.shiftKey ? 'pan' : 'orbit'
+      // The camera is a gesture like any other: it must claim the pointer,
+      // and it cannot start while a gizmo/brush gesture owns it.
+      const want = holding('cam.pan') || e.shiftKey ? 'pan' : 'orbit'
+      if (
+        !interaction.begin(want === 'pan' ? 'camera-pan' : 'camera-orbit', {
+          x: e.clientX,
+          y: e.clientY,
+          pointerId: e.pointerId,
+        })
+      )
+        return
+      mmb = want
       lastMX = e.clientX
       lastMY = e.clientY
       canvas.setPointerCapture(e.pointerId)
@@ -260,12 +274,13 @@ async function boot(): Promise<void> {
   })
   canvas.addEventListener('pointerup', (e) => {
     if (e.button === 1) {
+      if (mmb) interaction.end()
       mmb = null
       if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId)
     }
   })
   canvas.addEventListener('pointermove', (e) => {
-    if (!mmb) return
+    if (!mmb || !interaction.cameraMayMove()) return
     const dx = e.clientX - lastMX
     const dy = e.clientY - lastMY
     lastMX = e.clientX
@@ -281,7 +296,7 @@ async function boot(): Promise<void> {
     }
   })
   canvas.addEventListener('mousemove', (e) => {
-    if (freeLook) {
+    if (freeLook && interaction.cameraMayMove()) {
       camera.rotation.y += e.movementX * 0.0032
       camera.rotation.x = Math.max(-1.5, Math.min(1.5, camera.rotation.x + e.movementY * 0.0032))
     }
@@ -1227,6 +1242,8 @@ async function boot(): Promise<void> {
     'wheel',
     (e) => {
       e.preventDefault()
+      // No camera motion at all while an object gesture owns the pointer.
+      if (!interaction.flightAllowed()) return
       if (tool === 'mesh' || tool === 'entity') {
         const step = holding('place.fine') || shift ? Math.PI / 60 : Math.PI / 12
         placeYaw += (e.deltaY > 0 ? 1 : -1) * step
@@ -1456,18 +1473,51 @@ async function boot(): Promise<void> {
   const gizmos = new GizmoManager(scene)
   gizmos.usePointerToAttachGizmos = false
   gizmos.attachToMesh(null)
-  /** True while the pointer is on a gizmo handle or mid-drag: scene picks
-   *  must NOT run then, or the click selects whatever is behind the gizmo. */
-  let gizmoDragging = false
-  const gizmoBusy = (): boolean => {
-    const g = gizmos.gizmos
-    return Boolean(
-      gizmoDragging ||
-      g.positionGizmo?.isHovered ||
-      g.rotationGizmo?.isHovered ||
-      g.scaleGizmo?.isHovered,
-    )
+
+  /**
+   * Gizmo pointer ownership, structurally.
+   *
+   * Babylon's UtilityLayerRenderer hooks `originalScene.onPrePointerObservable`
+   * (top priority) and sets `skipOnPointerObservable` when a gizmo is hit —
+   * but that only suppresses Babylon's OWN `scene.onPointerObservable`, which
+   * this editor never used: it listens on the raw DOM instead, so the engine
+   * had no way to tell it "the gizmo took this one".
+   *
+   * The ordering that fixes it: `new Scene(engine)` attaches Babylon's input
+   * manager during construction, well before any editor listener is added
+   * below. So the gizmo's drag-start observable has ALREADY run (synchronously
+   * inside the same DOM pointerdown) by the time our canvas handler executes —
+   * the gesture is claimed, `canStartGesture()` is false, and nothing behind
+   * the gizmo can be picked. No hover flags, no timeouts.
+   */
+  const interaction = new InteractionController()
+
+  /**
+   * ONE selection authority (document ids), and ONE picker. The per-kind
+   * `selected*` / `multi*` structures below are now a projection of this set
+   * rather than the source of truth — `rebuildSelectionViews()` re-derives
+   * them whenever the set changes.
+   */
+  const selectionMgr = new SelectionManager()
+  /** True while rebuildSelectionViews() is re-deriving the view state. */
+  let projectingSelection = false
+  const ownerOf = (m: unknown): MeshOwner | null => {
+    const mesh = m as Mesh
+    const b = staticMeshes.get(mesh)
+    if (b?.id) return { objectId: b.id, kind: b.model ? 'model' : 'static' }
+    const n = nodeMeshes.get(mesh)
+    if (n?.id) return { objectId: n.id, kind: 'node' }
+    const pr = propMeshes.get(mesh)
+    if (pr?.id) return { objectId: pr.id, kind: 'prop' }
+    const pp = patchMeshes.get(mesh)
+    if (pp) return { objectId: `terrain:${pp.id}`, kind: 'terrain' }
+    const l = lightMeshes.get(mesh)
+    if (l) return { objectId: l.id, kind: 'light' }
+    if (mesh === terrain) return { objectId: 'terrain:main', kind: 'terrain' }
+    if ((mesh as unknown) === (spawnFlag as unknown)) return { objectId: 'spawn', kind: 'spawn' }
+    return null
   }
+  const picker = new EditorPicker(scene, ownerOf as never)
   type GizmoMode = 'move' | 'rotate' | 'scale'
   let gizmoMode: GizmoMode = 'move'
   const setGizmoMode = (mode: GizmoMode): void => {
@@ -1512,7 +1562,12 @@ async function boot(): Promise<void> {
   let selectedLight: { mesh: Mesh; light: MapLight } | null = null
   let spawnSelected = false
 
+  /** Legacy view teardown. Callers that mean "nothing is selected" should
+   *  use clearSelection(); this only tears down the projected view state. */
   const deselect = (): void => {
+    // Every legacy teardown path (undo, tool switch, delete, remote merge)
+    // must also empty the authority, or it would keep stale ids alive.
+    if (!projectingSelection) selectionMgr.clear()
     mainSelected = false
     spawnSelected = false
     clearMulti()
@@ -1708,69 +1763,6 @@ async function boot(): Promise<void> {
     multiPivot.scaling.setAll(1)
     for (const it of all) it.mesh.setParent(multiPivot)
   }
-  /** Promote WHATEVER single selection exists (any kind) into the set —
-   *  mixing kinds must never leave the old single selection stranded. */
-  const promoteSingleToMulti = (): void => {
-    if (selected) {
-      const prev = selected
-      selected = null
-      if (!multiSel.some((it) => it.mesh === prev.mesh)) {
-        multiSel.push({ mesh: prev.mesh, body: prev.body, before: snapshotBody(prev.body) })
-        outline(prev.mesh)
-      }
-    }
-    if (selectedNode) {
-      const prev = selectedNode
-      selectedNode = null
-      if (!multiNodes.some((it) => it.mesh === prev.mesh)) {
-        multiNodes.push({ mesh: prev.mesh, node: prev.node, before: [...prev.node.pos] })
-        outline(prev.mesh)
-      }
-    }
-    if (selectedProp) {
-      const prev = selectedProp
-      selectedProp = null
-      if (!multiProps.some((it) => it.mesh === prev.mesh)) {
-        multiProps.push({ mesh: prev.mesh, prop: prev.prop, before: [...prev.prop.pos] })
-        outline(prev.mesh)
-      }
-    }
-    if (selectedPatch) {
-      const prev = selectedPatch
-      selectedPatch = null
-      if (!multiPatches.some((it) => it.mesh === prev.mesh)) {
-        multiPatches.push({
-          mesh: prev.mesh,
-          patch: prev.patch,
-          before: {
-            origin: [...prev.patch.origin],
-            ...(prev.patch.rot ? { rot: [...prev.patch.rot] } : {}),
-          },
-        })
-        outline(prev.mesh)
-      }
-    }
-  }
-  const addToMulti = (mesh: Mesh, body: StaticBody): void => {
-    promoteSingleToMulti()
-    const i = multiSel.findIndex((it) => it.mesh === mesh)
-    if (i >= 0) {
-      multiSel[i]!.mesh.setParent(null)
-      multiSel[i]!.mesh.renderOutline = false
-      multiSel.splice(i, 1)
-    } else {
-      multiSel.push({ mesh, body, before: snapshotBody(body) })
-      mesh.renderOutline = true
-      mesh.outlineColor = new Color3(0.4, 0.8, 1)
-      mesh.outlineWidth = 0.06
-    }
-    props.style.display = 'none'
-    if (multiSel.length === 0) {
-      gizmos.attachToMesh(null)
-      return
-    }
-    finishMultiChange()
-  }
   const outline = (mesh: Mesh): void => {
     mesh.renderOutline = true
     mesh.outlineColor = new Color3(0.4, 0.8, 1)
@@ -1817,54 +1809,6 @@ async function boot(): Promise<void> {
     $('s-x').value = '1'
     $('s-y').value = '1'
     $('s-z').value = '1'
-  }
-  const addNodeToMulti = (mesh: Mesh, node: MapNodeSpawn): void => {
-    promoteSingleToMulti()
-    const i = multiNodes.findIndex((it) => it.mesh === mesh)
-    if (i >= 0) {
-      multiNodes[i]!.mesh.setParent(null)
-      multiNodes[i]!.mesh.renderOutline = false
-      multiNodes.splice(i, 1)
-    } else {
-      multiNodes.push({ mesh, node, before: [...node.pos] })
-      outline(mesh)
-    }
-    finishMultiChange()
-  }
-  const addPropToMulti = (
-    mesh: Mesh,
-    prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number },
-  ): void => {
-    promoteSingleToMulti()
-    const i = multiProps.findIndex((it) => it.mesh === mesh)
-    if (i >= 0) {
-      multiProps[i]!.mesh.setParent(null)
-      multiProps[i]!.mesh.renderOutline = false
-      multiProps.splice(i, 1)
-    } else {
-      multiProps.push({ mesh, prop, before: [...prop.pos] })
-      outline(mesh)
-    }
-    finishMultiChange()
-  }
-  const addPatchToMulti = (mesh: Mesh, patch: PatchState): void => {
-    promoteSingleToMulti()
-    const i = multiPatches.findIndex((it) => it.mesh === mesh)
-    if (i >= 0) {
-      multiPatches[i]!.mesh.setParent(null)
-      multiPatches[i]!.mesh.renderOutline = false
-      multiPatches.splice(i, 1)
-    } else {
-      multiPatches.push({
-        mesh,
-        patch,
-        before: { origin: [...patch.origin], ...(patch.rot ? { rot: [...patch.rot] } : {}) },
-      })
-      mesh.renderOutline = true
-      mesh.outlineColor = new Color3(0.4, 0.8, 1)
-      mesh.outlineWidth = 0.06
-    }
-    finishMultiChange()
   }
   /** Bake a finished group drag (any mix of kinds) into ONE undo entry. */
   const bakeMulti = (): void => {
@@ -2086,11 +2030,16 @@ async function boot(): Promise<void> {
       if (!g || wiredGizmos.has(g)) continue
       wiredGizmos.add(g)
       g.onDragStartObservable.add(() => {
-        gizmoDragging = true
+        // Claimed BEFORE our canvas pointerdown handler runs (see note at
+        // the InteractionController construction) — this is what stops the
+        // click leaking through to whatever sits behind the handle.
+        interaction.begin('gizmo-drag', { x: scene.pointerX, y: scene.pointerY, pointerId: 0 })
+        selectionMgr.freeze()
         beginEdit()
       })
       g.onDragEndObservable.add(() => {
-        gizmoDragging = false
+        interaction.end()
+        selectionMgr.unfreeze()
         if (mainSelected) {
           // Bake the drag into a real patch; the base grid stays anchored.
           const pos = terrain.position.clone()
@@ -2197,11 +2146,13 @@ async function boot(): Promise<void> {
     if (!g || wiredGizmos.has(g)) return
     wiredGizmos.add(g)
     g.onDragStartObservable.add(() => {
-      gizmoDragging = true
+      interaction.begin('gizmo-drag', { x: scene.pointerX, y: scene.pointerY, pointerId: 0 })
+      selectionMgr.freeze()
       beginEdit()
     })
     g.onDragEndObservable.add(() => {
-      gizmoDragging = false
+      interaction.end()
+      selectionMgr.unfreeze()
       if (multiTotal() > 0) {
         bakeMulti()
         fillMultiProps()
@@ -2983,23 +2934,113 @@ async function boot(): Promise<void> {
     justify({ 'f-ox': ((1 - fracOf('f-sx')) / 2) % 1, 'f-oy': ((1 - fracOf('f-sy')) / 2) % 1 }),
   )
 
+  /**
+   * Project the selection set onto the per-kind view state. Single selections
+   * keep their rich inspector; two or more become the group (multi) path.
+   */
+  const rebuildSelectionViews = (): void => {
+    const ids = selectionMgr.ids()
+    // The whole projection runs guarded: select()/selectNode()/... each begin
+    // with their own deselect(), and any of those would otherwise wipe the
+    // authority we are currently projecting.
+    projectingSelection = true
+    try {
+      rebuildSelectionViewsInner(ids)
+    } finally {
+      projectingSelection = false
+    }
+  }
+  const rebuildSelectionViewsInner = (ids: string[]): void => {
+    deselect() // legacy view teardown only
+    if (ids.length === 0) return
+    const meshFor = (oid: string): { mesh: Mesh; kind: string } | null => {
+      for (const [m, b] of staticMeshes) if (b.id === oid) return { mesh: m, kind: 'static' }
+      for (const [m, n] of nodeMeshes) if (n.id === oid) return { mesh: m, kind: 'node' }
+      for (const [m, pr] of propMeshes) if (pr.id === oid) return { mesh: m, kind: 'prop' }
+      for (const [m, pp] of patchMeshes)
+        if (`terrain:${pp.id}` === oid) return { mesh: m, kind: 'patch' }
+      for (const [m, l] of lightMeshes) if (l.id === oid) return { mesh: m, kind: 'light' }
+      return null
+    }
+    if (ids.length === 1) {
+      const oid = ids[0]!
+      if (oid === 'spawn') return selectSpawn()
+      if (oid === 'terrain:main') return selectMainTerrain()
+      const found = meshFor(oid)
+      if (!found) return
+      const { mesh, kind } = found
+      if (kind === 'static') return select(mesh, staticMeshes.get(mesh)!)
+      if (kind === 'node') return selectNode(mesh, nodeMeshes.get(mesh)!)
+      if (kind === 'prop') return selectProp(mesh, propMeshes.get(mesh)!)
+      if (kind === 'patch') return selectPatch(mesh, patchMeshes.get(mesh)!)
+      if (kind === 'light') return selectLight(mesh, lightMeshes.get(mesh)!)
+      return
+    }
+    for (const oid of ids) {
+      const found = meshFor(oid)
+      if (!found) continue
+      const { mesh, kind } = found
+      if (kind === 'static') {
+        const body = staticMeshes.get(mesh)!
+        multiSel.push({ mesh, body, before: snapshotBody(body) })
+      } else if (kind === 'node') {
+        const node = nodeMeshes.get(mesh)!
+        multiNodes.push({ mesh, node, before: [...node.pos] })
+      } else if (kind === 'prop') {
+        const prop = propMeshes.get(mesh)!
+        multiProps.push({ mesh, prop, before: [...prop.pos] })
+      } else if (kind === 'patch') {
+        const patch = patchMeshes.get(mesh)!
+        multiPatches.push({
+          mesh,
+          patch,
+          before: { origin: [...patch.origin], ...(patch.rot ? { rot: [...patch.rot] } : {}) },
+        })
+      } else continue
+      outline(mesh)
+    }
+    finishMultiChange()
+  }
+  /** Clear both the authority and its projection. */
+  const clearSelection = (): void => {
+    selectionMgr.clear()
+    deselect()
+  }
+
   // ── Pointer handling ────────────────────────────────────────────────
+  let lastModifiers: { ctrlKey: boolean; metaKey: boolean; altKey: boolean } = {
+    ctrlKey: false,
+    metaKey: false,
+    altKey: false,
+  }
   let painting = 0 // 0 none, 1 = LMB, 2 = RMB (lower)
   let mouseIsDown = false
   window.addEventListener('pointerdown', (e) => {
     if (e.button === 0 || e.button === 2) mouseIsDown = true
   })
+  window.addEventListener('pointermove', (e) => {
+    interaction.move(e.clientX, e.clientY)
+  })
   window.addEventListener('pointerup', () => {
     mouseIsDown = false
-    // Drag-end observables normally clear this; never let it stick.
-    setTimeout(() => (gizmoDragging = false), 50)
+    // No timeout safety net any more: every gesture ends explicitly, and a
+    // gizmo drag ends in its own onDragEndObservable.
+    const wasClick = interaction.is('selection-click-candidate', 'terrain-sculpt', 'surface-paint')
+      ? interaction.end()
+      : false
+    if (!wasClick || tool !== 'select') return
+    // ONE central pick, ONE result — no per-kind pick passes, no
+    // "smallest patch within 1.5m" heuristics, no multi-terrain selection.
+    const hit = picker.pickAtPointer()
+    const mode = selectModeFromEvent(lastModifiers)
+    if (selectionMgr.applyClick(hit?.objectId ?? null, mode)) rebuildSelectionViews()
   })
   canvas.addEventListener('contextmenu', (e) => e.preventDefault())
   canvas.addEventListener('pointerdown', (e) => {
     if (freeLook) return
     if (e.button !== 0 && e.button !== 2) return
-    // Pointer on a gizmo handle (utility layer): the gizmo owns this click.
-    if (gizmoBusy()) return
+    // The gizmo (or any other gesture) may already own this pointer.
+    if (!interaction.canStartGesture()) return
     mouseIsDown = true // canvas handler runs before the window listener
     const sign = e.button === 2 ? -1 : 1
     if (tool === 'terrain') {
@@ -3070,91 +3111,16 @@ async function boot(): Promise<void> {
     } else if (tool === 'face') {
       handleFacePointer(e)
     } else if (tool === 'select' && e.button === 0) {
-      const pick = scene.pick(
-        scene.pointerX,
-        scene.pointerY,
-        (m) =>
-          m.isEnabled() &&
-          (staticMeshes.has(m as Mesh) ||
-            nodeMeshes.has(m as Mesh) ||
-            propMeshes.has(m as Mesh) ||
-            lightMeshes.has(m as Mesh)),
-      )
-      const mesh = pick?.pickedMesh as Mesh | undefined
-      if (e.shiftKey) {
-        // Shift+click accumulates: statics, patches, nodes and props mix.
-        if (mesh && staticMeshes.has(mesh)) {
-          addToMulti(mesh, staticMeshes.get(mesh)!)
-          return
-        }
-        if (mesh && nodeMeshes.has(mesh)) {
-          addNodeToMulti(mesh, nodeMeshes.get(mesh)!)
-          return
-        }
-        if (mesh && propMeshes.has(mesh)) {
-          addPropToMulti(mesh, propMeshes.get(mesh)!)
-          return
-        }
-        const shifthits = (
-          scene.multiPick(
-            scene.pointerX,
-            scene.pointerY,
-            (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
-          ) ?? []
-        ).filter((h) => h.hit && h.pickedMesh)
-        shifthits.sort((a, b) => a.distance - b.distance)
-        let shiftPatch = shifthits[0]?.pickedMesh as Mesh | undefined
-        for (const h of shifthits.slice(1)) {
-          if (h.distance - shifthits[0]!.distance > 1.5) break
-          const cand = h.pickedMesh as Mesh
-          if (patchMeshes.get(cand)!.halfExtent < patchMeshes.get(shiftPatch!)!.halfExtent)
-            shiftPatch = cand
-        }
-        if (shiftPatch && patchMeshes.has(shiftPatch)) {
-          addPatchToMulti(shiftPatch, patchMeshes.get(shiftPatch)!)
-          return
-        }
-      }
-      if (mesh && staticMeshes.has(mesh) && e.shiftKey) {
-        addToMulti(mesh, staticMeshes.get(mesh)!)
-        return
-      }
-      if (mesh && staticMeshes.has(mesh)) select(mesh, staticMeshes.get(mesh)!)
-      else if (mesh && nodeMeshes.has(mesh)) selectNode(mesh, nodeMeshes.get(mesh)!)
-      else if (mesh && propMeshes.has(mesh)) selectProp(mesh, propMeshes.get(mesh)!)
-      else if (mesh && lightMeshes.has(mesh)) selectLight(mesh, lightMeshes.get(mesh)!)
-      else if (pick?.pickedMesh && spawnFlag.getChildMeshes().includes(pick.pickedMesh as Mesh))
-        selectSpawn()
-      else {
-        // Patches are selectable too (move/tilt/delete whole patch).
-        // Overlapping patches: nearest hit wins; near-ties go to the
-        // SMALLEST patch so islands on top of islands stay clickable.
-        const phits = (
-          scene.multiPick(
-            scene.pointerX,
-            scene.pointerY,
-            (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
-          ) ?? []
-        ).filter((h) => h.hit && h.pickedMesh)
-        phits.sort((a, b) => a.distance - b.distance)
-        let pmesh = phits[0]?.pickedMesh as Mesh | undefined
-        for (const h of phits.slice(1)) {
-          if (h.distance - phits[0]!.distance > 1.5) break
-          const cand = h.pickedMesh as Mesh
-          if (patchMeshes.get(cand)!.halfExtent < patchMeshes.get(pmesh!)!.halfExtent) pmesh = cand
-        }
-        if (pmesh && patchMeshes.has(pmesh)) selectPatch(pmesh, patchMeshes.get(pmesh)!)
-        else {
-          // A removed (sunken+disabled) starter island must NOT catch rays.
-          const tpick = scene.pick(
-            scene.pointerX,
-            scene.pointerY,
-            (m) => m === terrain && terrain.isEnabled(),
-          )
-          if (tpick?.hit) selectMainTerrain()
-          else deselect()
-        }
-      }
+      // Selection resolves on RELEASE, and only if the pointer barely moved:
+      // a drag is never a click. The pick itself happens once, there.
+      // Modifiers are captured at PRESS: that is where the user expressed
+      // intent, and they may release Ctrl/Alt before the mouse button.
+      lastModifiers = { ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey }
+      interaction.begin('selection-click-candidate', {
+        x: e.clientX,
+        y: e.clientY,
+        pointerId: e.pointerId,
+      })
     }
   })
   window.addEventListener('pointerup', () => {
@@ -3290,7 +3256,7 @@ async function boot(): Promise<void> {
         deleteSelected()
         return true
       case 'edit.cancel':
-        deselect()
+        clearSelection()
         return true
       case 'edit.save':
         saveBtn.click()
@@ -3369,6 +3335,7 @@ async function boot(): Promise<void> {
   scene.onBeforeRenderObservable.add(() => {
     const dt = engine.getDeltaTime() / 1000
     env.update(dt, camera.position)
+    if (!interaction.flightAllowed()) return
     const speed = (holding('cam.fast') ? 34 : 11) * dt
     const move = new Vector3(
       (holding('cam.right') ? 1 : 0) - (holding('cam.left') ? 1 : 0),
@@ -3402,7 +3369,7 @@ async function boot(): Promise<void> {
     )
     const overTerrain = Boolean(pick?.hit && pick.pickedPoint)
     // Hover highlight for the Select tool (cheap: every 6th frame).
-    if (tool === 'select' && !gizmoBusy() && ++frameTick % 6 === 0) {
+    if (tool === 'select' && interaction.pickingAllowed() && ++frameTick % 6 === 0) {
       const hp = scene.pick(
         scene.pointerX,
         scene.pointerY,
@@ -4163,8 +4130,157 @@ async function boot(): Promise<void> {
   // Blender-style drag-scrub on every numeric input (incl. dynamic panels).
   scrubAllNumbers(document)
 
+  // ── Editor probe API (harness-only; NOT a game/public API) ──────────
+  // The regression suite talks to the editor exclusively through this
+  // surface, so the same tests run against the old and new architecture.
+  const probeSelectionIds = (): string[] => {
+    const ids: string[] = []
+    if (mainSelected) ids.push('terrain:main')
+    if (spawnSelected) ids.push('spawn')
+    if (selected?.body.id) ids.push(selected.body.id)
+    if (selectedNode?.node.id) ids.push(selectedNode.node.id)
+    if (selectedProp?.prop.id) ids.push(selectedProp.prop.id)
+    if (selectedPatch) ids.push(`terrain:${selectedPatch.patch.id}`)
+    if (selectedLight) ids.push(selectedLight.light.id)
+    for (const it of multiSel) if (it.body.id) ids.push(it.body.id)
+    for (const it of multiPatches) ids.push(`terrain:${it.patch.id}`)
+    for (const it of multiNodes) if (it.node.id) ids.push(it.node.id)
+    for (const it of multiProps) if (it.prop.id) ids.push(it.prop.id)
+    return ids
+  }
+  /**
+   * Screen position of a live gizmo handle, found by ray-testing the
+   * utility layer along the projected axis — tests must click the REAL
+   * handle geometry, never a guessed offset.
+   */
+  const probeGizmoHandle = (axis: 'x' | 'y' | 'z'): [number, number] | null => {
+    const active =
+      gizmoMode === 'move'
+        ? gizmos.gizmos.positionGizmo
+        : gizmoMode === 'rotate'
+          ? gizmos.gizmos.rotationGizmo
+          : gizmos.gizmos.scaleGizmo
+    if (!active) return null
+    const axisGizmo = (
+      active as unknown as Record<'xGizmo' | 'yGizmo' | 'zGizmo', { _rootMesh?: TransformNode }>
+    )[`${axis}Gizmo`]
+    const root = axisGizmo?._rootMesh
+    if (!root) return null
+    const uScene = active.gizmoLayer.utilityLayerScene
+    const vp = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
+    const origin = Vector3.Project(
+      root.getAbsolutePosition(),
+      Matrix.Identity(),
+      scene.getTransformMatrix(),
+      vp,
+    )
+    const belongsToAxis = (m: { parent: unknown } | null): boolean => {
+      let n = m as { parent: unknown } | null
+      for (let d = 0; n && d < 12; d++) {
+        if (n === (root as unknown)) return true
+        n = n.parent as { parent: unknown } | null
+      }
+      return false
+    }
+    // Spiral out from the gizmo origin until a utility-layer pick lands on
+    // geometry owned by THIS axis. Works for arrows, planes and rotation
+    // rings alike — no assumptions about where the handle art sits.
+    for (let r = 6; r <= 220; r += 4) {
+      for (let k = 0; k < 24; k++) {
+        const a = (k / 24) * Math.PI * 2
+        const x = origin.x + Math.cos(a) * r
+        const y = origin.y + Math.sin(a) * r
+        if (x < 0 || y < 0 || x > engine.getRenderWidth() || y > engine.getRenderHeight()) continue
+        const hit = uScene.pick(x, y)
+        if (hit?.hit && hit.pickedMesh && belongsToAxis(hit.pickedMesh))
+          return [Math.round(x), Math.round(y)]
+      }
+    }
+    return null
+  }
+  /** World → screen, so tests can aim the real mouse at a real object. */
+  const probeWorldToScreen = (p: [number, number, number]): [number, number] => {
+    const vp = camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight())
+    const r = Vector3.Project(
+      new Vector3(p[0], p[1], p[2]),
+      Matrix.Identity(),
+      scene.getTransformMatrix(),
+      vp,
+    )
+    return [Math.round(r.x), Math.round(r.y)]
+  }
+  const probeTerrainWires = (): Record<string, boolean> => {
+    const out: Record<string, boolean> = { 'terrain:main': wire.isEnabled() }
+    for (const [pm, pw] of patchWires) {
+      const p = patchMeshes.get(pm)
+      if (p) out[`terrain:${p.id}`] = pw.isEnabled()
+    }
+    return out
+  }
+  const probeTransform = (id: string): unknown => {
+    const b = placedStatics.find((s) => s.id === id)
+    if (b)
+      return {
+        position: [...b.pos],
+        rotation: b.rot ? [...b.rot] : [0, b.yaw, 0],
+        // Statics have no canonical scale in v1 — dimensions ARE the scale.
+        scale: null,
+        dims:
+          b.shape.type === 'box'
+            ? [...b.shape.size]
+            : b.shape.type === 'cylinder'
+              ? [b.shape.radius, b.shape.height]
+              : [b.shape.radius],
+      }
+    const p = patches.find((pp) => `terrain:${pp.id}` === id || pp.id === id)
+    if (p)
+      return {
+        position: [...p.origin],
+        rotation: p.rot ? [...p.rot] : [0, 0, 0],
+        scale: null,
+      }
+    const l = mapLightsArr.find((x) => x.id === id)
+    if (l) return { position: [...l.pos], rotation: null, scale: null }
+    return null
+  }
+
   // Test/debug handle (harness-only; not part of any API contract).
   ;(window as unknown as Record<string, unknown>)['__editor'] = {
+    probeVersion: 1,
+    selectionIds: probeSelectionIds,
+    primaryId: () => probeSelectionIds()[0] ?? null,
+    interactionState: () => interaction.state,
+    gizmoState: () => ({
+      mode: gizmoMode,
+      attached: Boolean(gizmos.attachedMesh ?? gizmos.attachedNode),
+      dragging: interaction.is('gizmo-drag'),
+    }),
+    gizmoHandleScreenPos: probeGizmoHandle,
+    cameraSnapshot: () => ({
+      pos: [camera.position.x, camera.position.y, camera.position.z],
+      rot: [camera.rotation.x, camera.rotation.y, camera.rotation.z],
+    }),
+    history: () => ({ depth: undoStack.length, redo: redoStack.length }),
+    terrainWires: probeTerrainWires,
+    faceSelKeys: () =>
+      faceSel.map(
+        (fs) => `${fs.body?.id ?? (fs.patch ? `terrain:${fs.patch.id}` : '?')}:${fs.face ?? 'all'}`,
+      ),
+    paintSurface: () =>
+      paintTarget
+        ? {
+            objectId: paintTarget.id === 'main' ? 'terrain:main' : `terrain:${paintTarget.id}`,
+            base: paintTarget.patch?.tex ?? null,
+            layers: ['grass', 'rock', 'mud'],
+          }
+        : null,
+    transformOf: probeTransform,
+    worldToScreen: probeWorldToScreen,
+    setToolByName: (t: string) => setTool(t as Tool),
+    setCameraPose: (pos: [number, number, number], rot: [number, number, number]) => {
+      camera.position.set(pos[0], pos[1], pos[2])
+      camera.rotation.set(rot[0], rot[1], rot[2])
+    },
     camera,
     get tool() {
       return tool
@@ -4225,7 +4341,7 @@ async function boot(): Promise<void> {
     gizmoBusyState() {
       const g = gizmos.gizmos
       return {
-        dragging: gizmoDragging,
+        dragging: interaction.is('gizmo-drag'),
         pos: Boolean(g.positionGizmo?.isHovered),
         rot: Boolean(g.rotationGizmo?.isHovered),
         scale: Boolean(g.scaleGizmo?.isHovered),
