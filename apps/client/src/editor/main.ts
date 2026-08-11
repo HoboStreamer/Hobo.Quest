@@ -185,6 +185,7 @@ type UndoOp =
       after: { tex?: string; color?: string }
     }
   | { kind: 'batchdelete'; bodies: StaticBody[] }
+  | { kind: 'group'; label: string; ops: UndoOp[] }
   | { kind: 'mainconvert'; prev: Float32Array; patch: PatchState | null }
   | {
       kind: 'patchedit'
@@ -553,6 +554,12 @@ async function boot(): Promise<void> {
     return null
   }
   const applyOp = (op: UndoOp, dir: 'undo' | 'redo'): void => {
+    if (op.kind === 'group') {
+      // Compound ops apply members in order (reversed for undo).
+      const seq = dir === 'undo' ? [...op.ops].reverse() : op.ops
+      for (const sub of seq) applyOp(sub, dir)
+      return
+    }
     if (op.kind === 'terrain') {
       const t = terrainTargets.find((tt) => tt.id === op.target)
       if (t) {
@@ -1207,6 +1214,8 @@ async function boot(): Promise<void> {
     for (const it of multiSel)
       hl.addMesh(it.mesh, it.mesh === multiSel[0]?.mesh ? C_PRIMARY : C_SECONDARY)
     for (const it of multiPatches) hl.addMesh(it.mesh, C_SECONDARY)
+    for (const it of multiNodes) hl.addMesh(it.mesh, C_SECONDARY)
+    for (const it of multiProps) hl.addMesh(it.mesh, C_SECONDARY)
     if (selected) hl.addMesh(selected.mesh, C_PRIMARY)
     if (selectedNode) hl.addMesh(selectedNode.mesh, C_PRIMARY)
     if (selectedProp) hl.addMesh(selectedProp.mesh, C_PRIMARY)
@@ -1275,6 +1284,12 @@ async function boot(): Promise<void> {
     // Selection kinds constrain modes: nodes only move; patches move/rotate.
     if (selectedNode && mode !== 'move') mode = 'move'
     if (selectedPatch && mode === 'scale') mode = 'move'
+    if (
+      mode === 'scale' &&
+      multiTotal() > 0 &&
+      (multiPatches.length > 0 || multiNodes.length > 0 || multiProps.length > 0)
+    )
+      mode = 'move'
     gizmoMode = mode
     gizmos.positionGizmoEnabled = mode === 'move'
     gizmos.rotationGizmoEnabled = mode === 'rotate'
@@ -1392,21 +1407,37 @@ async function boot(): Promise<void> {
     patch: PatchState
     before: { origin: [number, number, number]; rot?: [number, number, number] }
   }[] = []
+  const multiNodes: { mesh: Mesh; node: MapNodeSpawn; before: [number, number, number] }[] = []
+  const multiProps: {
+    mesh: Mesh
+    prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number }
+    before: [number, number, number]
+  }[] = []
+  const multiAll = (): { mesh: Mesh }[] => [
+    ...multiSel,
+    ...multiPatches,
+    ...multiNodes,
+    ...multiProps,
+  ]
+  const multiTotal = (): number =>
+    multiSel.length + multiPatches.length + multiNodes.length + multiProps.length
   const multiPivot = new TransformNode('multipivot', scene)
   const clearMulti = (): void => {
     for (const it of multiSel) {
       it.mesh.setParent(null)
       it.mesh.renderOutline = false
     }
-    for (const it of multiPatches) {
+    for (const it of [...multiPatches, ...multiNodes, ...multiProps]) {
       it.mesh.setParent(null)
       it.mesh.renderOutline = false
     }
     multiSel.length = 0
     multiPatches.length = 0
+    multiNodes.length = 0
+    multiProps.length = 0
   }
   const refreshMultiPivot = (): void => {
-    const all = [...multiSel, ...multiPatches]
+    const all = multiAll()
     for (const it of all) it.mesh.setParent(null)
     const c = new Vector3()
     for (const it of all) c.addInPlace(it.mesh.position)
@@ -1440,11 +1471,75 @@ async function boot(): Promise<void> {
       gizmos.attachToMesh(null)
       return
     }
+    finishMultiChange()
+  }
+  const outline = (mesh: Mesh): void => {
+    mesh.renderOutline = true
+    mesh.outlineColor = new Color3(0.4, 0.8, 1)
+    mesh.outlineWidth = 0.06
+  }
+  /** Shared tail of every add/toggle: pivot, gizmo mode, locks, status. */
+  const finishMultiChange = (): void => {
+    props.style.display = 'none'
+    if (multiTotal() === 0) {
+      gizmos.attachToMesh(null)
+      return
+    }
     refreshMultiPivot()
-    if (gizmoMode === 'scale') setGizmoMode('move')
-    const ids = multiSel.map((it) => it.body.id).filter((x): x is string => Boolean(x))
+    // Group scale only makes sense for a statics-only selection.
+    if (gizmoMode === 'scale' && (multiPatches.length || multiNodes.length || multiProps.length))
+      setGizmoMode('move')
+    const ids = [
+      ...multiSel.map((it) => it.body.id).filter((x): x is string => Boolean(x)),
+      ...multiPatches.map((it) => `terrain:${it.patch.id}`),
+      ...multiNodes.map((it) => it.node.id).filter((x): x is string => Boolean(x)),
+      ...multiProps.map((it) => it.prop.id).filter((x): x is string => Boolean(x)),
+    ]
     afterSelect(ids, () => gizmos.attachToNode(multiPivot))
-    status.textContent = `${multiSel.length} selected — G/R to move/rotate together, Del deletes all`
+    status.textContent = `${multiTotal()} selected — move/rotate together (scale: statics only), Del deletes`
+  }
+  const addNodeToMulti = (mesh: Mesh, node: MapNodeSpawn): void => {
+    if (selectedNode) {
+      const prev = selectedNode
+      selectedNode = null
+      if (!multiNodes.some((it) => it.mesh === prev.mesh)) {
+        multiNodes.push({ mesh: prev.mesh, node: prev.node, before: [...prev.node.pos] })
+        outline(prev.mesh)
+      }
+    }
+    const i = multiNodes.findIndex((it) => it.mesh === mesh)
+    if (i >= 0) {
+      multiNodes[i]!.mesh.setParent(null)
+      multiNodes[i]!.mesh.renderOutline = false
+      multiNodes.splice(i, 1)
+    } else {
+      multiNodes.push({ mesh, node, before: [...node.pos] })
+      outline(mesh)
+    }
+    finishMultiChange()
+  }
+  const addPropToMulti = (
+    mesh: Mesh,
+    prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number },
+  ): void => {
+    if (selectedProp) {
+      const prev = selectedProp
+      selectedProp = null
+      if (!multiProps.some((it) => it.mesh === prev.mesh)) {
+        multiProps.push({ mesh: prev.mesh, prop: prev.prop, before: [...prev.prop.pos] })
+        outline(prev.mesh)
+      }
+    }
+    const i = multiProps.findIndex((it) => it.mesh === mesh)
+    if (i >= 0) {
+      multiProps[i]!.mesh.setParent(null)
+      multiProps[i]!.mesh.renderOutline = false
+      multiProps.splice(i, 1)
+    } else {
+      multiProps.push({ mesh, prop, before: [...prop.pos] })
+      outline(mesh)
+    }
+    finishMultiChange()
   }
   const addPatchToMulti = (mesh: Mesh, patch: PatchState): void => {
     if (selectedPatch) {
@@ -1475,22 +1570,12 @@ async function boot(): Promise<void> {
       mesh.outlineColor = new Color3(0.4, 0.8, 1)
       mesh.outlineWidth = 0.06
     }
-    props.style.display = 'none'
-    if (multiSel.length + multiPatches.length === 0) {
-      gizmos.attachToMesh(null)
-      return
-    }
-    refreshMultiPivot()
-    if (gizmoMode === 'scale') setGizmoMode('move')
-    const ids = [
-      ...multiSel.map((it) => it.body.id).filter((x): x is string => Boolean(x)),
-      ...multiPatches.map((it) => `terrain:${it.patch.id}`),
-    ]
-    afterSelect(ids, () => gizmos.attachToNode(multiPivot))
-    status.textContent = `${multiSel.length + multiPatches.length} selected — move/rotate together, Del deletes`
+    finishMultiChange()
   }
+  /** Bake a finished group drag (any mix of kinds) into ONE undo entry. */
   const bakeMulti = (): void => {
-    if (multiSel.length === 0 && multiPatches.length === 0) return
+    if (multiTotal() === 0) return
+    const subOps: UndoOp[] = []
     const items: { body: StaticBody; before: StaticBody; after: StaticBody }[] = []
     for (const it of multiSel) {
       it.mesh.setParent(null)
@@ -1502,10 +1587,21 @@ async function boot(): Promise<void> {
       b.yaw = e2.y
       if (Math.abs(e2.x) > 0.01 || Math.abs(e2.z) > 0.01) b.rot = [e2.x, e2.y, e2.z]
       else delete b.rot
+      // Group scale (statics-only mode): bake inherited pivot scale into dims.
+      const sc = m.scaling
+      if (Math.abs(sc.x - 1) > 0.001 || Math.abs(sc.y - 1) > 0.001 || Math.abs(sc.z - 1) > 0.001) {
+        if (b.shape.type === 'box')
+          b.shape.size = [b.shape.size[0] * sc.x, b.shape.size[1] * sc.y, b.shape.size[2] * sc.z]
+        else if (b.shape.type === 'cylinder') {
+          b.shape.radius *= (sc.x + sc.z) / 2
+          b.shape.height *= sc.y
+        } else b.shape.radius *= (sc.x + sc.y + sc.z) / 3
+        rebuildSelectedMesh(b, m)
+      }
       items.push({ body: b, before: it.before, after: snapshotBody(b) })
       it.before = snapshotBody(b)
     }
-    if (items.length > 0) pushUndo({ kind: 'batch', items })
+    if (items.length > 0) subOps.push({ kind: 'batch', items })
     for (const it of multiPatches) {
       it.mesh.setParent(null)
       const m = it.mesh
@@ -1520,7 +1616,7 @@ async function boot(): Promise<void> {
       if (Math.abs(e2.x) > 0.001 || Math.abs(e2.y) > 0.001 || Math.abs(e2.z) > 0.001)
         patch.rot = [e2.x, e2.y, e2.z]
       else delete patch.rot
-      pushUndo({
+      subOps.push({
         kind: 'patchedit',
         id: patch.id,
         before,
@@ -1528,6 +1624,26 @@ async function boot(): Promise<void> {
       })
       it.before = { origin: [...patch.origin], ...(patch.rot ? { rot: [...patch.rot] } : {}) }
     }
+    for (const it of multiNodes) {
+      it.mesh.setParent(null)
+      const m = it.mesh
+      const after: [number, number, number] = [m.position.x, 0, m.position.z]
+      subOps.push({ kind: 'nodemove', node: it.node, before: it.before, after })
+      it.node.pos = after
+      m.position.set(after[0], sampleH(after[0], after[2]) + 0.4, after[2])
+      it.before = [...after]
+    }
+    for (const it of multiProps) {
+      it.mesh.setParent(null)
+      const m = it.mesh
+      const after: [number, number, number] = [m.position.x, 1, m.position.z]
+      subOps.push({ kind: 'propmove', prop: it.prop, before: it.before, after })
+      it.prop.pos = after
+      m.position.set(after[0], sampleH(after[0], after[2]) + 0.5, after[2])
+      it.before = [...after]
+    }
+    if (subOps.length === 1) pushUndo(subOps[0]!)
+    else if (subOps.length > 1) pushUndo({ kind: 'group', label: 'group transform', ops: subOps })
     refreshMultiPivot()
   }
 
@@ -1760,6 +1876,10 @@ async function boot(): Promise<void> {
     wiredGizmos.add(g)
     g.onDragStartObservable.add(beginEdit)
     g.onDragEndObservable.add(() => {
+      if (multiTotal() > 0) {
+        bakeMulti()
+        return
+      }
       if (!selected) return
       // Bake the gizmo scale into the shape dimensions, then rebuild clean.
       const m = selected.mesh
@@ -1961,37 +2081,43 @@ async function boot(): Promise<void> {
       status.textContent = '🌊 starter island removed — one Ctrl+Z brings it back'
       return
     }
-    if (multiPatches.length > 0) {
+    if (multiTotal() > 0) {
       const pitems = [...multiPatches]
       const sitems = [...multiSel]
+      const nitems = [...multiNodes]
+      const pritems = [...multiProps]
       clearMulti()
+      const subOps: UndoOp[] = []
       for (const it of pitems) {
         patches = patches.filter((pp) => pp !== it.patch)
         patchMeshes.delete(it.mesh)
         const ti = terrainTargets.findIndex((t) => t.patch === it.patch)
         if (ti >= 0) terrainTargets.splice(ti, 1)
         it.mesh.dispose()
-        pushUndo({ kind: 'patchdelete', patch: it.patch })
+        subOps.push({ kind: 'patchdelete', patch: it.patch })
       }
       for (const it of sitems) {
         placedStatics = placedStatics.filter((b) => b !== it.body)
         staticMeshes.delete(it.mesh)
         it.mesh.dispose()
       }
-      if (sitems.length > 0) pushUndo({ kind: 'batchdelete', bodies: sitems.map((it) => it.body) })
-      status.textContent = `${pitems.length + sitems.length} deleted`
-      return
-    }
-    if (multiSel.length > 0) {
-      const items = [...multiSel]
-      clearMulti()
-      for (const it of items) {
-        placedStatics = placedStatics.filter((b) => b !== it.body)
-        staticMeshes.delete(it.mesh)
+      if (sitems.length > 0)
+        subOps.push({ kind: 'batchdelete', bodies: sitems.map((it) => it.body) })
+      for (const it of nitems) {
+        placedNodes = placedNodes.filter((n) => n !== it.node)
+        nodeMeshes.delete(it.mesh)
         it.mesh.dispose()
+        subOps.push({ kind: 'delete', node: it.node })
       }
-      pushUndo({ kind: 'batchdelete', bodies: items.map((it) => it.body) })
-      status.textContent = `${items.length} objects deleted (one undo restores all)`
+      for (const it of pritems) {
+        placedProps = placedProps.filter((x) => x !== it.prop)
+        propMeshes.delete(it.mesh)
+        it.mesh.dispose()
+        subOps.push({ kind: 'propedit', add: false, prop: it.prop })
+      }
+      if (subOps.length === 1) pushUndo(subOps[0]!)
+      else if (subOps.length > 1) pushUndo({ kind: 'group', label: 'group delete', ops: subOps })
+      status.textContent = `${pitems.length + sitems.length + nitems.length + pritems.length} deleted (one undo restores all)`
       return
     }
     if (spawnSelected) {
@@ -2041,6 +2167,33 @@ async function boot(): Promise<void> {
   }
   $e('p-del').addEventListener('click', deleteSelected)
   $e('p-dup').addEventListener('click', () => {
+    if (multiTotal() > 0) {
+      const subOps: UndoOp[] = []
+      const newBodies: { mesh: Mesh; body: StaticBody }[] = []
+      for (const it of multiSel) {
+        const copy = snapshotBody(it.body)
+        copy.id = newId('s')
+        copy.pos = [copy.pos[0] + 2, copy.pos[1], copy.pos[2] + 2]
+        placedStatics.push(copy)
+        newBodies.push({ mesh: renderStatic(copy), body: copy })
+        subOps.push({ kind: 'place', body: copy })
+      }
+      for (const it of multiPatches) {
+        const copy: PatchState = {
+          ...it.patch,
+          id: newId('patch'),
+          origin: [it.patch.origin[0] + 2, it.patch.origin[1], it.patch.origin[2] + 2],
+          heights: it.patch.heights.slice(),
+        }
+        patches.push(copy)
+        buildPatchMesh(copy)
+        subOps.push({ kind: 'patchadd', patch: copy })
+      }
+      if (subOps.length === 1) pushUndo(subOps[0]!)
+      else if (subOps.length > 1) pushUndo({ kind: 'group', label: 'group duplicate', ops: subOps })
+      status.textContent = `${subOps.length} duplicated`
+      return
+    }
     if (!selected) return
     const copy = snapshotBody(selected.body)
     copy.id = newId('s')
@@ -2103,9 +2256,17 @@ async function boot(): Promise<void> {
       )
       const mesh = pick?.pickedMesh as Mesh | undefined
       if (e.shiftKey) {
-        // Shift+click accumulates: statics and terrain patches mix freely.
+        // Shift+click accumulates: statics, patches, nodes and props mix.
         if (mesh && staticMeshes.has(mesh)) {
           addToMulti(mesh, staticMeshes.get(mesh)!)
+          return
+        }
+        if (mesh && nodeMeshes.has(mesh)) {
+          addNodeToMulti(mesh, nodeMeshes.get(mesh)!)
+          return
+        }
+        if (mesh && propMeshes.has(mesh)) {
+          addPropToMulti(mesh, propMeshes.get(mesh)!)
           return
         }
         const shiftPatch = scene.pick(scene.pointerX, scene.pointerY, (m) =>
@@ -2944,7 +3105,18 @@ async function boot(): Promise<void> {
       selectMainTerrain()
     },
     multiCount() {
-      return multiSel.length + multiPatches.length
+      return multiTotal()
+    },
+    undoDepth() {
+      return undoStack.length
+    },
+    objectCounts() {
+      return {
+        statics: placedStatics.length,
+        patches: patches.length,
+        nodes: placedNodes.length,
+        props: placedProps.length,
+      }
     },
     mainVisible() {
       return terrain.isEnabled()
