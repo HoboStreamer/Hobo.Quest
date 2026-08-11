@@ -1,4 +1,4 @@
-import type { StaticBody } from './schema/world.js'
+import type { FaceStyle, StaticBody } from './schema/world.js'
 import type { MapNodeSpawn, MapOverride, MapPropSpawn, TerrainPatchData } from './terrain.js'
 
 /**
@@ -8,6 +8,47 @@ import type { MapNodeSpawn, MapOverride, MapPropSpawn, TerrainPatchData } from '
  * imports become new entries here in a later phase — the format is the
  * contract, the tools are replaceable.
  */
+/**
+ * Editor-placed light. Covers every Babylon punctual/ambient light type:
+ * point, spot (angle+exponent), directional (sun-like), hemispheric
+ * (ambient dome with ground color) and rectangular area lights.
+ */
+export interface MapLight {
+  id: string
+  type: 'point' | 'spot' | 'directional' | 'hemi' | 'rect'
+  pos: [number, number, number]
+  /** Direction for spot/directional/hemi/rect (unit-ish vector). */
+  dir?: [number, number, number]
+  /** Diffuse color (hex). */
+  color?: string
+  /** Specular highlight color (hex). */
+  specular?: string
+  intensity?: number
+  /** Reach in meters (point/spot). */
+  range?: number
+  /** Spot cone angle in radians. */
+  angle?: number
+  /** Spot decay exponent. */
+  exponent?: number
+  /** Hemispheric ground (bounce) color. */
+  ground?: string
+  /** Rect area light [width, height] in meters. */
+  size?: [number, number]
+  /** Cast shadows (spot/directional/point). */
+  shadows?: boolean
+}
+
+/** A custom texture: either embedded (legacy dataUrl) or server-hosted. */
+export interface MapTextureEntry {
+  name: string
+  /** Legacy embedded payload (small uploads from older maps). */
+  dataUrl?: string
+  /** Server-hosted asset path (/map-assets/...), preferred. */
+  url?: string
+  /** Default UV tiling scale hint. */
+  scale?: number
+}
+
 export interface MapFile {
   v: 1
   halfExtent: number
@@ -33,11 +74,14 @@ export interface MapFile {
     tex?: string
     color?: string
     mix?: string
+    uv?: FaceStyle
   }[]
   /** Imported glTF models (data URLs) placeable as statics via `model`. */
   models?: { id: string; name: string; glb: string; bounds: [number, number, number] }[]
   /** Uploaded custom textures usable on statics as `custom:<name>`. */
-  textures?: { name: string; dataUrl: string }[]
+  textures?: MapTextureEntry[]
+  /** Editor-placed lights (rendered client-side). */
+  lights?: MapLight[]
   /** Player spawn point + facing. */
   spawn?: [number, number, number]
   spawnYaw?: number

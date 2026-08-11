@@ -22,10 +22,17 @@ import {
   buildTerrainGrid,
   getMapOverride,
   type ContentRegistry,
+  type MapTextureEntry,
   type WorldShape,
   type StaticBody,
 } from '@hobo/content'
 import { Water } from './water.js'
+import {
+  applyPatchTexture,
+  applyStaticStyle,
+  registerCustomTextures,
+  resolveTexInfo,
+} from './mapStyle.js'
 
 /**
  * Engine + scene bootstrap and static world construction. WebGPU when the
@@ -94,19 +101,17 @@ export function meshForShape(scene: Scene, name: string, shape: WorldShape, colo
 }
 
 /** Builds render meshes for the static level (mirrors the server's physics statics). */
-/** Uploaded custom textures + imported models from the edited map. */
-const customTextures = new Map<string, string>()
+/** Imported models from the edited map (textures live in mapStyle.ts). */
 const mapModels = new Map<string, { glb: string; bounds: [number, number, number] }>()
 
 export function registerMapAssets(
   map: {
-    textures?: { name: string; dataUrl: string }[]
+    textures?: MapTextureEntry[]
     models?: { id: string; name: string; glb: string; bounds: [number, number, number] }[]
   } | null,
 ): void {
-  customTextures.clear()
+  registerCustomTextures(map?.textures)
   mapModels.clear()
-  for (const t of map?.textures ?? []) customTextures.set(t.name, t.dataUrl)
   for (const m of map?.models ?? []) mapModels.set(m.id, { glb: m.glb, bounds: m.bounds })
 }
 
@@ -168,17 +173,15 @@ export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mes
       continue
     }
     const mat = new StandardMaterial(`patchmat:${patch.id}`, scene)
-    const texName = patch.tex ?? 'leafy_grass'
-    const custom = texName.startsWith('custom:') ? customTextures.get(texName.slice(7)) : undefined
-    const scale = Math.max(4, patch.halfExtent / 2)
-    if (custom) {
-      const tx = new Texture(custom, scene)
-      tx.uScale = tx.vScale = scale
+    // 'none' = plain color (no texture at all); absent = default grass.
+    const info = resolveTexInfo(patch.tex ?? 'leafy_grass')
+    if (info) {
+      const tx = new Texture(info.url, scene)
+      applyPatchTexture(tx, patch.halfExtent, info, patch.uv)
       mat.diffuseTexture = tx
-    } else {
-      mat.diffuseTexture = tiled(scene, texName, scale)
     }
     if (patch.color) mat.diffuseColor = Color3.FromHexString(patch.color)
+    else if (!info) mat.diffuseColor = new Color3(0.75, 0.75, 0.75)
     mat.specularColor = new Color3(0.02, 0.02, 0.02)
     mat.maxSimultaneousLights = 8
     mesh.material = mat
@@ -204,7 +207,7 @@ export function buildStaticWorld(scene: Scene, content: ContentRegistry, mapMix?
 
   for (const [i, s] of world.statics.entries()) {
     const mesh = meshForShape(scene, `static:${i}`, s.shape, s.color)
-    if (s.tex) applyStaticTexture(scene, mesh, s)
+    applyStaticStyle(scene, mesh, s)
     if (s.model) attachModel(scene, mesh, s.model)
     mesh.position.set(s.pos[0], s.pos[1], s.pos[2])
     mesh.rotationQuaternion = s.rot
@@ -488,30 +491,4 @@ function paintMixMap(scene: Scene, halfExtent: number): DynamicTexture {
   trail(-28, 0, -38, -36) // west gate -> quarry
   dt.update()
   return dt
-}
-
-function applyStaticTexture(
-  scene: Scene,
-  mesh: Mesh,
-  s: { shape: WorldShape; color: string; tex?: string | undefined },
-): void {
-  if (!s.tex) return
-  const mat = new StandardMaterial(`static-tex:${mesh.name}`, scene)
-  const custom = s.tex.startsWith('custom:') ? customTextures.get(s.tex.slice(7)) : undefined
-  const tex = new Texture(custom ?? `/assets/tex/${s.tex}.jpg`, scene)
-  // Tile roughly every 2m using the mesh's dominant dimensions.
-  const dims =
-    s.shape.type === 'box'
-      ? s.shape.size
-      : s.shape.type === 'cylinder'
-        ? [s.shape.radius * 2, s.shape.height, s.shape.radius * 2]
-        : [s.shape.radius * 2, s.shape.radius * 2, s.shape.radius * 2]
-  tex.uScale = Math.max(1, Math.round(Math.max(dims[0] ?? 1, dims[2] ?? 1) / 2))
-  tex.vScale = Math.max(1, Math.round((dims[1] ?? 1) / 2))
-  mat.diffuseTexture = tex
-  // Mostly let the texture speak — a heavy tint multiplies photos into mud.
-  mat.diffuseColor = Color3.Lerp(Color3.FromHexString(s.color), Color3.White(), 0.75)
-  mat.specularColor = new Color3(0.04, 0.04, 0.04)
-  mat.maxSimultaneousLights = 8
-  mesh.material = mat
 }

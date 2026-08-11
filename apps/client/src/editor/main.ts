@@ -26,12 +26,31 @@ import {
   defaultHeights,
   encodeHeights,
   setMapOverride,
+  type FaceStyle,
   type MapFile,
+  type MapLight,
   type MapNodeSpawn,
+  type MapTextureEntry,
   type StaticBody,
 } from '@hobo/content'
 import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer.js'
 import { meshForShape } from '../render/sceneSetup.js'
+import {
+  LIGHT_DEFAULTS,
+  applyPatchTexture,
+  applyStaticStyle,
+  instantiateMapLight,
+  prettyTexName,
+  registerCustomTextures,
+  resolveTexInfo,
+} from '../render/mapStyle.js'
+import {
+  createTexPicker,
+  downscaleImage,
+  makeScrubbable,
+  scrubAllNumbers,
+  type TexOption,
+} from './ui.js'
 import {
   ACTIONS,
   bindingFromEvent,
@@ -58,7 +77,7 @@ const HALF = world.groundHalfExtent
 const SUB = 128
 const MIX = 512
 
-type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select'
+type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select' | 'face' | 'light'
 
 /** Session-stable id generator for map objects (never array positions). */
 let idCounter = 0
@@ -145,6 +164,7 @@ interface PatchState {
   tex?: string
   color?: string
   mix?: string
+  uv?: FaceStyle
 }
 
 type UndoOp =
@@ -181,9 +201,12 @@ type UndoOp =
   | {
       kind: 'patchprop'
       patch: PatchState
-      before: { tex?: string; color?: string }
-      after: { tex?: string; color?: string }
+      before: { tex?: string; color?: string; uv?: FaceStyle }
+      after: { tex?: string; color?: string; uv?: FaceStyle }
     }
+  | { kind: 'lightadd'; light: MapLight }
+  | { kind: 'lightdelete'; light: MapLight }
+  | { kind: 'lightedit'; light: MapLight; before: MapLight; after: MapLight }
   | { kind: 'batchdelete'; bodies: StaticBody[] }
   | { kind: 'group'; label: string; ops: UndoOp[] }
   | { kind: 'mainconvert'; prev: Float32Array; patch: PatchState | null }
@@ -359,6 +382,7 @@ async function boot(): Promise<void> {
   }
   const renderStatic = (s: StaticBody): Mesh => {
     const mesh = meshForShape(scene, `s:${Math.random()}`, s.shape, s.color)
+    applyStaticStyle(scene, mesh, s) // textures + per-face styles render here too
     applyBodyToMesh(mesh, s)
     staticMeshes.set(mesh, s)
     if (s.model) {
@@ -458,6 +482,8 @@ async function boot(): Promise<void> {
     ['entity', '🌱 Entity'],
     ['mesh', '🧱 Mesh'],
     ['select', '🖱 Select'],
+    ['face', '🎨 Face'],
+    ['light', '💡 Light'],
   ]
   const terrainMode = (): 'sculpt' | 'smooth' | 'flatten' =>
     (document.getElementById('terrain-mode') as HTMLSelectElement).value as
@@ -472,14 +498,24 @@ async function boot(): Promise<void> {
     $e('paint-row').style.display = id === 'paint' ? 'flex' : 'none'
     $e('mesh-row').style.display = id === 'mesh' ? 'flex' : 'none'
     $e('entity-row').style.display = id === 'entity' ? 'flex' : 'none'
+    $e('light-row').style.display = id === 'light' ? 'flex' : 'none'
     // Brush widget floats bottom-left, only for brush-driven tools.
     $e('brush').style.display = id === 'terrain' || id === 'paint' ? 'flex' : 'none'
     $e('mode-row').style.display = id === 'terrain' ? 'flex' : 'none'
     $e('snap-row').style.display =
       id === 'mesh' || id === 'entity' || id === 'select' ? 'flex' : 'none'
+    $e('face').style.display = id === 'face' ? 'flex' : 'none'
+    if (id !== 'face') clearFaceSel()
     if (id !== 'select') deselect()
     if (id !== 'mesh' && id !== 'entity') ghost?.setEnabled(false)
-    status.textContent = id === null ? 'no tool active — camera only' : ''
+    status.textContent =
+      id === null
+        ? 'no tool active — camera only'
+        : id === 'face'
+          ? 'Face Edit: click a face (Shift adds) · RMB paints with current settings'
+          : id === 'light'
+            ? 'Light: click to place the selected light type · Select tool edits lights'
+            : ''
   }
   for (const [id, label] of TOOLS) {
     const b = document.createElement('button')
@@ -499,11 +535,17 @@ async function boot(): Promise<void> {
     entitySel.appendChild(o)
   })
   const texSel = document.getElementById('p-tex') as HTMLSelectElement
-  for (const t of TEXTURES) {
-    const o = document.createElement('option')
-    o.value = t
-    o.textContent = t === '' ? '(plain color)' : t
-    texSel.appendChild(o)
+  const faceTexSel = document.getElementById('f-tex') as HTMLSelectElement
+  const fillTexSelect = (sel: HTMLSelectElement): void => {
+    const prev = sel.value
+    sel.replaceChildren()
+    for (const t of [...TEXTURES, ...mapTextures.map((tt) => `custom:${tt.name}`)]) {
+      const o = document.createElement('option')
+      o.value = t
+      o.textContent = t === '' ? 'Plain Color' : prettyTexName(t)
+      sel.appendChild(o)
+    }
+    if ([...sel.options].some((o) => o.value === prev)) sel.value = prev
   }
   const status = $e('status')
   $('key').value = localStorage.getItem('hobo.editorkey') ?? localStorage.getItem('hq_sso') ?? ''
@@ -658,9 +700,28 @@ async function boot(): Promise<void> {
       else delete op.patch.tex
       if (src.color) op.patch.color = src.color
       else delete op.patch.color
+      if (src.uv) op.patch.uv = src.uv
+      else delete op.patch.uv
       for (const [m, pp] of patchMeshes) {
-        if (pp === op.patch) applyPatchMaterial(m.material as StandardMaterial, op.patch)
+        if (pp === op.patch && !pp.mix) applyPatchMaterial(m.material as StandardMaterial, op.patch)
       }
+    } else if (op.kind === 'lightadd' || op.kind === 'lightdelete') {
+      const removing = (op.kind === 'lightadd') === (dir === 'undo')
+      if (removing) {
+        if (selectedLight?.light === op.light) deselect()
+        mapLightsArr = mapLightsArr.filter((l) => l !== op.light)
+        removeLightRender(op.light)
+      } else {
+        mapLightsArr.push(op.light)
+        renderLight(op.light)
+      }
+    } else if (op.kind === 'lightedit') {
+      const src = dir === 'undo' ? op.before : op.after
+      Object.assign(op.light, JSON.parse(JSON.stringify(src)) as MapLight)
+      for (const k of Object.keys(op.light) as (keyof MapLight)[]) {
+        if (!(k in src)) delete op.light[k]
+      }
+      refreshLightRender(op.light)
     } else if (op.kind === 'batchdelete') {
       const removing = dir === 'redo'
       if (removing) {
@@ -754,7 +815,9 @@ async function boot(): Promise<void> {
   }))
   let mapModels: { id: string; name: string; glb: string; bounds: [number, number, number] }[] =
     extras?.models ?? []
-  let mapTextures: { name: string; dataUrl: string }[] = extras?.textures ?? []
+  let mapTextures: MapTextureEntry[] = extras?.textures ?? []
+  registerCustomTextures(mapTextures)
+  let mapLightsArr: MapLight[] = extras?.lights ?? []
   let placedProps: { id?: string; item: string; pos: [number, number, number]; yaw?: number }[] =
     extras?.props ?? []
   // Stable document ids: everything editable gets one (persisted on save).
@@ -790,18 +853,86 @@ async function boot(): Promise<void> {
   placeSpawnFlag()
   for (const pr of placedProps) renderProp(pr)
 
+  // ── Editor-placed lights: widget mesh + LIVE Babylon light preview ──
+  const lightMeshes = new Map<Mesh, MapLight>()
+  const lightInstances = new Map<string, ReturnType<typeof instantiateMapLight>>()
+  const lightQuat = (l: MapLight): Quaternion =>
+    l.dir
+      ? Quaternion.FromUnitVectorsToRef(
+          new Vector3(0, -1, 0),
+          new Vector3(l.dir[0], l.dir[1], l.dir[2]).normalize(),
+          new Quaternion(),
+        )
+      : Quaternion.Identity()
+  const syncLightInstance = (l: MapLight): void => {
+    lightInstances.get(l.id)?.dispose()
+    const inst = instantiateMapLight(scene, l)
+    lightInstances.set(l.id, inst)
+  }
+  const renderLight = (l: MapLight): Mesh => {
+    const mesh = CreateSphere(`light:${l.id}`, { diameter: 0.55, segments: 10 }, scene)
+    const lm = new StandardMaterial(`lightm:${l.id}`, scene)
+    lm.emissiveColor = Color3.FromHexString(l.color ?? '#ffffff')
+    lm.disableLighting = true
+    mesh.material = lm
+    if (l.type !== 'point') {
+      // Direction cone (apex points along the light's -Y "beam" axis).
+      const arrow = CreateCylinder(
+        `lighta:${l.id}`,
+        { diameterTop: 0.26, diameterBottom: 0.02, height: 0.7, tessellation: 10 },
+        scene,
+      )
+      arrow.parent = mesh
+      arrow.position.y = -0.65
+      arrow.material = lm
+      arrow.isPickable = false
+    }
+    mesh.position.set(l.pos[0], l.pos[1], l.pos[2])
+    mesh.rotationQuaternion = lightQuat(l)
+    lightMeshes.set(mesh, l)
+    syncLightInstance(l)
+    return mesh
+  }
+  const removeLightRender = (l: MapLight): void => {
+    for (const [m, ll] of lightMeshes) {
+      if (ll === l) {
+        lightMeshes.delete(m)
+        m.dispose(false, true)
+      }
+    }
+    lightInstances.get(l.id)?.dispose()
+    lightInstances.delete(l.id)
+  }
+  /** Re-sync widget + live light after property/pose edits. */
+  const refreshLightRender = (l: MapLight): void => {
+    for (const [m, ll] of lightMeshes) {
+      if (ll === l) {
+        m.position.set(l.pos[0], l.pos[1], l.pos[2])
+        m.rotationQuaternion = lightQuat(l)
+        ;(m.material as StandardMaterial).emissiveColor = Color3.FromHexString(l.color ?? '#ffffff')
+      }
+    }
+    syncLightInstance(l)
+  }
+  for (const l of mapLightsArr) renderLight(l)
+
   const PATCH_MIX = 256
-  const patchMixCtx = new Map<string, CanvasRenderingContext2D>()
-  /** Lazily give a patch its own paintable splat layer (like the main mix). */
+  const patchMixCtx = new Map<string, { ctx: CanvasRenderingContext2D; mat: TerrainMaterial }>()
+  /** Lazily give a patch its own paintable splat layer (like the main mix).
+   *  Cached entries RE-ATTACH their material — patch meshes get rebuilt by
+   *  undo/redo and merges, and a rebuilt mesh must not come back black. */
   const ensurePatchMix = (patch: PatchState, mesh: Mesh): CanvasRenderingContext2D => {
-    let ctx = patchMixCtx.get(patch.id)
-    if (ctx) return ctx
+    const cached = patchMixCtx.get(patch.id)
+    if (cached) {
+      if (mesh.material !== cached.mat) mesh.material = cached.mat
+      return cached.ctx
+    }
     const dt = new DynamicTexture(`pmix:${patch.id}`, PATCH_MIX, scene, false)
-    ctx = dt.getContext() as CanvasRenderingContext2D
+    const ctx = dt.getContext() as CanvasRenderingContext2D
     if (patch.mix) {
       const img = new Image()
       img.onload = () => {
-        ctx!.drawImage(img, 0, 0, PATCH_MIX, PATCH_MIX)
+        ctx.drawImage(img, 0, 0, PATCH_MIX, PATCH_MIX)
         dt.update()
       }
       img.src = patch.mix
@@ -810,7 +941,6 @@ async function boot(): Promise<void> {
       ctx.fillRect(0, 0, PATCH_MIX, PATCH_MIX)
       dt.update()
     }
-    patchMixCtx.set(patch.id, ctx)
     const tmat = new TerrainMaterial(`pmixmat:${patch.id}`, scene)
     tmat.mixTexture = dt
     const ptile = (n: string, sc: number): Texture => {
@@ -824,17 +954,19 @@ async function boot(): Promise<void> {
     tmat.specularColor = new Color3(0.02, 0.02, 0.02)
     tmat.backFaceCulling = false
     mesh.material = tmat
+    patchMixCtx.set(patch.id, { ctx, mat: tmat })
     return ctx
   }
   const applyPatchMaterial = (pm: StandardMaterial, patch: PatchState): void => {
     pm.diffuseTexture?.dispose()
-    const texName = patch.tex ?? 'leafy_grass'
-    const custom = texName.startsWith('custom:')
-      ? mapTextures.find((t) => t.name === texName.slice(7))?.dataUrl
-      : undefined
-    const tx = new Texture(custom ?? `/assets/tex/${texName}.jpg`, scene)
-    tx.uScale = tx.vScale = Math.max(4, patch.halfExtent / 2)
-    pm.diffuseTexture = tx
+    pm.diffuseTexture = null
+    // 'none' = plain color; absent = default grass; custom:<name> uploads.
+    const info = resolveTexInfo(patch.tex ?? 'leafy_grass')
+    if (info) {
+      const tx = new Texture(info.url, scene)
+      applyPatchTexture(tx, patch.halfExtent, info, patch.uv)
+      pm.diffuseTexture = tx
+    }
     pm.diffuseColor = patch.color ? Color3.FromHexString(patch.color) : new Color3(0.75, 0.75, 0.75)
   }
   const buildPatchMesh = (patch: PatchState): Mesh => {
@@ -877,7 +1009,10 @@ async function boot(): Promise<void> {
     return true
   }
   const refreshTarget = (t: TerrainTarget): void => {
-    if (t.id === 'main') terrain.setEnabled(!mainGone())
+    if (t.id === 'main') {
+      terrain.setEnabled(!mainGone())
+      terrain.isPickable = !mainGone()
+    }
     const buf = t.mesh.getVerticesData(VertexBuffer.PositionKind) as Float32Array
     const n = t.sub
     for (let j = 0; j <= n; j++) {
@@ -1022,7 +1157,11 @@ async function boot(): Promise<void> {
     rot: Quaternion
   }
   const computePlacePose = (): PlacePose | null => {
-    const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m !== ghost && m !== wire)
+    const pick = scene.pick(
+      scene.pointerX,
+      scene.pointerY,
+      (m) => m !== ghost && m !== wire && m.isEnabled(),
+    )
     if (!pick?.hit || !pick.pickedPoint) return null
     const def =
       tool === 'entity' ? ENTITY_DEFS[Number(entitySel.value)] : PLACEABLES[Number(placeSel.value)]
@@ -1061,7 +1200,11 @@ async function boot(): Promise<void> {
         placeYaw += (e.deltaY > 0 ? 1 : -1) * step
         return
       }
-      const pick = scene.pick(scene.pointerX, scene.pointerY, (m) => m !== ghost && m !== wire)
+      const pick = scene.pick(
+        scene.pointerX,
+        scene.pointerY,
+        (m) => m !== ghost && m !== wire && m.isEnabled(),
+      )
       const target =
         pick?.hit && pick.pickedPoint
           ? pick.pickedPoint
@@ -1189,6 +1332,7 @@ async function boot(): Promise<void> {
     for (const [m, n] of nodeMeshes) if (n.id === oid) return m
     for (const [m, pr] of propMeshes) if (pr.id === oid) return m
     for (const [m, pp] of patchMeshes) if (`terrain:${pp.id}` === oid) return m
+    for (const [m, l] of lightMeshes) if (l.id === oid) return m
     return null
   }
   /** Recompute every highlight from current local + remote selection. */
@@ -1220,6 +1364,8 @@ async function boot(): Promise<void> {
     if (selectedNode) hl.addMesh(selectedNode.mesh, C_PRIMARY)
     if (selectedProp) hl.addMesh(selectedProp.mesh, C_PRIMARY)
     if (selectedPatch) hl.addMesh(selectedPatch.mesh, C_PRIMARY)
+    if (selectedLight) hl.addMesh(selectedLight.mesh, C_PRIMARY)
+    for (const fs of faceSel) hl.addMesh(fs.mesh, fs === faceSel[0] ? C_PRIMARY : C_SECONDARY)
     if (spawnSelected) for (const c of spawnFlag.getChildMeshes()) hl.addMesh(c as Mesh, C_PRIMARY)
     if (hoverMesh && tool === 'select') hl.addMesh(hoverMesh, C_HOVER)
     // Starter island: persistent wireframe while selected (not hover-only).
@@ -1284,6 +1430,8 @@ async function boot(): Promise<void> {
     // Selection kinds constrain modes: nodes only move; patches move/rotate.
     if (selectedNode && mode !== 'move') mode = 'move'
     if (selectedPatch && mode === 'scale') mode = 'move'
+    if (selectedLight && mode === 'scale') mode = 'move'
+    if (selectedLight?.light.type === 'point' && mode === 'rotate') mode = 'move'
     if (
       mode === 'scale' &&
       multiTotal() > 0 &&
@@ -1317,6 +1465,7 @@ async function boot(): Promise<void> {
     before: [number, number, number]
   } | null = null
   let selectedPatch: { mesh: Mesh; patch: PatchState } | null = null
+  let selectedLight: { mesh: Mesh; light: MapLight } | null = null
   let spawnSelected = false
 
   const deselect = (): void => {
@@ -1325,10 +1474,12 @@ async function boot(): Promise<void> {
     clearMulti()
     gizmos.attachToMesh(null)
     props.style.display = 'none'
+    $e('light-rows').style.display = 'none'
     selected = null
     selectedNode = null
     selectedProp = null
     selectedPatch = null
+    selectedLight = null
     releaseLocks()
     sendSelection([])
     setInspectorLocked(false)
@@ -1367,6 +1518,72 @@ async function boot(): Promise<void> {
     $('p-y').value = '0'
     $('p-z').value = String(prop.pos[2])
     afterSelect(prop.id ? [prop.id] : [], () => gizmos.attachToMesh(mesh))
+  }
+
+  const LIGHT_LABEL: Record<MapLight['type'], string> = {
+    point: '💡 point light',
+    spot: '🔦 spot light',
+    directional: '🌞 directional light',
+    hemi: '🌐 hemispheric light',
+    rect: '🟨 rect area light',
+  }
+  const fillLightProps = (l: MapLight): void => {
+    $e('props-title').textContent = LIGHT_LABEL[l.type]
+    for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
+    $e('light-rows').style.display = 'flex'
+    const deg = (r: number) => Math.round((r * 180) / Math.PI)
+    $('p-x').value = String(Number(l.pos[0].toFixed(2)))
+    $('p-y').value = String(Number(l.pos[1].toFixed(2)))
+    $('p-z').value = String(Number(l.pos[2].toFixed(2)))
+    const q = lightQuat(l)
+    const e = q.toEulerAngles()
+    $('r-x').value = String(deg(e.x))
+    $('r-y').value = String(deg(e.y))
+    $('r-z').value = String(deg(e.z))
+    ;($('p-color') as HTMLInputElement).value = l.color ?? '#ffffff'
+    ;($('l-spec') as HTMLInputElement).value = l.specular ?? l.color ?? '#ffffff'
+    $('l-int').value = String(l.intensity ?? LIGHT_DEFAULTS.intensity[l.type])
+    $('l-range').value = String(l.range ?? LIGHT_DEFAULTS.range)
+    $('l-angle').value = String(deg(l.angle ?? LIGHT_DEFAULTS.angle))
+    $('l-exp').value = String(l.exponent ?? LIGHT_DEFAULTS.exponent)
+    ;($('l-ground') as HTMLInputElement).value = l.ground ?? LIGHT_DEFAULTS.ground
+    $('l-w').value = String((l.size ?? LIGHT_DEFAULTS.size)[0])
+    $('l-h').value = String((l.size ?? LIGHT_DEFAULTS.size)[1])
+    ;($('l-shadows') as HTMLInputElement).checked = Boolean(l.shadows)
+    $e('l-range-row').style.display = l.type === 'point' || l.type === 'spot' ? 'flex' : 'none'
+    $e('l-angle-row').style.display = l.type === 'spot' ? 'flex' : 'none'
+    $e('l-ground-row').style.display = l.type === 'hemi' ? 'flex' : 'none'
+    $e('l-size-row').style.display = l.type === 'rect' ? 'flex' : 'none'
+    $e('l-shadow-row').style.display =
+      l.type === 'point' || l.type === 'spot' || l.type === 'directional' ? 'flex' : 'none'
+  }
+  const selectLight = (mesh: Mesh, l: MapLight): void => {
+    deselect()
+    selectedLight = { mesh, light: l }
+    setGizmoMode(gizmoMode === 'scale' ? 'move' : gizmoMode)
+    props.style.display = 'flex'
+    props.style.left = '274px'
+    props.style.top = '12px'
+    fillLightProps(l)
+    status.textContent =
+      l.type === 'point'
+        ? 'drag to move the light · edit properties in the panel'
+        : 'G moves · R rotates the beam direction · edit properties in the panel'
+    afterSelect([l.id], () => gizmos.attachToMesh(mesh))
+  }
+  /** One-liner for light property edits: mutate + undo + live preview. */
+  const editLight = (mutate: (l: MapLight) => void): void => {
+    if (!selectedLight) return
+    const light = selectedLight.light
+    const before = JSON.parse(JSON.stringify(light)) as MapLight
+    mutate(light)
+    pushUndo({
+      kind: 'lightedit',
+      light,
+      before,
+      after: JSON.parse(JSON.stringify(light)) as MapLight,
+    })
+    refreshLightRender(light)
   }
 
   const selectSpawn = (): void => {
@@ -1480,8 +1697,8 @@ async function boot(): Promise<void> {
   }
   /** Shared tail of every add/toggle: pivot, gizmo mode, locks, status. */
   const finishMultiChange = (): void => {
-    props.style.display = 'none'
     if (multiTotal() === 0) {
+      props.style.display = 'none'
       gizmos.attachToMesh(null)
       return
     }
@@ -1495,8 +1712,30 @@ async function boot(): Promise<void> {
       ...multiNodes.map((it) => it.node.id).filter((x): x is string => Boolean(x)),
       ...multiProps.map((it) => it.prop.id).filter((x): x is string => Boolean(x)),
     ]
+    fillMultiProps()
     afterSelect(ids, () => gizmos.attachToNode(multiPivot))
     status.textContent = `${multiTotal()} selected — move/rotate together (scale: statics only), Del deletes`
+  }
+  /** Group inspector: pivot position + delta rotation/scale inputs. */
+  const fillMultiProps = (): void => {
+    if (multiTotal() === 0) return
+    props.style.display = 'flex'
+    props.style.left = '274px'
+    props.style.top = '12px'
+    $e('props-title').textContent = `${multiTotal()} objects (group)`
+    for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
+    $e('light-rows').style.display = 'none'
+    const r1 = (v: number): string => String(Number(v.toFixed(2)))
+    $('p-x').value = r1(multiPivot.position.x)
+    $('p-y').value = r1(multiPivot.position.y)
+    $('p-z').value = r1(multiPivot.position.z)
+    // Rotation and scale act as DELTAS applied to the whole group.
+    $('r-x').value = '0'
+    $('r-y').value = '0'
+    $('r-z').value = '0'
+    $('s-x').value = '1'
+    $('s-y').value = '1'
+    $('s-z').value = '1'
   }
   const addNodeToMulti = (mesh: Mesh, node: MapNodeSpawn): void => {
     if (selectedNode) {
@@ -1708,7 +1947,8 @@ async function boot(): Promise<void> {
     $('r-x').value = String(deg(rot[0]))
     $('r-y').value = String(deg(rot[1]))
     $('r-z').value = String(deg(rot[2]))
-    texSel.value = patch.tex ?? ''
+    texSel.value = patch.tex === 'none' ? '' : (patch.tex ?? 'leafy_grass')
+    texPicker.sync()
     ;($('p-color') as HTMLInputElement).value = patch.color ?? '#bfbfbf'
     status.textContent = 'sculpt patches with the Terrain tool · tilt for caves/overhangs'
     afterSelect([`terrain:${patch.id}`], () => gizmos.attachToMesh(mesh))
@@ -1748,6 +1988,8 @@ async function boot(): Promise<void> {
     }
     ;($('p-color') as HTMLInputElement).value = body.color
     texSel.value = body.tex ?? ''
+    texPicker.sync()
+    $e('light-rows').style.display = 'none'
     const lc = document.getElementById('p-lamp') as HTMLInputElement | null
     if (lc) lc.checked = body.decor === 'lamp'
   }
@@ -1817,8 +2059,29 @@ async function boot(): Promise<void> {
           }
           return
         }
-        if (multiSel.length > 0 || multiPatches.length > 0) {
+        if (multiTotal() > 0) {
           bakeMulti()
+          fillMultiProps()
+          return
+        }
+        if (selectedLight) {
+          const { mesh: m, light } = selectedLight
+          const before = JSON.parse(JSON.stringify(light)) as MapLight
+          light.pos = [m.position.x, m.position.y, m.position.z]
+          if (light.type !== 'point') {
+            const q = m.rotationQuaternion ?? Quaternion.Identity()
+            const d = new Vector3(0, -1, 0)
+            d.rotateByQuaternionToRef(q, d)
+            light.dir = [d.x, d.y, d.z]
+          }
+          pushUndo({
+            kind: 'lightedit',
+            light,
+            before,
+            after: JSON.parse(JSON.stringify(light)) as MapLight,
+          })
+          refreshLightRender(light)
+          fillLightProps(light)
           return
         }
         if (selectedNode) {
@@ -1878,6 +2141,7 @@ async function boot(): Promise<void> {
     g.onDragEndObservable.add(() => {
       if (multiTotal() > 0) {
         bakeMulti()
+        fillMultiProps()
         return
       }
       if (!selected) return
@@ -1900,6 +2164,59 @@ async function boot(): Promise<void> {
   setGizmoMode('move')
   // Numeric property edits apply live.
   const applyManualPose = (): void => {
+    // Group selection: pos is absolute pivot position; rot/scale are deltas
+    // applied to the whole group, then baked as one compound undo entry.
+    if (multiTotal() > 0) {
+      const rad2 = (d: number) => (d * Math.PI) / 180
+      const px = safeNum($('p-x').value)
+      const py = safeNum($('p-y').value)
+      const pz = safeNum($('p-z').value)
+      if (px === null || py === null || pz === null) {
+        fillMultiProps()
+        return
+      }
+      multiPivot.position.set(px, py, pz)
+      multiPivot.rotationQuaternion = Quaternion.FromEulerAngles(
+        rad2(Number($('r-x').value) || 0),
+        rad2(Number($('r-y').value) || 0),
+        rad2(Number($('r-z').value) || 0),
+      )
+      const sx = Number($('s-x').value) || 1
+      const sy = Number($('s-y').value) || 1
+      const sz = Number($('s-z').value) || 1
+      if (multiSel.length === multiTotal()) {
+        multiPivot.scaling.set(sx, sy, sz)
+      } else if (sx !== 1 || sy !== 1 || sz !== 1) {
+        status.textContent = '⚠ group scale needs a statics-only selection — scale ignored'
+      }
+      bakeMulti()
+      fillMultiProps()
+      return
+    }
+    if (selectedLight) {
+      const light = selectedLight.light
+      const before = JSON.parse(JSON.stringify(light)) as MapLight
+      light.pos = [Number($('p-x').value), Number($('p-y').value), Number($('p-z').value)]
+      if (light.type !== 'point') {
+        const rad2 = (d: number) => (d * Math.PI) / 180
+        const q = Quaternion.FromEulerAngles(
+          rad2(Number($('r-x').value) || 0),
+          rad2(Number($('r-y').value) || 0),
+          rad2(Number($('r-z').value) || 0),
+        )
+        const d = new Vector3(0, -1, 0)
+        d.rotateByQuaternionToRef(q, d)
+        light.dir = [d.x, d.y, d.z]
+      }
+      pushUndo({
+        kind: 'lightedit',
+        light,
+        before,
+        after: JSON.parse(JSON.stringify(light)) as MapLight,
+      })
+      refreshLightRender(light)
+      return
+    }
     // Manual numeric entry for the non-static selections.
     if (selectedNode) {
       const node = selectedNode.node
@@ -1992,10 +2309,13 @@ async function boot(): Promise<void> {
     ['s-z', 2],
   ] as const) {
     $(id).addEventListener('change', () => {
-      if (!selected) return
       const f = Number($(id).value)
       if (!Number.isFinite(f) || f <= 0) {
         $(id).value = '1'
+        return
+      }
+      if (!selected) {
+        if (multiTotal() > 0) applyManualPose() // group scale via pivot
         return
       }
       beginEdit()
@@ -2011,7 +2331,68 @@ async function boot(): Promise<void> {
       $(id).value = '1'
     })
   }
+  /** Apply a color or texture change to EVERY selected object (one undo). */
+  const groupApplyStyle = (change: { color?: string; tex?: string | null }): void => {
+    const subOps: UndoOp[] = []
+    const items: { body: StaticBody; before: StaticBody; after: StaticBody }[] = []
+    for (const it of multiSel) {
+      it.mesh.setParent(null)
+      const before = snapshotBody(it.body)
+      if (change.color !== undefined) it.body.color = change.color
+      if (change.tex !== undefined) {
+        if (change.tex) it.body.tex = change.tex
+        else delete it.body.tex
+      }
+      it.mesh = rebuildSelectedMesh(it.body, it.mesh)
+      items.push({ body: it.body, before, after: snapshotBody(it.body) })
+      it.before = snapshotBody(it.body)
+    }
+    if (items.length > 0) subOps.push({ kind: 'batch', items })
+    for (const it of multiPatches) {
+      const patch = it.patch
+      const before = {
+        ...(patch.tex ? { tex: patch.tex } : {}),
+        ...(patch.color ? { color: patch.color } : {}),
+        ...(patch.uv ? { uv: { ...patch.uv } } : {}),
+      }
+      if (change.color !== undefined) patch.color = change.color
+      if (change.tex !== undefined) patch.tex = change.tex ? change.tex : 'none'
+      if (!patch.mix) applyPatchMaterial(it.mesh.material as StandardMaterial, patch)
+      subOps.push({
+        kind: 'patchprop',
+        patch,
+        before,
+        after: {
+          ...(patch.tex ? { tex: patch.tex } : {}),
+          ...(patch.color ? { color: patch.color } : {}),
+          ...(patch.uv ? { uv: { ...patch.uv } } : {}),
+        },
+      })
+    }
+    if (subOps.length === 1) pushUndo(subOps[0]!)
+    else if (subOps.length > 1) pushUndo({ kind: 'group', label: 'group style', ops: subOps })
+    refreshMultiPivot()
+    refreshSelectionVisuals()
+    status.textContent = `style applied to ${multiSel.length + multiPatches.length} objects`
+  }
   $('p-color').addEventListener('change', () => {
+    if (multiTotal() > 0) {
+      groupApplyStyle({ color: ($('p-color') as HTMLInputElement).value })
+      return
+    }
+    if (selectedLight) {
+      const light = selectedLight.light
+      const before = JSON.parse(JSON.stringify(light)) as MapLight
+      light.color = ($('p-color') as HTMLInputElement).value
+      pushUndo({
+        kind: 'lightedit',
+        light,
+        before,
+        after: JSON.parse(JSON.stringify(light)) as MapLight,
+      })
+      refreshLightRender(light)
+      return
+    }
     if (selectedPatch) {
       const patch = selectedPatch.patch
       const before = {
@@ -2019,7 +2400,7 @@ async function boot(): Promise<void> {
         ...(patch.color ? { color: patch.color } : {}),
       }
       patch.color = ($('p-color') as HTMLInputElement).value
-      applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
+      if (!patch.mix) applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
       pushUndo({
         kind: 'patchprop',
         patch,
@@ -2035,15 +2416,20 @@ async function boot(): Promise<void> {
     commitEdit()
   })
   texSel.addEventListener('change', () => {
+    if (multiTotal() > 0) {
+      groupApplyStyle({ tex: texSel.value || null })
+      return
+    }
     if (selectedPatch) {
       const patch = selectedPatch.patch
       const before = {
         ...(patch.tex ? { tex: patch.tex } : {}),
         ...(patch.color ? { color: patch.color } : {}),
+        ...(patch.uv ? { uv: { ...patch.uv } } : {}),
       }
-      if (texSel.value) patch.tex = texSel.value
-      else delete patch.tex
-      applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
+      // '' from the picker = Plain Color (explicit 'none'; default is grass).
+      patch.tex = texSel.value ? texSel.value : 'none'
+      if (!patch.mix) applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
       pushUndo({
         kind: 'patchprop',
         patch,
@@ -2051,9 +2437,10 @@ async function boot(): Promise<void> {
         after: {
           ...(patch.tex ? { tex: patch.tex } : {}),
           ...(patch.color ? { color: patch.color } : {}),
+          ...(patch.uv ? { uv: { ...patch.uv } } : {}),
         },
       })
-      status.textContent = `patch texture: ${texSel.value || 'default grass'}`
+      status.textContent = `patch texture: ${texSel.value ? prettyTexName(texSel.value) : 'plain color'}`
       return
     }
     if (!selected) return
@@ -2062,6 +2449,43 @@ async function boot(): Promise<void> {
     else delete selected.body.tex
     rebuildSelectedMesh(selected.body, selected.mesh)
     commitEdit()
+  })
+  // Reset color: back to neutral (statics/lights) or untinted (patches).
+  document.getElementById('p-color-reset')?.addEventListener('click', () => {
+    if (multiTotal() > 0) {
+      groupApplyStyle({ color: '#8a8d90' })
+      return
+    }
+    if (selectedLight) {
+      ;($('p-color') as HTMLInputElement).value = '#ffffff'
+      $('p-color').dispatchEvent(new Event('change'))
+      return
+    }
+    if (selectedPatch) {
+      const patch = selectedPatch.patch
+      const before = {
+        ...(patch.tex ? { tex: patch.tex } : {}),
+        ...(patch.color ? { color: patch.color } : {}),
+        ...(patch.uv ? { uv: { ...patch.uv } } : {}),
+      }
+      delete patch.color
+      if (!patch.mix) applyPatchMaterial(selectedPatch.mesh.material as StandardMaterial, patch)
+      ;($('p-color') as HTMLInputElement).value = '#bfbfbf'
+      pushUndo({
+        kind: 'patchprop',
+        patch,
+        before,
+        after: {
+          ...(patch.tex ? { tex: patch.tex } : {}),
+          ...(patch.uv ? { uv: { ...patch.uv } } : {}),
+        },
+      })
+      status.textContent = 'patch tint reset'
+      return
+    }
+    if (!selected) return
+    ;($('p-color') as HTMLInputElement).value = '#8a8d90'
+    $('p-color').dispatchEvent(new Event('change'))
   })
   const lampChk = document.getElementById('p-lamp') as HTMLInputElement | null
   lampChk?.addEventListener('change', () => {
@@ -2074,7 +2498,58 @@ async function boot(): Promise<void> {
       ? '💡 object emits lamplight after dark (visible in game)'
       : 'lamplight removed'
   })
+  // ── Light property inputs → live edit + undo ────────────────────────
+  const deg2rad = (d: number): number => (d * Math.PI) / 180
+  $('l-int').addEventListener('change', () => {
+    const v = safeNum($('l-int').value)
+    if (v !== null && v >= 0) editLight((l) => (l.intensity = v))
+  })
+  $('l-range').addEventListener('change', () => {
+    const v = safeNum($('l-range').value, true)
+    if (v !== null) editLight((l) => (l.range = v))
+  })
+  $('l-angle').addEventListener('change', () => {
+    const v = safeNum($('l-angle').value, true)
+    if (v !== null) editLight((l) => (l.angle = deg2rad(Math.min(178, v))))
+  })
+  $('l-exp').addEventListener('change', () => {
+    const v = safeNum($('l-exp').value)
+    if (v !== null && v >= 0) editLight((l) => (l.exponent = v))
+  })
+  $('l-w').addEventListener('change', () => {
+    const v = safeNum($('l-w').value, true)
+    if (v !== null) editLight((l) => (l.size = [v, (l.size ?? LIGHT_DEFAULTS.size)[1]]))
+  })
+  $('l-h').addEventListener('change', () => {
+    const v = safeNum($('l-h').value, true)
+    if (v !== null) editLight((l) => (l.size = [(l.size ?? LIGHT_DEFAULTS.size)[0], v]))
+  })
+  $('l-ground').addEventListener('change', () => {
+    editLight((l) => (l.ground = ($('l-ground') as HTMLInputElement).value))
+  })
+  $('l-spec').addEventListener('change', () => {
+    editLight((l) => (l.specular = ($('l-spec') as HTMLInputElement).value))
+  })
+  $('l-shadows').addEventListener('change', () => {
+    const on = ($('l-shadows') as HTMLInputElement).checked
+    editLight((l) => {
+      if (on) l.shadows = true
+      else delete l.shadows
+    })
+    status.textContent = on
+      ? '☂ shadows on (shadow lights are capped at 3 in game for performance)'
+      : 'shadows off'
+  })
+
   const deleteSelected = (): void => {
+    if (selectedLight) {
+      const { light } = selectedLight
+      deselect()
+      mapLightsArr = mapLightsArr.filter((l) => l !== light)
+      removeLightRender(light)
+      pushUndo({ kind: 'lightdelete', light })
+      return
+    }
     if (mainSelected) {
       deselect()
       convertMainToPatch(true)
@@ -2194,6 +2669,16 @@ async function boot(): Promise<void> {
       status.textContent = `${subOps.length} duplicated`
       return
     }
+    if (selectedLight) {
+      const copy = JSON.parse(JSON.stringify(selectedLight.light)) as MapLight
+      copy.id = newId('l')
+      copy.pos = [copy.pos[0] + 1.5, copy.pos[1], copy.pos[2] + 1.5]
+      mapLightsArr.push(copy)
+      const m = renderLight(copy)
+      pushUndo({ kind: 'lightadd', light: copy })
+      selectLight(m, copy)
+      return
+    }
     if (!selected) return
     const copy = snapshotBody(selected.body)
     copy.id = newId('s')
@@ -2203,6 +2688,237 @@ async function boot(): Promise<void> {
     pushUndo({ kind: 'place', body: copy })
     select(m, copy)
   })
+
+  // ── Face Edit tool (Hammer-style texture application) ───────────────
+  interface FaceSel {
+    mesh: Mesh
+    body?: StaticBody
+    patch?: PatchState
+    /** Box face index 0..5, or null = whole surface. */
+    face: number | null
+  }
+  const faceSel: FaceSel[] = []
+  const FACE_NAMES = ['Front', 'Back', 'Right', 'Left', 'Top', 'Bottom']
+  let fColorOn = false
+  const clearFaceSel = (): void => {
+    faceSel.length = 0
+    updateFaceInfo()
+    refreshSelectionVisuals()
+  }
+  const updateFaceInfo = (): void => {
+    const info = $e('face-info')
+    if (faceSel.length === 0) {
+      info.textContent = 'click a face · Shift adds · RMB applies current'
+      return
+    }
+    info.textContent = faceSel
+      .map((fs) =>
+        fs.patch
+          ? `patch ${fs.patch.halfExtent * 2}m`
+          : fs.face === null
+            ? fs.body!.shape.type
+            : `${fs.body!.shape.type} ${FACE_NAMES[fs.face]}`,
+      )
+      .join(' · ')
+      .slice(0, 90)
+  }
+  const faceStyleOf = (fs: FaceSel): FaceStyle => {
+    if (fs.body) {
+      const base: FaceStyle = {
+        ...(fs.body.tex ? { tex: fs.body.tex } : {}),
+        ...(fs.body.uv ?? {}),
+      }
+      if (fs.face !== null) return { ...base, ...(fs.body.faces?.[String(fs.face)] ?? {}) }
+      return base
+    }
+    const p = fs.patch!
+    return {
+      ...(p.tex && p.tex !== 'none' ? { tex: p.tex } : {}),
+      ...(p.color ? { color: p.color } : {}),
+      ...(p.uv ?? {}),
+    }
+  }
+  const liftFace = (fs: FaceSel): void => {
+    const style = faceStyleOf(fs)
+    faceTexSel.value = style.tex ?? ''
+    faceTexPicker.sync()
+    ;($('f-color') as HTMLInputElement).value = style.color ?? fs.body?.color ?? '#8a8d90'
+    fColorOn = Boolean(style.color)
+    $('f-sx').value = String(style.sx ?? 0)
+    $('f-sy').value = String(style.sy ?? 0)
+    $('f-ox').value = String(style.ox ?? 0)
+    $('f-oy').value = String(style.oy ?? 0)
+    $('f-rot').value = String(Math.round(((style.rot ?? 0) * 180) / Math.PI))
+  }
+  const collectFaceStyle = (): FaceStyle => {
+    const style: FaceStyle = {}
+    if (faceTexSel.value) style.tex = faceTexSel.value
+    if (fColorOn) style.color = ($('f-color') as HTMLInputElement).value
+    const num = (id: string): number => Number($(id).value) || 0
+    if (num('f-sx') > 0) style.sx = num('f-sx')
+    if (num('f-sy') > 0) style.sy = num('f-sy')
+    if (num('f-ox') !== 0) style.ox = num('f-ox')
+    if (num('f-oy') !== 0) style.oy = num('f-oy')
+    if (num('f-rot') !== 0) style.rot = (num('f-rot') * Math.PI) / 180
+    return style
+  }
+  const uvPart = (style: FaceStyle): FaceStyle => {
+    const uv: FaceStyle = {}
+    if (style.sx !== undefined) uv.sx = style.sx
+    if (style.sy !== undefined) uv.sy = style.sy
+    if (style.ox !== undefined) uv.ox = style.ox
+    if (style.oy !== undefined) uv.oy = style.oy
+    if (style.rot !== undefined) uv.rot = style.rot
+    return uv
+  }
+  const patchPropSnapshot = (p: PatchState): { tex?: string; color?: string; uv?: FaceStyle } => ({
+    ...(p.tex ? { tex: p.tex } : {}),
+    ...(p.color ? { color: p.color } : {}),
+    ...(p.uv ? { uv: { ...p.uv } } : {}),
+  })
+  /** Apply (or clear, with `reset`) the panel style to the given surfaces. */
+  const applyFaceStyleTo = (targets: FaceSel[], reset = false): void => {
+    if (targets.length === 0) {
+      status.textContent = 'select a face first (click with the Face tool)'
+      return
+    }
+    const style = reset ? {} : collectFaceStyle()
+    const subOps: UndoOp[] = []
+    const items: { body: StaticBody; before: StaticBody; after: StaticBody }[] = []
+    // Group per body so a box with several selected faces rebuilds ONCE.
+    const byBody = new Map<StaticBody, FaceSel[]>()
+    for (const fs of targets) {
+      if (fs.body) {
+        const list = byBody.get(fs.body) ?? []
+        list.push(fs)
+        byBody.set(fs.body, list)
+      }
+    }
+    for (const [body, list] of byBody) {
+      const before = snapshotBody(body)
+      for (const fs of list) {
+        if (fs.face !== null) {
+          const faces = { ...(body.faces ?? {}) }
+          if (reset || Object.keys(style).length === 0) delete faces[String(fs.face)]
+          else faces[String(fs.face)] = { ...style }
+          if (Object.keys(faces).length > 0) body.faces = faces
+          else delete body.faces
+        } else {
+          if (reset) {
+            delete body.tex
+            delete body.uv
+            delete body.faces
+          } else {
+            if (style.tex) body.tex = style.tex
+            else delete body.tex
+            if (style.color) body.color = style.color
+            const uv = uvPart(style)
+            if (Object.keys(uv).length > 0) body.uv = uv
+            else delete body.uv
+            delete body.faces // apply-to-object supersedes per-face overrides
+          }
+        }
+      }
+      const nm = rebuildSelectedMesh(body, list[0]!.mesh)
+      for (const fs of faceSel) if (fs.body === body) fs.mesh = nm
+      for (const fs of targets) if (fs.body === body) fs.mesh = nm
+      items.push({ body, before, after: snapshotBody(body) })
+    }
+    if (items.length > 0) subOps.push({ kind: 'batch', items })
+    for (const fs of targets) {
+      if (!fs.patch) continue
+      const patch = fs.patch
+      const before = patchPropSnapshot(patch)
+      if (reset) {
+        delete patch.tex
+        delete patch.color
+        delete patch.uv
+      } else {
+        patch.tex = style.tex ?? 'none'
+        if (style.color) patch.color = style.color
+        const uv = uvPart(style)
+        if (Object.keys(uv).length > 0) patch.uv = uv
+        else delete patch.uv
+      }
+      if (!patch.mix) applyPatchMaterial(fs.mesh.material as StandardMaterial, patch)
+      subOps.push({ kind: 'patchprop', patch, before, after: patchPropSnapshot(patch) })
+    }
+    if (subOps.length === 1) pushUndo(subOps[0]!)
+    else if (subOps.length > 1)
+      pushUndo({ kind: 'group', label: reset ? 'face reset' : 'face edit', ops: subOps })
+    refreshSelectionVisuals()
+    status.textContent = reset
+      ? `${targets.length} surface(s) reset to defaults`
+      : `🎨 style applied to ${targets.length} surface(s)`
+  }
+  const handleFacePointer = (e: PointerEvent): void => {
+    if (e.button !== 0 && e.button !== 2) return
+    const pick = scene.pick(
+      scene.pointerX,
+      scene.pointerY,
+      (m) => m.isEnabled() && (staticMeshes.has(m as Mesh) || patchMeshes.has(m as Mesh)),
+    )
+    if (!pick?.hit || !pick.pickedMesh) {
+      if (e.button === 0 && !e.shiftKey) clearFaceSel()
+      return
+    }
+    const mesh = pick.pickedMesh as Mesh
+    const body = staticMeshes.get(mesh)
+    const patch = patchMeshes.get(mesh)
+    const face =
+      body && body.shape.type === 'box' && pick.faceId >= 0 ? Math.floor(pick.faceId / 2) : null
+    const fs: FaceSel = { mesh, ...(body ? { body } : {}), ...(patch ? { patch } : {}), face }
+    if (e.button === 2) {
+      // Hammer right-click: paint the face with the current settings.
+      applyFaceStyleTo([fs])
+      return
+    }
+    const idx = faceSel.findIndex((x) => x.mesh === mesh && x.face === face)
+    if (e.shiftKey || e.ctrlKey) {
+      if (idx >= 0) faceSel.splice(idx, 1)
+      else faceSel.push(fs)
+    } else {
+      faceSel.length = 0
+      faceSel.push(fs)
+      if (e.altKey) {
+        liftFace(fs) // Alt+click = pure lift (Hammer's eyedropper)
+      }
+    }
+    if (faceSel[0]) liftFace(faceSel[0])
+    updateFaceInfo()
+    refreshSelectionVisuals()
+  }
+  $e('f-apply').addEventListener('click', () => applyFaceStyleTo(faceSel))
+  $e('f-apply-all').addEventListener('click', () =>
+    applyFaceStyleTo(faceSel.map((fs) => ({ ...fs, face: null }))),
+  )
+  $e('f-clear').addEventListener('click', () => applyFaceStyleTo(faceSel, true))
+  $e('f-lift').addEventListener('click', () => {
+    if (faceSel[0]) liftFace(faceSel[0])
+  })
+  $('f-color').addEventListener('input', () => (fColorOn = true))
+  $e('f-color-clear').addEventListener('click', () => {
+    fColorOn = false
+    status.textContent = 'tint cleared — Apply writes the face without a tint'
+  })
+  const justify = (patchVals: Partial<Record<'f-sx' | 'f-sy' | 'f-ox' | 'f-oy', number>>): void => {
+    for (const [id, v] of Object.entries(patchVals)) $(id).value = String(v)
+    applyFaceStyleTo(faceSel)
+  }
+  $e('f-fit').addEventListener('click', () =>
+    justify({ 'f-sx': 1, 'f-sy': 1, 'f-ox': 0, 'f-oy': 0 }),
+  )
+  const fracOf = (id: string): number => {
+    const v = Number($(id).value) || 0
+    return v > 0 ? v - Math.floor(v) : 0
+  }
+  $e('f-jl').addEventListener('click', () => justify({ 'f-ox': 0 }))
+  $e('f-jr').addEventListener('click', () => justify({ 'f-ox': (1 - fracOf('f-sx')) % 1 }))
+  $e('f-jt').addEventListener('click', () => justify({ 'f-oy': 0 }))
+  $e('f-jb').addEventListener('click', () => justify({ 'f-oy': (1 - fracOf('f-sy')) % 1 }))
+  $e('f-jc').addEventListener('click', () =>
+    justify({ 'f-ox': ((1 - fracOf('f-sx')) / 2) % 1, 'f-oy': ((1 - fracOf('f-sy')) / 2) % 1 }),
+  )
 
   // ── Pointer handling ────────────────────────────────────────────────
   let painting = 0 // 0 none, 1 = LMB, 2 = RMB (lower)
@@ -2247,12 +2963,44 @@ async function boot(): Promise<void> {
     } else if ((tool === 'mesh' || tool === 'entity') && e.button === 0) {
       const pose = computePlacePose()
       if (pose) placeAt(pose)
+    } else if (tool === 'light' && e.button === 0) {
+      const pick = scene.pick(
+        scene.pointerX,
+        scene.pointerY,
+        (m) => m !== ghost && m !== wire && m.isEnabled() && !lightMeshes.has(m as Mesh),
+      )
+      if (!pick?.hit || !pick.pickedPoint) return
+      if (mapLightsArr.length >= 24) {
+        status.textContent = '⛔ light cap reached (24) — delete some first'
+        return
+      }
+      const t = (document.getElementById('light-sel') as HTMLSelectElement)
+        .value as MapLight['type']
+      const p = pick.pickedPoint
+      const high = t === 'directional' || t === 'hemi'
+      const l: MapLight = {
+        id: newId('l'),
+        type: t,
+        pos: [p.x, p.y + (high ? 10 : 2.5), p.z],
+        ...(t === 'point' ? {} : { dir: t === 'directional' ? [-0.4, -1, -0.3] : [0, -1, 0] }),
+      }
+      mapLightsArr.push(l)
+      const m = renderLight(l)
+      pushUndo({ kind: 'lightadd', light: l })
+      status.textContent = `${LIGHT_LABEL[t]} placed — Select tool edits/moves it`
+      void m
+    } else if (tool === 'face') {
+      handleFacePointer(e)
     } else if (tool === 'select' && e.button === 0) {
       const pick = scene.pick(
         scene.pointerX,
         scene.pointerY,
         (m) =>
-          staticMeshes.has(m as Mesh) || nodeMeshes.has(m as Mesh) || propMeshes.has(m as Mesh),
+          m.isEnabled() &&
+          (staticMeshes.has(m as Mesh) ||
+            nodeMeshes.has(m as Mesh) ||
+            propMeshes.has(m as Mesh) ||
+            lightMeshes.has(m as Mesh)),
       )
       const mesh = pick?.pickedMesh as Mesh | undefined
       if (e.shiftKey) {
@@ -2269,8 +3017,10 @@ async function boot(): Promise<void> {
           addPropToMulti(mesh, propMeshes.get(mesh)!)
           return
         }
-        const shiftPatch = scene.pick(scene.pointerX, scene.pointerY, (m) =>
-          patchMeshes.has(m as Mesh),
+        const shiftPatch = scene.pick(
+          scene.pointerX,
+          scene.pointerY,
+          (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
         )?.pickedMesh as Mesh | undefined
         if (shiftPatch && patchMeshes.has(shiftPatch)) {
           addPatchToMulti(shiftPatch, patchMeshes.get(shiftPatch)!)
@@ -2284,15 +3034,25 @@ async function boot(): Promise<void> {
       if (mesh && staticMeshes.has(mesh)) select(mesh, staticMeshes.get(mesh)!)
       else if (mesh && nodeMeshes.has(mesh)) selectNode(mesh, nodeMeshes.get(mesh)!)
       else if (mesh && propMeshes.has(mesh)) selectProp(mesh, propMeshes.get(mesh)!)
+      else if (mesh && lightMeshes.has(mesh)) selectLight(mesh, lightMeshes.get(mesh)!)
       else if (pick?.pickedMesh && spawnFlag.getChildMeshes().includes(pick.pickedMesh as Mesh))
         selectSpawn()
       else {
         // Patches are selectable too (move/tilt/delete whole patch).
-        const ppick = scene.pick(scene.pointerX, scene.pointerY, (m) => patchMeshes.has(m as Mesh))
+        const ppick = scene.pick(
+          scene.pointerX,
+          scene.pointerY,
+          (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
+        )
         const pmesh = ppick?.pickedMesh as Mesh | undefined
         if (pmesh && patchMeshes.has(pmesh)) selectPatch(pmesh, patchMeshes.get(pmesh)!)
         else {
-          const tpick = scene.pick(scene.pointerX, scene.pointerY, (m) => m === terrain)
+          // A removed (sunken+disabled) starter island must NOT catch rays.
+          const tpick = scene.pick(
+            scene.pointerX,
+            scene.pointerY,
+            (m) => m === terrain && terrain.isEnabled(),
+          )
           if (tpick?.hit) selectMainTerrain()
           else deselect()
         }
@@ -2326,7 +3086,7 @@ async function boot(): Promise<void> {
     const pick = scene.pick(
       scene.pointerX,
       scene.pointerY,
-      (m) => m === terrain || patchMeshes.has(m as Mesh),
+      (m) => m.isEnabled() && (m === terrain || patchMeshes.has(m as Mesh)),
     )
     if (!pick?.hit || !pick.pickedPoint || !pick.pickedMesh) return null
     const target = terrainTargets.find((t) => t.mesh === pick.pickedMesh)
@@ -2393,6 +3153,8 @@ async function boot(): Promise<void> {
       case 'tool.entity':
       case 'tool.mesh':
       case 'tool.select':
+      case 'tool.face':
+      case 'tool.light':
         setTool(action.slice(5) as Tool)
         return true
       case 'xf.move':
@@ -2524,7 +3286,7 @@ async function boot(): Promise<void> {
     const pick = scene.pick(
       scene.pointerX,
       scene.pointerY,
-      (m) => m === terrain || patchMeshes.has(m as Mesh),
+      (m) => m.isEnabled() && (m === terrain || patchMeshes.has(m as Mesh)),
     )
     const overTerrain = Boolean(pick?.hit && pick.pickedPoint)
     // Hover highlight for the Select tool (cheap: every 6th frame).
@@ -2533,7 +3295,11 @@ async function boot(): Promise<void> {
         scene.pointerX,
         scene.pointerY,
         (m) =>
-          staticMeshes.has(m as Mesh) || nodeMeshes.has(m as Mesh) || propMeshes.has(m as Mesh),
+          m.isEnabled() &&
+          (staticMeshes.has(m as Mesh) ||
+            nodeMeshes.has(m as Mesh) ||
+            propMeshes.has(m as Mesh) ||
+            lightMeshes.has(m as Mesh)),
       )
       const hm = (hp?.pickedMesh as Mesh | undefined) ?? null
       if (hm !== hoverMesh) {
@@ -2585,9 +3351,11 @@ async function boot(): Promise<void> {
       ...(pp.tex ? { tex: pp.tex } : {}),
       ...(pp.color ? { color: pp.color } : {}),
       ...(pp.mix ? { mix: pp.mix } : {}),
+      ...(pp.uv ? { uv: pp.uv } : {}),
     })),
     models: mapModels,
     textures: mapTextures,
+    lights: mapLightsArr,
     ...(spawnPos ? { spawn: spawnPos, spawnYaw } : {}),
   })
   document.getElementById('save')?.addEventListener('click', () => {
@@ -2605,7 +3373,7 @@ async function boot(): Promise<void> {
         savedTopOp = topOpId()
         nonHistoryDirt = false
         updateDirty()
-        lastSig = `${file.heights.length}:${file.statics.length}:${(file.nodes ?? []).length}:${(file.mix ?? '').length}:${(file.terrains ?? []).length}:${(file.models ?? []).length}:${(file.textures ?? []).length}`
+        lastSig = `${file.heights.length}:${file.statics.length}:${(file.nodes ?? []).length}:${(file.mix ?? '').length}:${(file.terrains ?? []).length}:${(file.models ?? []).length}:${(file.textures ?? []).length}:${(file.lights ?? []).length}`
       }
       status.textContent = resp.ok
         ? '✅ saved — live in game'
@@ -2623,7 +3391,7 @@ async function boot(): Promise<void> {
       if (!map || map.v !== 1 || map.sub !== SUB) return
       // Revision safety: a remote save must never wipe local dirty work.
       if (dirty) {
-        const sig2 = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}`
+        const sig2 = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}:${(map.lights ?? []).length}`
         if (sig2 !== lastSig) {
           lastSig = sig2
           $e('conflict').style.display = 'flex'
@@ -2631,7 +3399,7 @@ async function boot(): Promise<void> {
         }
         return
       }
-      const sig = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}`
+      const sig = `${map.heights.length}:${map.statics.length}:${(map.nodes ?? []).length}:${(map.mix ?? '').length}:${(map.terrains ?? []).length}:${(map.models ?? []).length}:${(map.textures ?? []).length}:${(map.lights ?? []).length}`
       if (sig === lastSig) return
       lastSig = sig
       heights.set(decodeHeights(map.heights))
@@ -2667,6 +3435,9 @@ async function boot(): Promise<void> {
       mapModels = map.models ?? []
       mapTextures = map.textures ?? []
       refreshImportedPalette()
+      for (const l of [...mapLightsArr]) removeLightRender(l)
+      mapLightsArr = map.lights ?? []
+      for (const l of mapLightsArr) renderLight(l)
       spawnPos = map.spawn ?? null
       spawnYaw = map.spawnYaw ?? 0
       placeSpawnFlag()
@@ -2889,15 +3660,28 @@ async function boot(): Promise<void> {
       o.textContent = pp.name
       placeSel.appendChild(o)
     })
-    // Texture dropdown: stock + custom uploads.
-    texSel.replaceChildren()
-    for (const t of [...TEXTURES, ...mapTextures.map((tt) => `custom:${tt.name}`)]) {
-      const o = document.createElement('option')
-      o.value = t
-      o.textContent = t === '' ? '(plain color)' : t
-      texSel.appendChild(o)
-    }
+    // Texture dropdowns: stock + custom uploads, thumbnails via pickers.
+    registerCustomTextures(mapTextures)
+    fillTexSelect(texSel)
+    fillTexSelect(faceTexSel)
+    texPicker.refresh()
+    faceTexPicker.refresh()
   }
+  const texOptions = (): TexOption[] => [
+    { value: '', label: 'Plain Color', thumb: null },
+    ...TEXTURES.filter((t) => t !== '').map((t) => ({
+      value: t,
+      label: prettyTexName(t),
+      thumb: `/assets/tex/${t}.jpg`,
+    })),
+    ...mapTextures.map((t) => ({
+      value: `custom:${t.name}`,
+      label: prettyTexName(t.name),
+      thumb: t.url ?? t.dataUrl ?? null,
+    })),
+  ]
+  const texPicker = createTexPicker(texSel, texOptions)
+  const faceTexPicker = createTexPicker(faceTexSel, texOptions)
   refreshImportedPalette()
 
   const fileToDataUrl = (file: File): Promise<string> =>
@@ -2945,25 +3729,182 @@ async function boot(): Promise<void> {
     })()
   })
 
+  const sanitizeTexName = (raw: string): string => {
+    const base = raw
+      .replace(/\.[a-z0-9]+$/i, '')
+      .replace(/[^a-z0-9_\- ]/gi, '')
+      .trim()
+      .replace(/\s+/g, '_')
+      .slice(0, 40)
+    return base || `texture_${Date.now().toString(36)}`
+  }
   document.getElementById('texture-file')?.addEventListener('change', (e) => {
-    const file = (e.target as HTMLInputElement).files?.[0]
+    const fileInput = e.target as HTMLInputElement
+    const file = fileInput.files?.[0]
     if (!file) return
-    if (file.size > 1024 * 1024) {
-      status.textContent = '⛔ texture too large (1MB max)'
+    fileInput.value = ''
+    if (file.size > 64 * 1024 * 1024) {
+      status.textContent = '⛔ file over 64MB — export a smaller copy first'
       return
     }
     void (async () => {
-      const dataUrl = await fileToDataUrl(file)
-      const name = file.name
-        .replace(/\.[a-z]+$/i, '')
-        .replace(/[^a-z0-9_-]/gi, '')
-        .slice(0, 24)
-      mapTextures = mapTextures.filter((t) => t.name !== name)
-      mapTextures.push({ name, dataUrl })
+      status.textContent = '🖼 processing texture…'
+      let img: Awaited<ReturnType<typeof downscaleImage>>
+      try {
+        // 4k sources welcome — resized to ≤2048 and re-encoded for the web.
+        img = await downscaleImage(file, 2048)
+      } catch {
+        status.textContent =
+          '⛔ not a decodable image — use the jpg/png diffuse map (EXR/blend not supported)'
+        return
+      }
+      let name = sanitizeTexName(file.name)
+      while (mapTextures.some((t) => t.name === name)) name = `${name}_2`
+      // Preferred path: server-hosted asset (no map.json bloat, any size).
+      const key = $('key').value.trim()
+      let stored: MapTextureEntry | null = null
+      try {
+        const resp = await fetch(`/api/texture?ext=${img.ext}`, {
+          method: 'POST',
+          headers: { 'x-editor-key': key },
+          body: img.blob,
+        })
+        if (resp.ok) {
+          const j = (await resp.json()) as { url: string }
+          stored = { name, url: j.url, scale: 2 }
+        } else if (resp.status === 403) {
+          status.textContent = '⛔ upload needs your admin token/editor key (top of the panel)'
+          return
+        }
+      } catch {
+        /* offline — embed below if small enough */
+      }
+      if (!stored) {
+        if (img.blob.size > 1.5 * 1024 * 1024) {
+          status.textContent = '⛔ server unreachable and file too big to embed — try again online'
+          return
+        }
+        const dataUrl = await new Promise<string>((res) => {
+          const r = new FileReader()
+          r.onload = () => res(String(r.result))
+          r.readAsDataURL(img.blob)
+        })
+        stored = { name, dataUrl, scale: 2 }
+      }
+      mapTextures.push(stored)
       refreshImportedPalette()
       markDirty()
-      status.textContent = `🖼 texture "${name}" uploaded — pick custom:${name} on a selected object`
+      status.textContent = `🖼 "${prettyTexName(name)}" imported (${img.width}×${img.height}) — pick it in any texture dropdown`
     })()
+  })
+
+  // ── Texture manager: rename / retile / delete custom textures ───────
+  const texmanEl = $e('texman')
+  const renameTexture = (oldName: string, newNameRaw: string): void => {
+    const newName = sanitizeTexName(newNameRaw)
+    if (!newName || newName === oldName) return
+    if (mapTextures.some((t) => t.name === newName)) {
+      status.textContent = `⛔ a texture named "${prettyTexName(newName)}" already exists`
+      renderTexman()
+      return
+    }
+    const entry = mapTextures.find((t) => t.name === oldName)
+    if (!entry) return
+    entry.name = newName
+    const from = `custom:${oldName}`
+    const to = `custom:${newName}`
+    const renameIn = (style: FaceStyle | undefined): void => {
+      if (style?.tex === from) style.tex = to
+    }
+    for (const b of placedStatics) {
+      if (b.tex === from) b.tex = to
+      renameIn(b.uv)
+      for (const f of Object.values(b.faces ?? {})) renameIn(f)
+    }
+    for (const pp of patches) if (pp.tex === from) pp.tex = to
+    refreshImportedPalette()
+    restyleEverything()
+    markDirty()
+    status.textContent = `🖼 renamed to "${prettyTexName(newName)}" (all uses updated)`
+    renderTexman()
+  }
+  const deleteTexture = (name: string): void => {
+    const from = `custom:${name}`
+    mapTextures = mapTextures.filter((t) => t.name !== name)
+    const clearIn = (style: FaceStyle | undefined): void => {
+      if (style?.tex === from) delete style.tex
+    }
+    for (const b of placedStatics) {
+      if (b.tex === from) delete b.tex
+      clearIn(b.uv)
+      for (const f of Object.values(b.faces ?? {})) clearIn(f)
+    }
+    for (const pp of patches) if (pp.tex === from) delete pp.tex
+    refreshImportedPalette()
+    restyleEverything()
+    markDirty()
+    renderTexman()
+  }
+  /** Re-render every static + patch after texture registry changes. */
+  const restyleEverything = (): void => {
+    deselect()
+    for (const [m, b] of [...staticMeshes]) rebuildSelectedMesh(b, m)
+    for (const [m, pp] of patchMeshes) {
+      if (!pp.mix) applyPatchMaterial(m.material as StandardMaterial, pp)
+    }
+  }
+  const renderTexman = (): void => {
+    const list = $e('texman-list')
+    list.replaceChildren()
+    if (mapTextures.length === 0) {
+      const d = document.createElement('div')
+      d.style.color = '#78828e'
+      d.textContent = 'no custom textures yet — use "Import texture"'
+      list.appendChild(d)
+      return
+    }
+    for (const t of mapTextures) {
+      const row = document.createElement('div')
+      row.className = 'tex-row'
+      const img = document.createElement('img')
+      img.src = t.url ?? t.dataUrl ?? ''
+      const nameIn = document.createElement('input')
+      nameIn.type = 'text'
+      nameIn.value = t.name
+      nameIn.title = 'rename (updates every object using it)'
+      nameIn.addEventListener('change', () => renameTexture(t.name, nameIn.value))
+      const scaleIn = document.createElement('input')
+      scaleIn.type = 'number'
+      scaleIn.step = '0.5'
+      scaleIn.min = '0.25'
+      scaleIn.value = String(t.scale ?? 2)
+      scaleIn.title = 'meters per tile'
+      makeScrubbable(scaleIn)
+      scaleIn.addEventListener('change', () => {
+        const v = Number(scaleIn.value)
+        if (Number.isFinite(v) && v > 0) {
+          t.scale = v
+          refreshImportedPalette()
+          restyleEverything()
+          markDirty()
+        }
+      })
+      const del = document.createElement('button')
+      del.textContent = '🗑'
+      del.className = 'mini'
+      del.title = 'delete (objects fall back to plain color)'
+      del.addEventListener('click', () => deleteTexture(t.name))
+      row.append(img, nameIn, scaleIn, del)
+      list.appendChild(row)
+    }
+  }
+  document.getElementById('texman-btn')?.addEventListener('click', () => {
+    const open = texmanEl.style.display === 'flex'
+    texmanEl.style.display = open ? 'none' : 'flex'
+    if (!open) renderTexman()
+  })
+  document.getElementById('texman-close')?.addEventListener('click', () => {
+    texmanEl.style.display = 'none'
   })
 
   // ── Settings: remappable hotkeys ────────────────────────────────────
@@ -3086,6 +4027,9 @@ async function boot(): Promise<void> {
   engine.runRenderLoop(() => scene.render())
   window.addEventListener('resize', () => engine.resize())
 
+  // Blender-style drag-scrub on every numeric input (incl. dynamic panels).
+  scrubAllNumbers(document)
+
   // Test/debug handle (harness-only; not part of any API contract).
   ;(window as unknown as Record<string, unknown>)['__editor'] = {
     camera,
@@ -3116,10 +4060,31 @@ async function boot(): Promise<void> {
         patches: patches.length,
         nodes: placedNodes.length,
         props: placedProps.length,
+        lights: mapLightsArr.length,
       }
     },
     mainVisible() {
       return terrain.isEnabled()
+    },
+    mainPickable() {
+      return terrain.isPickable && terrain.isEnabled()
+    },
+    staticPositions() {
+      return placedStatics.map((b) => [...b.pos])
+    },
+    groupMove(dx: number, dy: number, dz: number) {
+      multiPivot.position.addInPlaceFromFloats(dx, dy, dz)
+      bakeMulti()
+      fillMultiProps()
+    },
+    lights() {
+      return JSON.parse(JSON.stringify(mapLightsArr)) as unknown
+    },
+    statics() {
+      return JSON.parse(JSON.stringify(placedStatics)) as unknown
+    },
+    faceSelCount() {
+      return faceSel.length
     },
   }
 }

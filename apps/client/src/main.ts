@@ -1,6 +1,12 @@
 import HavokPhysics from '@babylonjs/havok'
 import havokWasmUrl from '@babylonjs/havok/lib/esm/HavokPhysics.wasm?url'
-import { createContent, mapFileToOverride, setMapOverride, type MapFile } from '@hobo/content'
+import {
+  createContent,
+  mapFileToOverride,
+  setMapOverride,
+  type MapFile,
+  type MapLight,
+} from '@hobo/content'
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
@@ -25,6 +31,7 @@ import {
   registerMapAssets,
   rebuildTerrainVisual,
 } from './render/sceneSetup.js'
+import { buildMapLights } from './render/mapStyle.js'
 import { Viewmodel } from './render/viewmodel.js'
 import { ClientState } from './state/clientState.js'
 import { characterSelect, type CharacterInfo } from './ui/characterSelect.js'
@@ -47,6 +54,7 @@ async function start(): Promise<void> {
   const content = createContent()
   // Edited map (must match the server's copy for prediction parity).
   let mapMix: string | undefined
+  let mapLightsBoot: MapLight[] | undefined
   try {
     const map = (await (await fetch('/map.json')).json()) as MapFile | null
     registerMapAssets(map)
@@ -54,6 +62,7 @@ async function start(): Promise<void> {
       setMapOverride(mapFileToOverride(map))
       content.world.statics.push(...map.statics)
       mapMix = map.mix
+      mapLightsBoot = map.lights
     }
   } catch {
     // no edited map — procedural terrain
@@ -62,6 +71,7 @@ async function start(): Promise<void> {
   const scene = createScene(engine)
   buildStaticWorld(scene, content, mapMix)
   buildTerrainPatches(scene, content)
+  buildMapLights(scene, mapLightsBoot)
 
   // Havok loads while the player customizes their character.
   const havokPromise = HavokPhysics({ locateFile: () => havokWasmUrl })
@@ -232,6 +242,7 @@ async function start(): Promise<void> {
             rebuildTerrainPhysics(physics, content)
             rebuildTerrainVisual(scene, content, map.mix)
             rebuildTerrainPatchVisuals(scene, content)
+            buildMapLights(scene, map.lights)
           }
         } catch {
           // keep the old terrain if the fetch fails

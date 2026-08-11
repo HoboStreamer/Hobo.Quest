@@ -10,6 +10,28 @@ import { WorldShapeSchema } from './item.js'
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()])
 
+/**
+ * Hammer-style face/surface styling: texture + tint + UV transform.
+ * On a box static these can be applied per face (keys '0'..'5', Babylon
+ * face order); on any shape a single style applies to the whole surface.
+ */
+export const FaceStyleSchema = z.object({
+  tex: z.string().optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9a-f]{6}$/)
+    .optional(),
+  /** Texture scale (tiles across the surface); 0/absent = auto. */
+  sx: z.number().optional(),
+  sy: z.number().optional(),
+  /** Texture shift (UV offset, 0..1 wraps). */
+  ox: z.number().optional(),
+  oy: z.number().optional(),
+  /** Texture rotation in radians. */
+  rot: z.number().optional(),
+})
+export type FaceStyle = z.infer<typeof FaceStyleSchema>
+
 export const StaticBodySchema = z.object({
   /** Stable editor/document id (selection, collab locks). */
   id: z.string().optional(),
@@ -27,6 +49,10 @@ export const StaticBodySchema = z.object({
   /** Imported model id (MapFile.models): client renders the glb, the shape
    *  above stays the physics proxy collider. */
   model: z.string().optional(),
+  /** Whole-surface UV/texture transform (face-edit tool). */
+  uv: FaceStyleSchema.optional(),
+  /** Per-face overrides for box statics (face index '0'..'5'). */
+  faces: z.record(z.string(), FaceStyleSchema).optional(),
 })
 
 export const ResourceNodeSpawnSchema = z.object({

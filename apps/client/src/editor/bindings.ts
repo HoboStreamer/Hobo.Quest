@@ -73,6 +73,8 @@ export const ACTIONS: ActionDef[] = [
   { id: 'tool.entity', label: 'Entity tool', group: 'tools', default: { code: 'Digit3' } },
   { id: 'tool.mesh', label: 'Mesh tool', group: 'tools', default: { code: 'Digit4' } },
   { id: 'tool.select', label: 'Select tool', group: 'tools', default: { code: 'Digit5' } },
+  { id: 'tool.face', label: 'Face edit tool', group: 'tools', default: { code: 'Digit6' } },
+  { id: 'tool.light', label: 'Light tool', group: 'tools', default: { code: 'Digit7' } },
   // Transform
   { id: 'xf.move', label: 'Gizmo: move (grab)', group: 'transform', default: { code: 'KeyG' } },
   { id: 'xf.rotate', label: 'Gizmo: rotate', group: 'transform', default: { code: 'KeyR' } },

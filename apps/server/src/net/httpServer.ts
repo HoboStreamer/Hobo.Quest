@@ -20,6 +20,8 @@ const MIME: Record<string, string> = {
   '.wasm': 'application/wasm',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.map': 'application/json',
@@ -114,6 +116,71 @@ export function createHttpServer(
           }
         })
       })
+      return
+    }
+    // ── Custom texture assets: uploaded once, served to every player. ──
+    // Big source files (4k photo textures) live on disk next to the map
+    // artifact instead of being base64-embedded into map.json.
+    if (url === '/api/texture' && req.method === 'POST' && mapPath && editorAuth) {
+      const token = (req.headers['x-editor-key'] as string | undefined) ?? undefined
+      void editorAuthorized(editorAuth, token).then((ok) => {
+        if (!ok) {
+          res.writeHead(403, { 'content-type': 'application/json' })
+          res.end('{"error":"forbidden"}')
+          return
+        }
+        const params = new URL(req.url ?? '/', 'http://x').searchParams
+        const ext = (params.get('ext') ?? 'jpg').toLowerCase()
+        if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+          res.writeHead(400, { 'content-type': 'application/json' })
+          res.end('{"error":"bad_type"}')
+          return
+        }
+        const chunks: Buffer[] = []
+        let size = 0
+        req.on('data', (c: Buffer) => {
+          size += c.length
+          if (size > 48 * 1024 * 1024) req.destroy()
+          else chunks.push(c)
+        })
+        req.on('end', () => {
+          try {
+            const assetsDir = join(dirname(mapPath), 'map-assets')
+            mkdirSync(assetsDir, { recursive: true })
+            const id = `tex-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}.${ext}`
+            writeFileSync(join(assetsDir, id), Buffer.concat(chunks))
+            log.info('texture uploaded', { id, bytes: size })
+            res.writeHead(200, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ ok: true, url: `/map-assets/${id}` }))
+          } catch (err) {
+            log.warn('texture upload failed', { error: String(err) })
+            res.writeHead(500, { 'content-type': 'application/json' })
+            res.end('{"error":"write_failed"}')
+          }
+        })
+      })
+      return
+    }
+    if (url.startsWith('/map-assets/') && mapPath) {
+      const base = url.slice('/map-assets/'.length)
+      // Ids are server-generated; anything else is rejected outright.
+      if (!/^[a-z0-9.-]+$/.test(base) || base.includes('..')) {
+        res.writeHead(403)
+        res.end()
+        return
+      }
+      const assetPath = join(dirname(mapPath), 'map-assets', base)
+      if (!existsSync(assetPath)) {
+        res.writeHead(404)
+        res.end()
+        return
+      }
+      res.writeHead(200, {
+        'content-type': MIME[extname(assetPath)] ?? 'application/octet-stream',
+        // Server-generated unique ids — safe to cache forever.
+        'cache-control': 'public, max-age=31536000, immutable',
+      })
+      createReadStream(assetPath).pipe(res)
       return
     }
     if (url === '/api/characters' && listCharacters) {

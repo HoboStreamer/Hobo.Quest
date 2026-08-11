@@ -1,4 +1,4 @@
-import type { WorldDef } from './schema/world.js'
+import type { FaceStyle, WorldDef } from './schema/world.js'
 
 /**
  * Deterministic terrain heightfield shared by server physics, client
@@ -129,6 +129,8 @@ export interface TerrainPatchData {
   color?: string
   /** Painted splat mix PNG data URL (R grass / G rock / B mud). */
   mix?: string
+  /** Whole-surface UV transform from the face-edit tool. */
+  uv?: FaceStyle
 }
 
 export interface MapOverride {
