@@ -91,6 +91,8 @@ export declare class GameWorld {
    * (Removal is by harvesting in game — reconcile never deletes.)
    */
   reconcileMapNodes(): void
+  /** Live map save: spawn editor props that have no live counterpart nearby. */
+  reconcileMapProps(): void
   private seedResources
   private restoreEntity
   flushDirty(store: PersistenceStore): number

@@ -81,6 +81,7 @@ async function main(): Promise<void> {
           setMapOverride(mapFileToOverride(raw))
           world.rebuildTerrain()
           world.reconcileMapNodes()
+          world.reconcileMapProps()
           game.broadcastMapReload()
           editors.broadcastSaved()
           log.info('map applied live', { sub: raw.sub })
@@ -106,6 +107,7 @@ async function main(): Promise<void> {
     config.oauth,
   )
   world.reconcileMapNodes()
+  world.reconcileMapProps()
   const gameWss = attachWebSocket(http, game, log.child({ system: 'ws' }))
   const editors = attachEditorWs(
     http,

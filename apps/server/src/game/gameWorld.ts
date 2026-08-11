@@ -535,6 +535,34 @@ export class GameWorld {
     }
   }
 
+  /** Live map save: spawn editor props that have no live counterpart nearby. */
+  reconcileMapProps(): void {
+    for (const prop of getMapOverride()?.props ?? []) {
+      let exists = false
+      for (const e of this.entities.ofKind('prop')) {
+        if (e.prop?.defId !== prop.item) continue
+        const dx = e.transform.pos.x - prop.pos[0]
+        const dz = e.transform.pos.z - prop.pos[2]
+        if (dx * dx + dz * dz < 4) {
+          exists = true
+          break
+        }
+      }
+      if (exists) continue
+      this.spawnProp({
+        defId: prop.item,
+        pos: vec3(
+          prop.pos[0],
+          prop.pos[1] + terrainHeight(this.content.world, prop.pos[0], prop.pos[2]),
+          prop.pos[2],
+        ),
+        rot: qfromYaw(quat(), prop.yaw ?? 0),
+        motion: this.content.item(prop.item)?.shop ? 'static' : 'dynamic',
+      })
+      this.log.info('map prop spawned', { item: prop.item, x: prop.pos[0], z: prop.pos[2] })
+    }
+  }
+
   private seedResources(_store: PersistenceStore): void {
     const world = this.content.world
     for (const node of [...world.resourceNodes, ...(getMapOverride()?.nodes ?? [])]) {

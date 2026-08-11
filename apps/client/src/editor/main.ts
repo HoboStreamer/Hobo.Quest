@@ -76,7 +76,7 @@ function loadKeys(): Record<string, string> {
 
 interface Placeable {
   name: string
-  kind: 'static' | 'node' | 'spawn' | 'model'
+  kind: 'static' | 'node' | 'spawn' | 'model' | 'prop'
   shape?: StaticBody['shape']
   color?: string
   tex?: string
@@ -114,6 +114,9 @@ const ENTITY_DEFS: Placeable[] = [
   { name: '🌿 Branch pile', kind: 'node', node: 'branch_pile' },
   { name: '🥌 Loose stones', kind: 'node', node: 'loose_stones' },
   { name: '⚙ Scrap pile', kind: 'node', node: 'scrap_pile' },
+  { name: '🏪 Merchant stall (shop)', kind: 'prop', node: 'merchant_stall' },
+  { name: '📦 Wooden crate (prop)', kind: 'prop', node: 'wooden_crate' },
+  { name: '🛢 Metal barrel (prop)', kind: 'prop', node: 'metal_barrel' },
 ]
 
 const TEXTURES = [
@@ -329,6 +332,21 @@ async function boot(): Promise<void> {
     }
     return mesh
   }
+  const propMeshes = new Map<Mesh, { item: string; pos: [number, number, number]; yaw?: number }>()
+  const renderProp = (pr: { item: string; pos: [number, number, number]; yaw?: number }): Mesh => {
+    const rep = content.worldRepOf(pr.item)
+    const mesh = meshForShape(scene, `pr:${Math.random()}`, rep.shape, rep.color)
+    const h =
+      rep.shape.type === 'box'
+        ? rep.shape.size[1]
+        : rep.shape.type === 'cylinder'
+          ? rep.shape.height
+          : rep.shape.radius * 2
+    mesh.position.set(pr.pos[0], pr.pos[1] + sampleH(pr.pos[0], pr.pos[2]) + h / 2, pr.pos[2])
+    mesh.rotation.y = pr.yaw ?? 0
+    propMeshes.set(mesh, pr)
+    return mesh
+  }
   const renderNode = (n: MapNodeSpawn): Mesh => {
     const look = NODE_LOOKS[n.node] ?? {
       color: '#888888',
@@ -529,6 +547,7 @@ async function boot(): Promise<void> {
     sub: number
     heights: Float32Array
     rot?: [number, number, number]
+    tex?: string
   }
   interface TerrainTarget {
     id: string
@@ -548,6 +567,8 @@ async function boot(): Promise<void> {
   let mapModels: { id: string; name: string; glb: string; bounds: [number, number, number] }[] =
     extras?.models ?? []
   let mapTextures: { name: string; dataUrl: string }[] = extras?.textures ?? []
+  let placedProps: { item: string; pos: [number, number, number]; yaw?: number }[] =
+    extras?.props ?? []
   let spawnPos: [number, number, number] | null = extras?.spawn ?? null
   let spawnYaw = extras?.spawnYaw ?? 0
 
@@ -575,6 +596,7 @@ async function boot(): Promise<void> {
     } else spawnFlag.setEnabled(false)
   }
   placeSpawnFlag()
+  for (const pr of placedProps) renderProp(pr)
 
   const buildPatchMesh = (patch: PatchState): Mesh => {
     const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
@@ -761,7 +783,7 @@ async function boot(): Promise<void> {
     // Align local +Y to the surface normal (walls, slopes), then apply the
     // wheel yaw around that normal. Nodes always sit upright.
     const rot =
-      def.kind === 'node' || def.kind === 'spawn' || n.y > 0.95
+      def.kind === 'node' || def.kind === 'spawn' || def.kind === 'prop' || n.y > 0.95
         ? Quaternion.RotationAxis(new Vector3(0, 1, 0), placeYaw)
         : Quaternion.FromUnitVectorsToRef(
             new Vector3(0, 1, 0),
@@ -817,6 +839,19 @@ async function boot(): Promise<void> {
       placedStatics.push(body)
       renderStatic(body)
       pushUndo({ kind: 'place', body })
+      return
+    }
+    if (def.kind === 'prop') {
+      const e = pose.rot.toEulerAngles()
+      const pr = {
+        item: def.node!,
+        pos: [pose.pos.x, 1, pose.pos.z] as [number, number, number],
+        yaw: e.y,
+      }
+      placedProps.push(pr)
+      renderProp(pr)
+      markDirty()
+      status.textContent = `${def.name} placed — spawns live on save (physgun-movable in game)`
       return
     }
     if (def.kind === 'node') {
@@ -959,6 +994,8 @@ async function boot(): Promise<void> {
     }
     ;($('p-color') as HTMLInputElement).value = body.color
     texSel.value = body.tex ?? ''
+    const lc = document.getElementById('p-lamp') as HTMLInputElement | null
+    if (lc) lc.checked = body.decor === 'lamp'
   }
   const select = (mesh: Mesh, body: StaticBody): void => {
     deselect()
@@ -1175,12 +1212,31 @@ async function boot(): Promise<void> {
     commitEdit()
   })
   texSel.addEventListener('change', () => {
+    if (selectedPatch) {
+      const patch = selectedPatch.patch
+      if (texSel.value) patch.tex = texSel.value
+      else delete patch.tex
+      markDirty()
+      status.textContent = `patch texture: ${texSel.value || 'default grass'} (shows in game after save)`
+      return
+    }
     if (!selected) return
     beginEdit()
     if (texSel.value) selected.body.tex = texSel.value
     else delete selected.body.tex
     rebuildSelectedMesh(selected.body, selected.mesh)
     commitEdit()
+  })
+  const lampChk = document.getElementById('p-lamp') as HTMLInputElement | null
+  lampChk?.addEventListener('change', () => {
+    if (!selected) return
+    beginEdit()
+    if (lampChk.checked) selected.body.decor = 'lamp'
+    else delete selected.body.decor
+    commitEdit()
+    status.textContent = lampChk.checked
+      ? '💡 object emits lamplight after dark (visible in game)'
+      : 'lamplight removed'
   })
   const deleteSelected = (): void => {
     if (selectedNode) {
@@ -1248,12 +1304,20 @@ async function boot(): Promise<void> {
       const pick = scene.pick(
         scene.pointerX,
         scene.pointerY,
-        (m) => staticMeshes.has(m as Mesh) || nodeMeshes.has(m as Mesh),
+        (m) =>
+          staticMeshes.has(m as Mesh) || nodeMeshes.has(m as Mesh) || propMeshes.has(m as Mesh),
       )
       const mesh = pick?.pickedMesh as Mesh | undefined
       if (mesh && staticMeshes.has(mesh)) select(mesh, staticMeshes.get(mesh)!)
       else if (mesh && nodeMeshes.has(mesh)) selectNode(mesh, nodeMeshes.get(mesh)!)
-      else {
+      else if (mesh && propMeshes.has(mesh)) {
+        const pr = propMeshes.get(mesh)!
+        placedProps = placedProps.filter((x) => x !== pr)
+        propMeshes.delete(mesh)
+        mesh.dispose()
+        markDirty()
+        status.textContent = 'prop removed from the map seed list'
+      } else {
         // Patches are selectable too (move/tilt/delete whole patch).
         const ppick = scene.pick(scene.pointerX, scene.pointerY, (m) => patchMeshes.has(m as Mesh))
         const pmesh = ppick?.pickedMesh as Mesh | undefined
@@ -1400,6 +1464,7 @@ async function boot(): Promise<void> {
     mix: (mixCtx.canvas as HTMLCanvasElement).toDataURL('image/png'),
     statics: placedStatics,
     nodes: placedNodes,
+    props: placedProps,
     terrains: patches.map((pp) => ({
       id: pp.id,
       origin: pp.origin,
@@ -1407,6 +1472,7 @@ async function boot(): Promise<void> {
       sub: pp.sub,
       heights: encodeHeights(pp.heights),
       ...(pp.rot ? { rot: pp.rot } : {}),
+      ...(pp.tex ? { tex: pp.tex } : {}),
     })),
     models: mapModels,
     textures: mapTextures,
@@ -1461,8 +1527,12 @@ async function boot(): Promise<void> {
       nodeMeshes.clear()
       placedStatics = map.statics
       placedNodes = map.nodes ?? []
+      for (const m of propMeshes.keys()) m.dispose()
+      propMeshes.clear()
+      placedProps = map.props ?? []
       for (const st of placedStatics) renderStatic(st)
       for (const n of placedNodes) renderNode(n)
+      for (const pr of placedProps) renderProp(pr)
       // Patches: rebuild from the remote artifact.
       for (const m of patchMeshes.keys()) m.dispose()
       patchMeshes.clear()

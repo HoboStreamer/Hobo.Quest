@@ -121,6 +121,8 @@ export interface TerrainPatchData {
   heights: Float32Array
   /** Euler rotation — tilt patches into overhangs and cave roofs. */
   rot?: [number, number, number]
+  /** Tiling texture basename (or custom:<name>); default grass. */
+  tex?: string
 }
 
 export interface MapOverride {

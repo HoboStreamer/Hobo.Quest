@@ -151,7 +151,16 @@ export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mes
     mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
     if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
     const mat = new StandardMaterial(`patchmat:${patch.id}`, scene)
-    mat.diffuseTexture = tiled(scene, 'leafy_grass', Math.max(4, patch.halfExtent / 2))
+    const texName = patch.tex ?? 'leafy_grass'
+    const custom = texName.startsWith('custom:') ? customTextures.get(texName.slice(7)) : undefined
+    const scale = Math.max(4, patch.halfExtent / 2)
+    if (custom) {
+      const tx = new Texture(custom, scene)
+      tx.uScale = tx.vScale = scale
+      mat.diffuseTexture = tx
+    } else {
+      mat.diffuseTexture = tiled(scene, texName, scale)
+    }
     mat.specularColor = new Color3(0.02, 0.02, 0.02)
     mat.maxSimultaneousLights = 8
     mesh.material = mat
