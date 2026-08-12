@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto'
-import { createReadStream, existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { dirname, extname, join, normalize, resolve } from 'node:path'
 import type { Logger } from '@hobo/shared'
 import type { ServerMetrics } from '../observability/metrics.js'
 import { canEditMap, resolveHoboToolsUser } from './hoboToolsAuth.js'
 import { MAX_MAP_BYTES, loadMap, saveMap } from './mapStore.js'
+import { MAX_ASSET_BYTES, isContentAddressed, storeAsset } from './mapAssetStore.js'
 import type { MapFileV2 } from '@hobo/content'
 
 /**
@@ -155,42 +156,61 @@ export function createHttpServer(
     // ── Custom texture assets: uploaded once, served to every player. ──
     // Big source files (4k photo textures) live on disk next to the map
     // artifact instead of being base64-embedded into map.json.
-    if (url === '/api/texture' && req.method === 'POST' && mapPath && editorAuth) {
+    // Generic content-addressed asset upload (textures, paint masks, models).
+    // `/api/texture` is the same handler under its old name so older editor
+    // builds keep working; there is ONE store behind both.
+    if (
+      (url === '/api/map-assets' || url === '/api/texture') &&
+      req.method === 'POST' &&
+      mapPath &&
+      editorAuth
+    ) {
       const token = (req.headers['x-editor-key'] as string | undefined) ?? undefined
-      void editorAuthorized(editorAuth, token).then((ok) => {
-        if (!ok) {
+      void editorAuthorized(editorAuth, token).then((authed) => {
+        if (!authed) {
           res.writeHead(403, { 'content-type': 'application/json' })
           res.end('{"error":"forbidden"}')
           return
         }
-        const params = new URL(req.url ?? '/', 'http://x').searchParams
-        const ext = (params.get('ext') ?? 'jpg').toLowerCase()
-        if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
-          res.writeHead(400, { 'content-type': 'application/json' })
-          res.end('{"error":"bad_type"}')
-          return
-        }
         const chunks: Buffer[] = []
         let size = 0
+        let aborted = false
         req.on('data', (c: Buffer) => {
           size += c.length
-          if (size > 48 * 1024 * 1024) req.destroy()
-          else chunks.push(c)
+          // Enforced WHILE streaming: a 48 MB cap that only checks at the end
+          // has already buffered 48 MB.
+          if (size > MAX_ASSET_BYTES) {
+            aborted = true
+            res.writeHead(413, { 'content-type': 'application/json' })
+            res.end('{"error":"too_large"}')
+            req.destroy()
+            return
+          }
+          chunks.push(c)
         })
         req.on('end', () => {
-          try {
-            const assetsDir = join(dirname(mapPath), 'map-assets')
-            mkdirSync(assetsDir, { recursive: true })
-            const id = `tex-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}.${ext}`
-            writeFileSync(join(assetsDir, id), Buffer.concat(chunks))
-            log.info('texture uploaded', { id, bytes: size })
-            res.writeHead(200, { 'content-type': 'application/json' })
-            res.end(JSON.stringify({ ok: true, url: `/map-assets/${id}` }))
-          } catch (err) {
-            log.warn('texture upload failed', { error: String(err) })
-            res.writeHead(500, { 'content-type': 'application/json' })
-            res.end('{"error":"write_failed"}')
-          }
+          if (aborted) return
+          void storeAsset(join(dirname(mapPath), 'map-assets'), Buffer.concat(chunks))
+            .then((outcome) => {
+              if (!outcome.ok) {
+                res.writeHead(outcome.status, { 'content-type': 'application/json' })
+                res.end(JSON.stringify({ error: outcome.error }))
+                return
+              }
+              log.info('map asset stored', {
+                hash: outcome.asset.hash,
+                bytes: outcome.asset.bytes,
+                mime: outcome.asset.mime,
+                deduplicated: outcome.deduplicated,
+              })
+              res.writeHead(200, { 'content-type': 'application/json' })
+              res.end(JSON.stringify({ ok: true, ...outcome.asset }))
+            })
+            .catch((err: unknown) => {
+              log.warn('map asset store failed', { error: String(err) })
+              res.writeHead(500, { 'content-type': 'application/json' })
+              res.end('{"error":"write_failed"}')
+            })
         })
       })
       return
@@ -211,8 +231,12 @@ export function createHttpServer(
       }
       res.writeHead(200, {
         'content-type': MIME[extname(assetPath)] ?? 'application/octet-stream',
-        // Server-generated unique ids — safe to cache forever.
-        'cache-control': 'public, max-age=31536000, immutable',
+        // A content-addressed name cannot ever refer to different bytes, so
+        // it is immutable. Legacy `tex-<timestamp>` names are not: they were
+        // minted per upload and carry no such promise.
+        'cache-control': isContentAddressed(base)
+          ? 'public, max-age=31536000, immutable'
+          : 'public, max-age=300',
       })
       createReadStream(assetPath).pipe(res)
       return

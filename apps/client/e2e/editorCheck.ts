@@ -754,6 +754,63 @@ section('O. Live static reconciliation reaches the running server')
       return resp.headers.get('etag')?.replace(/"/g, '') ?? ''
     }
 
+    section('P. Content-addressed map assets')
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('e2e pixels'),
+    ])
+    const upload = async (
+      body: Buffer,
+      key = 'test-admin-key',
+    ): Promise<{ status: number; json: Record<string, unknown> }> => {
+      const resp = await fetch(`${root}/api/map-assets`, {
+        method: 'POST',
+        headers: { 'x-editor-key': key },
+        body: new Uint8Array(body),
+      })
+      return { status: resp.status, json: (await resp.json()) as Record<string, unknown> }
+    }
+
+    const first = await upload(png)
+    ok(
+      'an upload returns a content hash and url',
+      first.status === 200 && typeof first.json['hash'] === 'string',
+      first.json,
+    )
+    ok(
+      'the url is named after the content',
+      String(first.json['url']).includes(String(first.json['hash'])),
+      first.json['url'],
+    )
+
+    // The dedupe the paint-mask flow depends on: an unchanged mask re-saved
+    // must resolve to the same asset and upload nothing new.
+    const second = await upload(Buffer.from(png))
+    ok('identical content reuses the same hash and url', second.json['url'] === first.json['url'], {
+      a: first.json['url'],
+      b: second.json['url'],
+    })
+
+    const other = await upload(Buffer.concat([png, Buffer.from('!')]))
+    ok('different content gets a different url', other.json['url'] !== first.json['url'])
+
+    // The old endpoint took the extension from a query parameter, so arbitrary
+    // bytes could be stored — and later served — as an image.
+    const bogus = await upload(Buffer.from('<?php system($_GET[0]); ?>'))
+    ok('unsupported content is refused, not stored', bogus.status === 400, bogus)
+
+    const unauth = await upload(png, 'wrong-key')
+    ok('an upload without the editor key is forbidden', unauth.status === 403, unauth)
+
+    const fetched = await fetch(`${root}${String(first.json['url'])}`)
+    ok('the stored asset is served back', fetched.status === 200)
+    ok(
+      'and is cached forever, because the name cannot refer to other bytes',
+      (fetched.headers.get('cache-control') ?? '').includes('immutable'),
+      fetched.headers.get('cache-control'),
+    )
+
+    section('O. Live static reconciliation (continued)')
     ok('a blank map gives the server no map statics', (await counts())['mapStatics'] === 0)
 
     const withOne = {

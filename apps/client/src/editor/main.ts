@@ -3351,11 +3351,40 @@ async function boot(): Promise<void> {
     textures: mapTextures,
     ...(spawnPos ? { spawn: spawnPos, spawnYaw } : {}),
   })
+  /**
+   * Paint masks stay in memory as canvases while editing and become
+   * content-addressed assets on save.
+   *
+   * Embedded as data URLs they dominated the map: a 512x512 RGBA PNG is tens
+   * of kilobytes of base64 per painted surface, re-sent on every save even
+   * when untouched, and counted against the 24 MB map limit. Uploading gives
+   * the mask a name derived from its own bytes, so an unchanged mask resolves
+   * to the same hash and the second save uploads nothing.
+   *
+   * Falls back to embedding when the server is unreachable, and legacy data
+   * URL masks keep loading.
+   */
+  const uploadDirtyMasks = async (): Promise<void> => {
+    for (const patch of patches) {
+      const rt = surfaces.get(patch.id)
+      const data = surfaceDataOf(patch)
+      if (!rt || !data.paint) continue
+      const blob = await rt.mask.toBlob()
+      if (!blob) continue
+      const uploaded = await uploadAsset(blob)
+      // 'forbidden' or null: keep whatever the mask already had (an existing
+      // asset URL, or an embedded data URL) rather than losing the paint.
+      if (uploaded && uploaded !== 'forbidden') data.paint.mask = uploaded.url
+      else if (!data.paint.mask) data.paint.mask = rt.mask.toDataURL()
+    }
+  }
+
   document.getElementById('save')?.addEventListener('click', () => {
     void (async () => {
       const key = $('key').value.trim()
       localStorage.setItem('hobo.editorkey', key)
       status.textContent = 'saving…'
+      await uploadDirtyMasks()
       const file = buildFile()
       const resp = await fetch('/api/map', {
         method: 'POST',
@@ -3658,13 +3687,21 @@ async function boot(): Promise<void> {
       return
     }
     void (async () => {
-      const dataUrl = await fileToDataUrl(file)
       status.textContent = 'loading model…'
+      // Prefer the content-addressed store: a map that embeds every glb as
+      // base64 grows without bound and re-ships identical bytes on every
+      // save. Legacy `model.glb = data:...` still loads.
+      const uploaded = await uploadAsset(file)
+      if (uploaded === 'forbidden') {
+        status.textContent = '⛔ upload needs your admin token/editor key (top of the panel)'
+        return
+      }
+      const glb = uploaded ? uploaded.url : await fileToDataUrl(file)
       try {
         // Measure by instantiating through the cache, so the import also
         // warms it — placing the model afterwards needs no second parse.
         const id = `model-${Date.now().toString(36)}`
-        const probe = await modelCache.instantiate(id, dataUrl)
+        const probe = await modelCache.instantiate(id, glb)
         if (!probe) throw new Error('empty glb')
         const { min, max } = probe.root.getHierarchyBoundingVectors(true)
         const bounds: [number, number, number] = [
@@ -3674,7 +3711,7 @@ async function boot(): Promise<void> {
         ]
         probe.dispose()
         const name = file.name.replace(/\.(glb|gltf)$/i, '').slice(0, 24)
-        mapModels.push({ id, name, glb: dataUrl, bounds })
+        mapModels.push({ id, name, glb, bounds })
         refreshImportedPalette()
         placeSel.value = String(PLACEABLES.findIndex((pp) => pp.modelId === id))
         setTool('mesh')
@@ -3685,6 +3722,32 @@ async function boot(): Promise<void> {
       }
     })()
   })
+
+  /**
+   * Upload bytes to the content-addressed store and get back a stable URL.
+   *
+   * The server names the file after the sha256 of what it actually received
+   * and sniffs the type from the bytes, so identical content uploaded twice
+   * costs one file and returns the same URL — which is what makes re-saving
+   * an unchanged paint mask free. Returns null when the server is
+   * unreachable, so callers can fall back to embedding.
+   */
+  const uploadAsset = async (
+    blob: Blob,
+  ): Promise<{ url: string; hash: string; bytes: number } | 'forbidden' | null> => {
+    try {
+      const resp = await fetch('/api/map-assets', {
+        method: 'POST',
+        headers: { 'x-editor-key': $('key').value.trim() },
+        body: blob,
+      })
+      if (resp.status === 403) return 'forbidden'
+      if (!resp.ok) return null
+      return (await resp.json()) as { url: string; hash: string; bytes: number }
+    } catch {
+      return null
+    }
+  }
 
   const sanitizeTexName = (raw: string): string => {
     const base = raw
@@ -3718,24 +3781,13 @@ async function boot(): Promise<void> {
       let name = sanitizeTexName(file.name)
       while (mapTextures.some((t) => t.name === name)) name = `${name}_2`
       // Preferred path: server-hosted asset (no map.json bloat, any size).
-      const key = $('key').value.trim()
       let stored: MapTextureEntry | null = null
-      try {
-        const resp = await fetch(`/api/texture?ext=${img.ext}`, {
-          method: 'POST',
-          headers: { 'x-editor-key': key },
-          body: img.blob,
-        })
-        if (resp.ok) {
-          const j = (await resp.json()) as { url: string }
-          stored = { name, url: j.url, scale: 2 }
-        } else if (resp.status === 403) {
-          status.textContent = '⛔ upload needs your admin token/editor key (top of the panel)'
-          return
-        }
-      } catch {
-        /* offline — embed below if small enough */
+      const uploaded = await uploadAsset(img.blob)
+      if (uploaded === 'forbidden') {
+        status.textContent = '⛔ upload needs your admin token/editor key (top of the panel)'
+        return
       }
+      if (uploaded) stored = { name, url: uploaded.url, scale: 2 }
       if (!stored) {
         if (img.blob.size > 1.5 * 1024 * 1024) {
           status.textContent = '⛔ server unreachable and file too big to embed — try again online'
