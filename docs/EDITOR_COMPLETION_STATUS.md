@@ -16,8 +16,8 @@ what exists. This file is the record of the program and what is left.
 | Gate               | Command                                              | Status                      |
 | ------------------ | ---------------------------------------------------- | --------------------------- |
 | Types              | `pnpm typecheck`                                     | green                       |
-| Unit + audit       | `pnpm test`                                          | green — 633 tests, 47 files |
-| Architecture audit | `pnpm audit:editor`                                  | **green — 19 of 19**        |
+| Unit + audit       | `pnpm test`                                          | green — 634 tests, 47 files |
+| Architecture audit | `pnpm audit:editor`                                  | **green — 20 of 20**        |
 | Lint               | `pnpm lint`                                          | green                       |
 | Format             | `pnpm format:check`                                  | green                       |
 | Build              | `pnpm build`                                         | green                       |
@@ -26,6 +26,9 @@ what exists. This file is the record of the program and what is left.
 | Server slice       | `node --import tsx apps/server/scripts/sliceTest.ts` | green                       |
 
 `apps/client/src/editor/main.ts` **531 bytes** (was 171 KB).
+`apps/client/src/editor/editorApp.ts` **39 KB** — composition only. The
+harness surface lives in `devProbe.ts` and inspector-edit command
+construction in `history/commands.ts`; the audit holds it under 45 KB.
 `apps/client/editor.html` **2.1 KB** (was 23 KB, 11 KB of it inline CSS).
 
 Slice-test note: the `walkTo` step is timing-flaky under load and logs

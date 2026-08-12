@@ -37,6 +37,7 @@ import { transformOf } from './document/editorObject.js'
 import { CommandHistory } from './history/commandHistory.js'
 import {
   addObject,
+  buildPropertyCommand,
   heightDelta,
   paintStroke,
   removeObjects,
@@ -74,6 +75,7 @@ import { createSaveController } from './net/saveController.js'
 import { ActionRouter } from './input/actionRouter.js'
 import { ACTIONS, loadBindings, type Binding } from './bindings.js'
 import { editorPerf } from './perf/editorProfiler.js'
+import { installEditorProbe } from './devProbe.js'
 
 const content = createContent()
 
@@ -1004,278 +1006,29 @@ export async function bootEditor(): Promise<void> {
   void saveController.restoreDraftIfAny()
 
   // ── Probe (harness only; NOT a public API) ──────────────────────────
-  ;(window as unknown as { __editor: unknown }).__editor = {
-    selectionIds: () => selection.ids(),
-    primaryId: () => selection.primaryId,
-    interactionState: () => interaction.state,
-    gizmoState: () => ({
-      mode: gizmo.currentMode,
-      attached: gizmo.active,
-      dragging: xform.active,
-    }),
-    gizmoHandleScreenPos: (axis: 'x' | 'y' | 'z') => {
-      // The spiral search works in CANVAS space (it picks the utility
-      // layer); the harness needs page coordinates to move a real mouse.
-      const canvasPoint = gizmo.handleScreenPoint(axis, (p) => {
-        const [px, py] = cameraController.worldToScreen(p)
-        return cameraController.toCanvasSpace(px, py)
-      })
-      if (!canvasPoint) return null
-      const rect = canvas.getBoundingClientRect()
-      return [Math.round(canvasPoint[0] + rect.left), Math.round(canvasPoint[1] + rect.top)]
-    },
-    cameraSnapshot: () => ({
-      pos: [camera.position.x, camera.position.y, camera.position.z],
-      rot: [camera.rotation.x, camera.rotation.y, camera.rotation.z],
-    }),
-    history: () => ({ depth: history.depth, redo: history.redoDepth }),
-    terrainWires: () => {
-      const out: Record<string, boolean> = {}
-      for (const t of doc.listByKind('terrain')) {
-        const v = views.viewOf(t.id)
-        if (v instanceof TerrainView) out[t.id] = v.wireVisible()
-      }
-      return out
-    },
-    faceSelKeys: () => faceSelection.keys(),
-    faceOverlayCount: () => faceOverlays.count,
-    // The harness works in page coordinates, like a real cursor does.
-    pickIdAt: (x: number, y: number) => viewport.pickIdAt(...cameraController.toCanvasSpace(x, y)),
-    surfaceMaterialOf: (id: string) => {
-      const v = views.viewOf(id)
-      if (!(v instanceof TerrainView)) return null
-      const data = v.surfaceData()
-      return {
-        base: data.base.tex ?? null,
-        layers: (data.paint?.layers ?? []).map((l) => ({
-          tex: l.tex,
-          channel: l.channel,
-          hidden: l.hidden === true,
-          color: l.color ?? null,
-        })),
-        hasMask: Boolean(data.paint?.mask),
-      }
-    },
-    paintSurface: () => (strokeTargetId ? { objectId: strokeTargetId } : null),
-    setPaintTexture: (tex: string) => {
-      ;(document.getElementById('paint-tex') as HTMLSelectElement).value = tex
-    },
-    setPaintColor: (hex: string) => {
-      ;(document.getElementById('paint-color') as HTMLInputElement).value = hex
-    },
-    setInspectorTexture: (tex: string) => {
-      const id = selection.primaryId
-      if (!id) return
-      const v = views.viewOf(id)
-      if (v instanceof TerrainView) {
-        const data = structuredClone(v.surfaceData())
-        data.base = { ...data.base, tex }
-        const cmd = setProperties(doc, id, { surface: data }, 'set base texture')
-        if (cmd) history.apply(cmd)
-      } else {
-        const cmd = setProperties(doc, id, { tex }, 'set texture')
-        if (cmd) history.apply(cmd)
-      }
-      ui.refreshAll()
-    },
-    terrainIds: () => doc.listByKind('terrain').map((t) => t.id),
-    transformOf: (id: string) => {
-      const t = transformOf(doc, id)
-      return t ? { position: t.position, rotation: t.rotation } : null
-    },
-    worldToScreen: (p: [number, number, number]) =>
-      cameraController.worldToScreen(new Vector3(p[0], p[1], p[2])),
-    setToolByName: (t: string) => tools.set(t as Tool),
-    selectByIds: (ids: string[]) => selection.replaceMany(ids),
-    undo: () => {
-      history.undo()
-      ui.refreshAll()
-    },
-    redo: () => {
-      history.redo()
-      ui.refreshAll()
-    },
-    setCameraPose: (pos: number[], rot: number[]) => {
-      camera.position.set(pos[0]!, pos[1]!, pos[2]!)
-      camera.rotation.set(rot[0]!, rot[1]!, rot[2]!)
-    },
-    objectCounts: () => ({
-      statics: doc.listByKind('static').length,
-      terrains: doc.listByKind('terrain').length,
-      nodes: doc.listByKind('node').length,
-      props: doc.listByKind('prop').length,
-      lights: doc.listByKind('light').length,
-      zones: doc.listByKind('zone').length,
-    }),
-    terrainMeshCount: () => doc.listByKind('terrain').length,
-    sceneMeshNames: () => scene.meshes.map((m) => m.name),
-    get dirty() {
-      return saveController.isDirty()
-    },
-    get tool() {
-      return tools.active
-    },
-    groupMove: (dx: number, dy: number, dz: number) => {
-      // Goes through the SAME gate the gizmo does. A probe that could move
-      // an object the server has not granted would make the collaboration
-      // suite prove nothing.
-      const ids = selection.ids().filter((id) => transformOf(doc, id) !== null)
-      let allowed = false
-      withLock(ids, () => {
-        allowed = true
-      })
-      if (!allowed) return
-      const started = xform.begin(selection.ids(), 'move', { label: 'group move' })
-      if (!started) return
-      const p = started.pivotStart
-      xform.update({
-        ...p,
-        position: [p.position[0] + dx, p.position[1] + dy, p.position[2] + dz],
-      })
-      xform.commit()
-      refreshPivot()
-      ui.refreshAll()
-    },
-    hasSky: () => scene.meshes.some((m) => m.name.includes('sky') || m.name.includes('cloud')),
-    /** Collaboration state, for the two-editor acceptance suite. */
-    collab: () => ({
-      connected: connection.connected(),
-      peerId: connection.myPeerId(),
-      peers: connection.peers().map((p) => ({ ...p, selection: [...p.selection] })),
-      peerCount: connection.peerCount(),
-      lockOwners: Object.fromEntries(connection.lockOwners()),
-      owns: selection.ids().filter((id) => connection.owns(id)),
-    }),
-    inspectorLockedBy: () =>
-      selection.primaryId ? connection.lockOwner(selection.primaryId) : null,
-    setProperty: (ids: string[], key: string, value: unknown) => ui.setProperty(ids, key, value),
-    deleteSelection: () => ui.remove(),
-    colorOf: (id: string) => (doc.get(id) as { color?: string } | null)?.color ?? null,
-    /** Asset metadata straight from the document (no parallel array). */
-    assetState: () => ({
-      textures: doc.textures().map((t) => ({ name: t.name, url: t.url ?? null })),
-      models: doc.models().map((m) => ({ id: m.id, name: m.name, glb: m.glb })),
-      textureUsage: Object.fromEntries(
-        [...assets.textureUsage()].map(([ref, u]) => [ref, u.count]),
-      ),
-      modelUsage: Object.fromEntries([...assets.modelUsage()].map(([id, u]) => [id, u.count])),
-    }),
-    importTextureBytes: async (name: string, bytes: number[]) => {
-      const file = new File([new Uint8Array(bytes)], name, { type: 'image/png' })
-      return assets.importTexture(file)
-    },
-    importModelBytes: async (name: string, bytes: number[]) => {
-      const file = new File([new Uint8Array(bytes)], name, { type: 'model/gltf-binary' })
-      return assets.importModel(file)
-    },
-    /** Arm an imported model for placement, exactly as the Assets panel does. */
-    armModel: (modelId: string) => placeModel(modelId),
-    renameTexture: (from: string, to: string) => assets.renameTexture(from, to),
-    deleteTexture: (name: string) => assets.deleteTexture(name),
-    textureRefsOf: (id: string) => JSON.stringify(doc.get(id) ?? null),
-    /** Painted surfaces of an object, keyed by surface id (paint E2E). */
-    paintedSurfaces: (id: string) => {
-      const o = doc.get(id) as {
-        surface?: { paint?: { layers: unknown[]; mask?: string } }
-        surfaces?: Record<string, { paint?: { layers: unknown[]; mask?: string } }>
-      } | null
-      const out: Record<string, { layers: number; hasMask: boolean }> = {}
-      if (o?.surface?.paint)
-        out['surface'] = {
-          layers: o.surface.paint.layers.length,
-          hasMask: Boolean(o.surface.paint.mask),
-        }
-      for (const [sid, data] of Object.entries(o?.surfaces ?? {}))
-        if (data.paint)
-          out[sid] = { layers: data.paint.layers.length, hasMask: Boolean(data.paint.mask) }
-      return out
-    },
-    /** Paint at a screen point with the current brush, as a user drag does. */
-    maskUploadCount: () => saveController.maskUploadCount(),
-    zoneOf: (id: string) => {
-      const z = doc.get(id, 'zone')
-      return z ? { min: [...z.min], max: [...z.max], rules: { ...z.rules } } : null
-    },
-    setLightType: (t: string) => {
-      ;(document.getElementById('light-type') as HTMLSelectElement).value = t
-    },
-    lightSummaries: () =>
-      doc.listByKind('light').map((l) => ({
-        type: l.type,
-        // A light with neither reach nor direction lights nothing.
-        ok: (l.range ?? 0) > 0 || l.dir !== undefined || l.type === 'hemi',
-        hasAngle: l.angle !== undefined,
-      })),
-    save: () => saveController.save(),
-    /**
-     * Performance counters. Off unless something turns them on, so the
-     * measurement never costs anything in normal use.
-     */
-    perf: {
-      start: () => {
-        editorPerf.reset()
-        editorPerf.setEnabled(true)
-      },
-      stop: () => editorPerf.setEnabled(false),
-      snapshot: () => editorPerf.snapshot(),
-    },
-    /** Object/mesh counts, for scaling assertions against map size. */
-    sceneStats: () => ({
-      objects: doc.list().length,
-      views: views.size,
-      meshes: views.allMeshes().length,
-      sceneMeshes: scene.meshes.length,
-    }),
-  }
-}
-
-/**
- * Turn an inspector edit into a command. Vector components arrive as
- * `pos[1]`, and nested rule flags as `rules.pvp`, so both are written back
- * into a whole-object replacement — which is also what makes undo restore an
- * absent key rather than a zeroed one.
- */
-function buildPropertyCommand(
-  doc: EditorDocument,
-  ids: readonly string[],
-  key: string,
-  value: unknown,
-): { execute: (d: EditorDocument) => void; undo: (d: EditorDocument) => void } {
-  const before = new Map(ids.map((id) => [id, doc.snapshot(id)]))
-  const after = new Map(
-    ids.map((id) => {
-      const copy = structuredClone(doc.snapshot(id)) as Record<string, unknown> | null
-      if (copy) writePath(copy, key, value)
-      return [id, copy]
-    }),
-  )
-  return {
-    execute: (d) => {
-      for (const [id, v] of after) if (v && d.has(id)) d.replace(id, structuredClone(v) as never)
-    },
-    undo: (d) => {
-      for (const [id, v] of before) if (v && d.has(id)) d.replace(id, structuredClone(v) as never)
-    },
-  }
-}
-
-const INDEXED = /^(.+)\[(\d+)\]$/
-
-function writePath(target: Record<string, unknown>, key: string, value: unknown): void {
-  const indexed = INDEXED.exec(key)
-  if (indexed) {
-    const arr = target[indexed[1]!]
-    if (Array.isArray(arr)) arr[Number(indexed[2])] = value
-    return
-  }
-  const parts = key.split('.')
-  let node: Record<string, unknown> = target
-  for (const part of parts.slice(0, -1)) {
-    const next = node[part]
-    if (next === null || typeof next !== 'object') return
-    node = next as Record<string, unknown>
-  }
-  const last = parts[parts.length - 1]!
-  if (value === undefined) delete node[last]
-  else node[last] = value
+  installEditorProbe({
+    doc,
+    views,
+    selection,
+    history,
+    tools,
+    gizmo,
+    xform,
+    interaction,
+    viewport,
+    cameraController,
+    camera,
+    canvas,
+    scene,
+    faceSelection,
+    faceOverlays,
+    saveController,
+    connection,
+    assets,
+    ui,
+    strokeTargetId: () => strokeTargetId,
+    placeModel,
+    withLock,
+    refreshPivot,
+  })
 }

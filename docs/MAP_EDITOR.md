@@ -59,6 +59,7 @@ was true.
 | Save / conflict / draft   | `net/saveController.ts`, `recovery/draftStore.ts`                            |
 | Collaboration             | `collaboration/`                                                             |
 | Composition               | `editorApp.ts` (`main.ts` is boot only)                                      |
+| Acceptance-harness seam   | `devProbe.ts` (`window.__editor`; not a public API)                          |
 
 ---
 
@@ -365,7 +366,7 @@ you if the default chord is taken.
 ## Gates
 
 ```
-pnpm typecheck    pnpm test        # 633 tests, includes the architecture audit
+pnpm typecheck    pnpm test        # 634 tests, includes the architecture audit
 pnpm lint         pnpm build
 pnpm format:check pnpm test:editor # 139 browser checks
 pnpm test:collab                   # 26 checks, two browser contexts

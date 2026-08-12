@@ -145,7 +145,9 @@ describe('architecture audit: the transitional editor is gone', () => {
     const app = FILES.find((f) => f.path === 'apps/client/src/editor/editorApp.ts')
     expect(app, 'editorApp.ts should exist').toBeDefined()
     const kb = Buffer.byteLength(app!.text, 'utf8') / 1024
-    expect(kb, `editorApp.ts is ${kb.toFixed(0)} KB`).toBeLessThan(60)
+    // The harness surface lives in devProbe.ts and inspector-edit command
+    // construction in history/commands.ts; neither is composition.
+    expect(kb, `editorApp.ts is ${kb.toFixed(0)} KB`).toBeLessThan(45)
   })
 
   it('keeps editor.html free of a giant inline stylesheet', () => {
@@ -199,11 +201,21 @@ describe('architecture audit: completed systems keep their guarantees', () => {
 
   it('routes mutations through the lock gate', () => {
     // Every path that changes the document while someone else may hold a
-    // lease goes through withLock; a probe or a menu item that skips it is a
-    // lock that does not enforce anything.
+    // lease goes through withLock; a menu item that skips it is a lock that
+    // does not enforce anything.
     const app = fileText('apps/client/src/editor/editorApp.ts')
     expect(app).toContain('const withLock =')
-    expect((app.match(/withLock\(/g) ?? []).length).toBeGreaterThan(5)
+    expect((app.match(/withLock\(/g) ?? []).length).toBeGreaterThan(4)
+  })
+
+  it('makes the harness probe obey the same gate', () => {
+    // `groupMove` once bypassed withLock, which made the collaboration suite
+    // prove nothing: it "moved" objects Bob was never granted.
+    const probe = fileText('apps/client/src/editor/devProbe.ts')
+    const groupMove = /groupMove:[\s\S]*?\n {4}\}/.exec(probe)?.[0] ?? ''
+    expect(groupMove, 'devProbe.groupMove').toContain('withLock')
+    // And it may only reach the gate through the app, never re-implement it.
+    expect(probe).not.toContain('const withLock =')
   })
 
   it('keeps asset authority in the document', () => {

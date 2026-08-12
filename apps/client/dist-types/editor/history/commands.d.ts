@@ -135,4 +135,19 @@ export declare function paintStroke(
   label?: string,
 ): DocCommand
 export { compositeCommand }
+/**
+ * Turn an inspector edit into a command. Vector components arrive as
+ * `pos[1]`, and nested rule flags as `rules.pvp`, so both are written back
+ * into a whole-object replacement — which is also what makes undo restore an
+ * absent key rather than a zeroed one.
+ */
+export declare function buildPropertyCommand(
+  doc: EditorDocument,
+  ids: readonly string[],
+  key: string,
+  value: unknown,
+): {
+  execute: (d: EditorDocument) => void
+  undo: (d: EditorDocument) => void
+}
 //# sourceMappingURL=commands.d.ts.map
