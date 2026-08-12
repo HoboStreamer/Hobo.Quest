@@ -16,6 +16,9 @@ export declare class ServerMetrics {
   messagesOut: number
   snapshotBytes: number
   dbDirtyQueue: number
+  /** Live constraints and the multi-prop structures they form. */
+  constraints: number
+  constraintIslands: number
   /**
    * Live map layers, by stable id. These make "Save is live" checkable from
    * outside the process: a static added in the editor must show up here on

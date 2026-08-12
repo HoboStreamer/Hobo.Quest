@@ -19,7 +19,7 @@ import type {
  * a database is upgraded step by step inside a transaction per step.
  */
 
-const SCHEMA_VERSION = 7
+const SCHEMA_VERSION = 8
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_entities (
@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS constraints (
   type TEXT NOT NULL,
   entity_a TEXT NOT NULL,
   entity_b TEXT NOT NULL,
+  params TEXT,
   updated_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS guest_ips (
@@ -121,6 +122,11 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
       );
     `)
   },
+  7: (db) => {
+    // Sandbox constraint set: type-specific parameters (anchors, axes,
+    // lengths, limits, motor). Existing weld rows carry NULL params.
+    db.exec('ALTER TABLE constraints ADD COLUMN params TEXT;')
+  },
 }
 
 interface WorldEntityRow {
@@ -162,6 +168,7 @@ interface ConstraintRow {
   type: string
   entity_a: string
   entity_b: string
+  params: string | null
   updated_at: number
 }
 
@@ -344,9 +351,9 @@ export function openSqliteStore(path: string): PersistenceStore {
   }
 
   const upsertConstraint = db.prepare(`
-    INSERT INTO constraints (id, type, entity_a, entity_b, updated_at)
-    VALUES (@id, @type, @entity_a, @entity_b, @updated_at)
-    ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at
+    INSERT INTO constraints (id, type, entity_a, entity_b, params, updated_at)
+    VALUES (@id, @type, @entity_a, @entity_b, @params, @updated_at)
+    ON CONFLICT(id) DO UPDATE SET params=excluded.params, updated_at=excluded.updated_at
   `)
   const deleteConstraint = db.prepare('DELETE FROM constraints WHERE id = ?')
   const selectConstraints = db.prepare<[], ConstraintRow>('SELECT * FROM constraints')
@@ -355,9 +362,10 @@ export function openSqliteStore(path: string): PersistenceStore {
     loadAll(): ConstraintDto[] {
       return selectConstraints.all().map((row) => ({
         id: row.id,
-        type: row.type as ConstraintDto['type'],
+        type: row.type,
         entityA: row.entity_a,
         entityB: row.entity_b,
+        params: row.params ? (JSON.parse(row.params) as Record<string, unknown>) : null,
         updatedAt: row.updated_at,
       }))
     },
@@ -368,6 +376,7 @@ export function openSqliteStore(path: string): PersistenceStore {
           type: c.type,
           entity_a: c.entityA,
           entity_b: c.entityB,
+          params: c.params ? JSON.stringify(c.params) : null,
           updated_at: c.updatedAt,
         })
       }

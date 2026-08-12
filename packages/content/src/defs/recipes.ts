@@ -72,6 +72,31 @@ export const RECIPES: Recipe[] = [
     outputs: [{ item: 'stone_pickaxe', count: 1 }],
     craftSeconds: 3,
   },
+  {
+    id: 'craft_rigging_tool',
+    name: 'Rigging Tool',
+    category: 'tools',
+    inputs: [
+      { item: 'scrap_metal', count: 2 },
+      { item: 'rope', count: 1 },
+      { item: 'wood_plank', count: 1 },
+    ],
+    outputs: [{ item: 'rigging_tool', count: 1 }],
+    craftSeconds: 4,
+  },
+  {
+    id: 'craft_salvaged_motor',
+    name: 'Salvaged Motor',
+    category: 'tools',
+    inputs: [
+      { item: 'sheet_metal', count: 3 },
+      { item: 'scrap_metal', count: 2 },
+    ],
+    outputs: [{ item: 'salvaged_motor', count: 1 }],
+    craftSeconds: 8,
+    workstation: 'workbench',
+    requiredSkill: { skill: 'construction', level: 4 },
+  },
 
   // ── Construction ───────────────────────────────────────────────────
   {

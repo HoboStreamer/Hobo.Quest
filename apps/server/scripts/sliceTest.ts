@@ -116,7 +116,7 @@ class TestClient {
   levelUps: { skill: string; level: number }[] = []
   entities = new Map<string, WireEntity>()
   results: { action: string; ok: boolean; error?: string }[] = []
-  weldEvents: { a: string; b: string; active: boolean }[] = []
+  constraintEvents: { id: string; kind: string; a: string; b: string; active: boolean }[] = []
   /** What MY beam currently holds (from physgun_state broadcasts). */
   heldTarget: string | null = null
   stats: { hp: number; hunger: number; thirst: number; stamina: number } | null = null
@@ -183,6 +183,7 @@ class TestClient {
           if (msg.pos) e.pos = msg.pos
           if (msg.rot) e.rot = msg.rot
           if (msg.remaining !== undefined) e.remaining = msg.remaining
+          if (msg.health !== undefined) e.health = msg.health
           if (msg.plant !== undefined) {
             if (msg.plant === null) delete e.plant
             else e.plant = msg.plant
@@ -202,8 +203,14 @@ class TestClient {
       case 'levelup':
         this.levelUps.push({ skill: msg.skill, level: msg.level })
         break
-      case 'weld_state':
-        this.weldEvents.push({ a: msg.a, b: msg.b, active: msg.active })
+      case 'constraint_state':
+        this.constraintEvents.push({
+          id: msg.id,
+          kind: msg.kind,
+          a: msg.a,
+          b: msg.b,
+          active: msg.active,
+        })
         break
       case 'physgun_state':
         if (msg.player === this.entityId) this.heldTarget = msg.target ?? null
@@ -317,6 +324,12 @@ class TestClient {
 }
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms))
+
+/** Polls a condition over already-received state (no message-race). */
+async function pollUntil(cond: () => boolean, timeoutMs = 6000): Promise<void> {
+  const start = Date.now()
+  while (!cond() && Date.now() - start < timeoutMs) await sleep(100)
+}
 
 /** YXZ euler decomposition matching @hobo/shared qtoEulerYXZ. */
 function quatToEulerYXZ(q: [number, number, number, number]): {
@@ -574,11 +587,11 @@ async function main(): Promise<void> {
 
   await walkTo(a, scrap.pos[0], scrap.pos[2])
   await settle(a)
-  for (let i = 0; i < 2; i++) {
+  for (let i = 0; i < 4; i++) {
     await a.use(scrap.id)
     await sleep(260)
   }
-  assert(a.count('scrap_metal') === 4, 'hand-gathered 4 scrap')
+  assert(a.count('scrap_metal') === 8, 'hand-gathered 8 scrap')
 
   const tree = byType('oak_tree')[0]
   assert(tree, 'trees replicated')
@@ -789,6 +802,230 @@ async function main(): Promise<void> {
   assert(pickup.ok, 'picked the dropped stones back up')
   await sleep(150)
   assert(a.count('stone') === stonesBefore, 'both stones recovered from one prop')
+
+  console.log('phase: rigging — craft tool, weld, rope (materials), cut, hostile inputs')
+  // Budget: the tool consumes 1 rope; the tether test consumes another.
+  while (a.count('rope') < 2) await craftAndWait(a, 'craft_rope', 'rope')
+  if (a.count('wood_plank') < 1) await craftAndWait(a, 'craft_planks', 'wood_plank')
+  await craftAndWait(a, 'craft_rigging_tool', 'rigging_tool')
+
+  // Two scrap props to link (dropped one after the other, so they land close).
+  const dropScrap = async (): Promise<WireEntity> => {
+    const before = new Set(
+      [...a.entities.values()].filter((e) => e.def === 'scrap_metal').map((e) => e.id),
+    )
+    a.send({ t: 'drop', slot: a.slotOf('scrap_metal'), count: 1 })
+    const spawn = (await a.waitFor(
+      (m) =>
+        m.t === 'spawn' && m.entities.some((e) => e.def === 'scrap_metal' && !before.has(e.id)),
+    )) as Extract<ServerMessage, { t: 'spawn' }>
+    return spawn.entities.find((e) => e.def === 'scrap_metal' && !before.has(e.id))!
+  }
+  const rigA = await dropScrap()
+  await sleep(300)
+  const rigB = await dropScrap()
+  await sleep(900) // both settle
+
+  // Hostile: constraint without the rigging tool equipped.
+  a.results.length = 0
+  a.send({
+    t: 'constraint',
+    kind: 'weld',
+    a: rigA.id,
+    b: rigB.id,
+    pointA: rigA.pos,
+    pointB: rigB.pos,
+  })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+  assert(
+    a.results.at(-1)?.error === 'requires_rigging_tool',
+    'constraint without the tool rejected',
+  )
+
+  await a.equip('rigging_tool')
+  // Hostile: forged far-away anchor point.
+  a.results.length = 0
+  a.send({
+    t: 'constraint',
+    kind: 'weld',
+    a: rigA.id,
+    b: rigB.id,
+    pointA: [rigA.pos[0] + 50, rigA.pos[1], rigA.pos[2]],
+    pointB: rigB.pos,
+  })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+  assert(a.results.at(-1)?.error === 'bad_anchor', 'forged anchor point rejected')
+
+  // Hostile: motor requires construction level 5.
+  a.results.length = 0
+  a.send({
+    t: 'constraint',
+    kind: 'motor',
+    a: rigA.id,
+    b: rigB.id,
+    pointA: rigA.pos,
+    pointB: rigB.pos,
+    axis: [0, 1, 0],
+    motorVel: 3,
+    motorForce: 200,
+  })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+  assert(a.results.at(-1)?.error === 'missing_skill', 'motor gated behind construction skill')
+
+  // Real weld.
+  const constructionBefore = a.skill('construction')
+  const conXpBefore = constructionBefore?.xp ?? 0
+  const conLvlBefore = constructionBefore?.level ?? 1
+  a.results.length = 0
+  a.constraintEvents.length = 0
+  const freshA = a.entities.get(rigA.id)!
+  const freshB = a.entities.get(rigB.id)!
+  a.send({
+    t: 'constraint',
+    kind: 'weld',
+    a: rigA.id,
+    b: rigB.id,
+    pointA: freshA.pos,
+    pointB: freshB.pos,
+  })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+  assert(a.results.at(-1)?.ok === true, 'weld created with the rigging tool')
+  await pollUntil(() => a.constraintEvents.some((e) => e.kind === 'weld' && e.active))
+  assert(
+    a.constraintEvents.some((e) => e.kind === 'weld' && e.active),
+    'weld constraint_state broadcast',
+  )
+  // The skills update follows the constraint broadcast; XP within a level
+  // resets on level-up, so progress = level rose OR xp rose.
+  await pollUntil(() => {
+    const s = a.skill('construction')
+    return s !== undefined && (s.level > conLvlBefore || s.xp > conXpBefore)
+  })
+  const conAfter = a.skill('construction')
+  assert(
+    conAfter && (conAfter.level > conLvlBefore || conAfter.xp > conXpBefore),
+    'constraint grants construction XP',
+  )
+
+  // Hostile: duplicate same-type link.
+  a.results.length = 0
+  a.send({
+    t: 'constraint',
+    kind: 'weld',
+    a: rigA.id,
+    b: rigB.id,
+    pointA: a.entities.get(rigA.id)!.pos,
+    pointB: a.entities.get(rigB.id)!.pos,
+  })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+  assert(a.results.at(-1)?.error === 'already_linked', 'duplicate weld rejected')
+
+  // Rope consumes a rope item and carries a length.
+  const ropeBefore = a.count('rope')
+  assert(ropeBefore >= 1, `has rope for the tether (${ropeBefore})`)
+  a.results.length = 0
+  a.constraintEvents.length = 0
+  a.send({
+    t: 'constraint',
+    kind: 'rope',
+    a: rigA.id,
+    b: rigB.id,
+    pointA: a.entities.get(rigA.id)!.pos,
+    pointB: a.entities.get(rigB.id)!.pos,
+    length: 2,
+  })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+  assert(a.results.at(-1)?.ok === true, 'rope tether created')
+  await pollUntil(() => a.count('rope') === ropeBefore - 1)
+  assert(a.count('rope') === ropeBefore - 1, 'rope material consumed')
+  await pollUntil(() => a.constraintEvents.some((e) => e.kind === 'rope' && e.active))
+  assert(
+    a.constraintEvents.some((e) => e.kind === 'rope' && e.active),
+    'rope constraint_state broadcast',
+  )
+
+  // Cut everything off rigB, then re-link a weld that must survive restart.
+  a.results.length = 0
+  a.constraintEvents.length = 0
+  a.send({ t: 'constraint_remove', target: rigB.id })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+  assert(a.results.at(-1)?.ok === true, 'constraints cut from the prop')
+  {
+    const start = Date.now()
+    while (a.constraintEvents.filter((e) => !e.active).length < 2 && Date.now() - start < 5000) {
+      await sleep(100)
+    }
+  }
+  assert(
+    a.constraintEvents.filter((e) => !e.active).length === 2,
+    'both removals broadcast (weld + rope)',
+  )
+  a.results.length = 0
+  a.constraintEvents.length = 0
+  a.send({
+    t: 'constraint',
+    kind: 'weld',
+    a: rigA.id,
+    b: rigB.id,
+    pointA: a.entities.get(rigA.id)!.pos,
+    pointB: a.entities.get(rigB.id)!.pos,
+  })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+  assert(a.results.at(-1)?.ok === true, 'persistent weld re-created')
+  await pollUntil(() => a.constraintEvents.some((e) => e.kind === 'weld' && e.active))
+  const persistedWeldId = a.constraintEvents.find((e) => e.kind === 'weld' && e.active)?.id ?? ''
+  assert(persistedWeldId, 'persistent weld id captured')
+
+  console.log('phase: prop health — damage, repair, pickup refusal, destruction')
+  while (a.count('wood_plank') < 5) await craftAndWait(a, 'craft_planks', 'wood_plank')
+  await craftAndWait(a, 'craft_wooden_beam', 'wooden_beam')
+  a.send({ t: 'drop', slot: a.slotOf('wooden_beam'), count: 1 })
+  const beamSpawn = (await a.waitFor(
+    (m) => m.t === 'spawn' && m.entities.some((e) => e.def === 'wooden_beam'),
+  )) as Extract<ServerMessage, { t: 'spawn' }>
+  const beam = beamSpawn.entities.find((e) => e.def === 'wooden_beam')!
+  await sleep(900)
+
+  await a.equip('stone_axe')
+  a.results.length = 0
+  a.send({ t: 'attack', target: beam.id })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'attack')
+  assert(a.results.at(-1)?.ok === true, 'axe swing damages the beam')
+  await pollUntil(() => a.entities.get(beam.id)?.health !== undefined)
+  const beamHp = a.entities.get(beam.id)?.health
+  assert(beamHp !== undefined && beamHp < 120, `beam health dropped (${beamHp})`)
+
+  // Damaged props refuse pickup (no pocket-the-wreck laundering).
+  await sleep(300)
+  const damagedPickup = await a.use(beam.id)
+  assert(damagedPickup.error === 'damaged', 'damaged prop refuses pickup')
+
+  // Repair with the matching material restores it to full.
+  await a.equip('wood_plank')
+  await sleep(300)
+  const repair = await a.use(beam.id)
+  assert(repair.ok, 'repaired with a plank')
+  await pollUntil(() => a.entities.get(beam.id)?.health === 120)
+  assert(a.entities.get(beam.id)?.health === 120, 'beam restored to full health')
+
+  // Now break it completely: salvage loot must scatter.
+  await a.equip('stone_axe')
+  const planksBefore2 = a.count('wood_plank')
+  for (let i = 0; i < 12 && a.entities.has(beam.id); i++) {
+    a.send({ t: 'attack', target: beam.id })
+    await sleep(320)
+  }
+  {
+    const start = Date.now()
+    while (a.entities.has(beam.id) && Date.now() - start < 8000) await sleep(150)
+  }
+  assert(!a.entities.has(beam.id), 'beam destroyed after enough damage')
+  const salvage = [...a.entities.values()].find((e) => e.def === 'wood_plank' && e.kind === 'prop')
+  assert(salvage, 'destruction scattered salvage planks')
+  await sleep(700)
+  const salvagePickup = await a.use(salvage.id)
+  assert(salvagePickup.ok, 'salvage recovered')
+  assert(a.count('wood_plank') > planksBefore2 - 1, 'salvage planks in inventory')
 
   console.log('phase: merchant trades + farming (plant in a planter)')
   // Into the city through the north gate, to the trading post.
@@ -1014,6 +1251,25 @@ async function main(): Promise<void> {
     c.friends.some((f) => f.name === 'Bob'),
     'friends list persisted across restart',
   )
+  // The re-created weld came back with the same id (constraint_state is
+  // pushed when its props enter interest).
+  {
+    const start = Date.now()
+    while (
+      !c.constraintEvents.some((e) => e.id === persistedWeldId && e.kind === 'weld' && e.active) &&
+      Date.now() - start < 8000
+    ) {
+      await sleep(150)
+    }
+    assert(
+      c.constraintEvents.some((e) => e.id === persistedWeldId && e.kind === 'weld' && e.active),
+      'constraint persisted across restart (same id, same type)',
+    )
+    assert(
+      !c.constraintEvents.some((e) => e.kind === 'rope'),
+      'cut rope did NOT come back after restart',
+    )
+  }
 
   c.close()
   await stopServer()

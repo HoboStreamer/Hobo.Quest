@@ -28,6 +28,7 @@ export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity 
       def: entity.prop.defId,
       motion: entity.prop.motion,
       ...(entity.owner !== undefined ? { owner: entity.owner as string } : {}),
+      ...(entity.prop.health !== undefined ? { health: Math.round(entity.prop.health) } : {}),
       ...(entity.prop.plant
         ? {
             plant: {

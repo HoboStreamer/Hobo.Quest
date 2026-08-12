@@ -21,7 +21,7 @@ export interface AnimatorInput {
   /** Stance: 0 stand, 1 crouch, 2 prone. */
   stance: number
   /** Equipped tool kind for arm posing. */
-  tool: 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null
+  tool: 'physgun' | 'axe' | 'pickaxe' | 'rigging' | null
   /** Physgun beam currently latched (two-hand aim pose). */
   beamActive: boolean
 }
@@ -248,7 +248,7 @@ export class AvatarAnimator {
       }
     } else if (
       input.stance !== 2 &&
-      (input.tool === 'axe' || input.tool === 'pickaxe' || input.tool === 'hammer')
+      (input.tool === 'axe' || input.tool === 'pickaxe' || input.tool === 'rigging')
     ) {
       // Relaxed carry; chop when swinging.
       target.shoulderRX = -0.35

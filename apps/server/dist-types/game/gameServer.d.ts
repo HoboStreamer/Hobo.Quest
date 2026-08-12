@@ -71,6 +71,14 @@ export declare class GameServer {
   private releaseHeld
   /** Melee swing on another player: range + zone PvP rules + tool damage. */
   private handleMelee
+  /**
+   * Melee swing on a damageable prop: range + zone build rules + the same
+   * stamina/cooldown economics as PvP. Structures are only destructible
+   * where building is legal (safe city props are untouchable).
+   */
+  private handlePropAttack
+  /** Destruction: scatter salvage + stored contents as physical props. */
+  private destroyProp
   /** Death/rescue respawn: back to the city with restored vitals. */
   private respawn
   private statsWire
@@ -89,6 +97,8 @@ export declare class GameServer {
   private sendCraftState
   private broadcastAll
   private broadcastSpawn
+  /** Constraint create/remove: tell every client that knows either prop. */
+  private broadcastConstraintState
   private broadcastDespawn
   private broadcastToKnowing
   /** Live map edit: every client refetches and rebuilds its terrain. */

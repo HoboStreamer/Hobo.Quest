@@ -16,6 +16,21 @@ export interface AimTarget {
     y: number
     z: number
   }
+  /** Surface normal at the hit (rigging tool takes joint axes from it). */
+  normal: {
+    x: number
+    y: number
+    z: number
+  }
+}
+/** First endpoint picked with the rigging tool (awaiting the second). */
+export interface RiggingPick {
+  entityId: string
+  point: {
+    x: number
+    y: number
+    z: number
+  }
 }
 export declare class InteractionController {
   private readonly physics
@@ -35,6 +50,19 @@ export declare class InteractionController {
   lastTargetWasPlayer: boolean
   /** Hook: player pressed E on a trading post. */
   onShopOpen: (() => void) | null
+  /** Rigging tool: first selected endpoint (highlight + prompt read this). */
+  riggingFirst: RiggingPick | null
+  /** Ghost preview pose supplier (wired by main; null = no valid ghost). */
+  placementPose:
+    | (() => {
+        x: number
+        y: number
+        z: number
+        yaw: number
+      } | null)
+    | null
+  /** Wheel rotates the placement ghost while a placeable is equipped. */
+  onPlacementRotate: ((delta: number) => void) | null
   private lastSwingMs
   private pendingRotate
   private gridOn
@@ -48,7 +76,7 @@ export declare class InteractionController {
     input: InputTracker,
     weaponSettings: WeaponSettings,
   )
-  equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null
+  equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'rigging' | null
   /** What the crosshair points at right now (client-side, UX only). */
   aim(): AimTarget | null
   /**
@@ -63,6 +91,12 @@ export declare class InteractionController {
   flushTick(): void
   onWheel(delta: number): void
   onHotbarChanged(): void
+  /**
+   * Rigging tool LMB: first click marks an endpoint, second click sends the
+   * constraint request built from the equipment-panel settings. The server
+   * re-validates everything (points, ownership, skill, materials, zone).
+   */
+  private riggingPick
   private swing
   /** Standing in water (thirst refill by drinking). */
   standingInWater(): boolean

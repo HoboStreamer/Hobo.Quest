@@ -67,6 +67,8 @@ export interface ServerEntityUpdate {
   remaining?: number
   /** Planter crop changed (null clears after harvest). */
   plant?: WirePlant | null
+  /** Prop health changed (damage/repair). */
+  health?: number
 }
 
 export interface ServerInventory {
@@ -87,10 +89,11 @@ export interface ServerActionResult {
     | 'craft'
     | 'drop'
     | 'use'
+    | 'attack'
+    | 'place'
     | 'inv_move'
     | 'physgun'
-    | 'weld'
-    | 'unweld'
+    | 'constraint'
     | 'trust'
     | 'consume'
     | 'container'
@@ -124,11 +127,21 @@ export interface ServerLevelUp {
   level: number
 }
 
-/** A weld now exists (or was removed) between two props — for client feedback/visuals. */
-export interface ServerWeldState {
-  t: 'weld_state'
+/**
+ * A constraint exists (or was removed) between two props — drives client
+ * visuals (rope/spring lines, joint markers). Anchors are body-local so
+ * the client can render endpoints on moving props.
+ */
+export interface ServerConstraintState {
+  t: 'constraint_state'
+  id: string
+  kind: 'weld' | 'rope' | 'hinge' | 'axis' | 'slider' | 'spring' | 'motor'
   a: string
   b: string
+  anchorA: [number, number, number]
+  anchorB: [number, number, number]
+  /** Rope/spring rest length, for sag rendering. */
+  length?: number
   active: boolean
 }
 
@@ -199,7 +212,7 @@ export type ServerMessage =
   | ServerPhysgunState
   | ServerSkills
   | ServerLevelUp
-  | ServerWeldState
+  | ServerConstraintState
   | ServerFriends
   | ServerStats
   | ServerTime

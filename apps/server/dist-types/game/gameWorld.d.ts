@@ -1,12 +1,22 @@
 import type { ContentRegistry, WorldShape } from '@hobo/content'
-import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
+import {
+  ConstraintIslands,
+  EntityStore,
+  ZoneIndex,
+  type ConstraintParams,
+  type ConstraintType,
+  type GameEntity,
+  type MotionState,
+} from '@hobo/gameplay'
 import type { PersistenceStore } from '@hobo/persistence'
 import { type BodyId, type ConstraintId, type PhysicsWorld, type ShapeDesc } from '@hobo/physics'
 import { type EntityId, type Logger, type PlayerId, type Quat, type Vec3 } from '@hobo/shared'
-interface WeldRecord {
+export interface ConstraintRecord {
   id: string
+  type: ConstraintType
   a: EntityId
   b: EntityId
+  params: ConstraintParams
   physId: ConstraintId
 }
 export declare class GameWorld {
@@ -19,10 +29,12 @@ export declare class GameWorld {
   private readonly entityByBody
   private readonly settled
   private readonly deletedIds
-  private readonly welds
-  private readonly weldsByEntity
-  private readonly weldsDirty
-  private readonly weldsDeleted
+  private readonly constraintRecords
+  private readonly constraintsByEntity
+  private readonly constraintsDirty
+  private readonly constraintsDeleted
+  /** Connected-constraint structure tracking (metrics, group semantics). */
+  readonly islands: ConstraintIslands<EntityId>
   constructor(content: ContentRegistry, physics: PhysicsWorld, log: Logger)
   /** Static level geometry — mirrored by the client from the same world def. */
   private buildStaticWorld
@@ -83,13 +95,28 @@ export declare class GameWorld {
    */
   toggleDoor(entity: GameEntity): boolean
   setPropMotion(entity: GameEntity, motion: MotionState): void
-  hasWeld(a: EntityId, b: EntityId): boolean
-  weldCountFor(id: EntityId): number
-  addWeld(a: GameEntity, b: GameEntity, id?: string): WeldRecord | null
-  /** Removes every weld touching the entity; returns the removed records. */
-  removeWeldsFor(entityId: EntityId): WeldRecord[]
-  private indexWeld
-  allWelds(): IterableIterator<WeldRecord>
+  /** True when a constraint of this type already links the pair. */
+  hasConstraint(a: EntityId, b: EntityId, type: ConstraintType): boolean
+  constraintCountFor(id: EntityId): number
+  get constraintCount(): number
+  /**
+   * Creates a validated constraint between two props. Params must already
+   * have passed `validateConstraintParams`; this maps them onto the physics
+   * engine, indexes the record and marks it for persistence.
+   */
+  addConstraintRecord(
+    a: GameEntity,
+    b: GameEntity,
+    type: ConstraintType,
+    params: ConstraintParams,
+    id?: string,
+  ): ConstraintRecord | null
+  /** Removes every constraint touching the entity; returns removed records. */
+  removeConstraintsFor(entityId: EntityId): ConstraintRecord[]
+  private removeConstraintRecord
+  private indexConstraint
+  allConstraints(): IterableIterator<ConstraintRecord>
+  constraintsFor(entityId: EntityId): ConstraintRecord[]
   /** Refills depleted nodes whose respawn time passed. Returns refilled entities. */
   respawnDueResources(nowMs: number): GameEntity[]
   syncFromPhysics(events: {
@@ -146,5 +173,4 @@ export declare class GameWorld {
   flushDirty(store: PersistenceStore): number
 }
 export declare function toShapeDesc(shape: WorldShape): ShapeDesc
-export {}
 //# sourceMappingURL=gameWorld.d.ts.map

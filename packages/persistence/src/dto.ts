@@ -42,11 +42,14 @@ export interface PlayerDto {
   updatedAt: number
 }
 
-/** Persistent constraint between two world entities (weld graphs, later hinges etc.). */
+/** Persistent constraint between two world entities (weld/rope/hinge/axis/slider/spring/motor). */
 export interface ConstraintDto {
   id: string
-  type: 'weld'
+  /** Gameplay constraint type id. Unknown types are pruned on restore. */
+  type: string
   entityA: string
   entityB: string
+  /** Type-specific parameters (anchors, axes, lengths, limits, motor...). */
+  params: Record<string, unknown> | null
   updatedAt: number
 }

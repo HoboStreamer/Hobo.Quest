@@ -1,14 +1,15 @@
 import type {
+  ClientConstraint,
   ClientCraft,
   ClientDrop,
   ClientInvMove,
+  ClientPlace,
   ClientUse,
-  ClientWeld,
   ServerActionResult,
 } from '@hobo/protocol'
-import type { GameEntity, LevelUp } from '@hobo/gameplay'
+import { type GameEntity, type LevelUp } from '@hobo/gameplay'
 import type { ItemDef } from '@hobo/content'
-import type { GameWorld } from './gameWorld.js'
+import type { ConstraintRecord, GameWorld } from './gameWorld.js'
 import { type PlayerSession } from './playerSession.js'
 export type ActionOutcome = ServerActionResult
 /** The tool capability of the session's active hotbar item, if any. */
@@ -56,19 +57,35 @@ export declare function handleDrop(
   outcome: ActionOutcome
   droppedId: string | null
 }
-export interface WeldOutcome {
-  outcome: ActionOutcome
-  welded: {
-    a: GameEntity
-    b: GameEntity
-  } | null
-}
-/** Weld two props (constraint tools — no player-facing trigger yet). */
-export declare function handleWeld(
+/**
+ * Ghost-preview placement: the stack leaves the inventory and becomes a
+ * DYNAMIC prop at the requested pose. Never frozen on spawn — if the
+ * client lied about a clear spot, physics depenetration resolves it
+ * honestly instead of leaving a teleported wall inside someone's head.
+ */
+export declare function handlePlace(
   session: PlayerSession,
   world: GameWorld,
-  msg: ClientWeld,
+  msg: ClientPlace,
+): {
+  outcome: ActionOutcome
+  placedId: string | null
+}
+export interface ConstraintOutcome {
+  outcome: ActionOutcome
+  created: ConstraintRecord | null
+}
+/**
+ * Rigging tool: create a constraint between two props. Every field of the
+ * request is hostile until proven otherwise — tool, targets, ownership,
+ * reach, gap, zone, per-entity limits, skill level, materials and the
+ * parameter space itself are all validated server-side.
+ */
+export declare function handleConstraint(
+  session: PlayerSession,
+  world: GameWorld,
+  msg: ClientConstraint,
   canManipulate: (entity: GameEntity) => boolean,
-): WeldOutcome
+): ConstraintOutcome
 export declare function handleInvMove(session: PlayerSession, msg: ClientInvMove): ActionOutcome
 //# sourceMappingURL=interactions.d.ts.map

@@ -20,8 +20,16 @@ import {
 } from '@babylonjs/core/Physics/v2/physicsShape.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
-import { PhysicsConstraint } from '@babylonjs/core/Physics/v2/physicsConstraint.js'
-import { PhysicsConstraintType } from '@babylonjs/core/Physics/v2/IPhysicsEnginePlugin.js'
+import {
+  Physics6DoFConstraint,
+  PhysicsConstraint,
+  SpringConstraint,
+} from '@babylonjs/core/Physics/v2/physicsConstraint.js'
+import {
+  PhysicsConstraintAxis,
+  PhysicsConstraintMotorType,
+  PhysicsConstraintType,
+} from '@babylonjs/core/Physics/v2/IPhysicsEnginePlugin.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import '@babylonjs/core/Physics/joinedPhysicsEngineComponent.js'
 import type { Quat, Vec3 } from '@hobo/shared'
@@ -30,6 +38,7 @@ import type {
   BodyId,
   ConstraintDesc,
   ConstraintId,
+  ConstraintMotor,
   MotionType,
   PhysicsWorld,
   RayHit,
@@ -68,7 +77,10 @@ export class HavokWorld implements PhysicsWorld {
   private nextId: BodyId = 1
   private nextConstraintId: ConstraintId = 1
   private readonly bodies = new Map<BodyId, BodyRecord>()
-  private readonly constraints = new Map<ConstraintId, PhysicsConstraint>()
+  private readonly constraints = new Map<
+    ConstraintId,
+    { constraint: PhysicsConstraint; type: ConstraintDesc['type'] }
+  >()
   private readonly bodyIds = new WeakMap<PhysicsBody, BodyId>()
   private bodyList: PhysicsBody[] = []
   private bodyListDirty = false
@@ -230,42 +242,153 @@ export class HavokWorld implements PhysicsWorld {
   addConstraint(desc: ConstraintDesc): ConstraintId {
     const recA = this.mustGet(desc.bodyA)
     const recB = this.mustGet(desc.bodyB)
-    const rotA = recA.node.rotationQuaternion ?? Quaternion.Identity()
-    const rotB = recB.node.rotationQuaternion ?? Quaternion.Identity()
-
-    // Anchor frames preserving the CURRENT relative pose:
-    // pivotA = B's origin in A's local space; axes = B's basis in A's space.
-    const invRotA = rotA.conjugate()
-    const relRot = invRotA.multiply(rotB)
-    const pivotA = recB.node.position.subtract(recA.node.position).applyRotationQuaternion(invRotA)
-    const axisA = new Vector3(1, 0, 0).applyRotationQuaternion(relRot)
-    const perpA = new Vector3(0, 1, 0).applyRotationQuaternion(relRot)
-
-    const constraint = new PhysicsConstraint(
-      PhysicsConstraintType.LOCK,
-      {
-        pivotA,
-        pivotB: Vector3.Zero(),
-        axisA,
-        axisB: new Vector3(1, 0, 0),
-        perpAxisA: perpA,
-        perpAxisB: new Vector3(0, 1, 0),
-        collision: false,
-      },
-      this.scene,
-    )
+    const constraint = this.buildConstraint(desc, recA, recB)
     recA.body.addConstraint(recB.body, constraint)
+    // Motors must be configured AFTER the joint exists in the engine.
+    if ((desc.type === 'hinge' || desc.type === 'slider') && desc.motor) {
+      const axis =
+        desc.type === 'hinge' ? PhysicsConstraintAxis.ANGULAR_X : PhysicsConstraintAxis.LINEAR_X
+      const c = constraint as Physics6DoFConstraint
+      c.setAxisMotorType(axis, PhysicsConstraintMotorType.VELOCITY)
+      c.setAxisMotorTarget(axis, desc.motor.targetVelocity)
+      c.setAxisMotorMaxForce(axis, desc.motor.maxForce)
+    }
+    if (desc.type === 'hinge' && desc.friction !== undefined) {
+      ;(constraint as Physics6DoFConstraint).setAxisFriction(
+        PhysicsConstraintAxis.ANGULAR_X,
+        desc.friction,
+      )
+    }
     const id = this.nextConstraintId++
-    this.constraints.set(id, constraint)
+    this.constraints.set(id, { constraint, type: desc.type })
     if (recA.motion === 'dynamic') this.wake(desc.bodyA)
     if (recB.motion === 'dynamic') this.wake(desc.bodyB)
     return id
   }
 
+  private buildConstraint(
+    desc: ConstraintDesc,
+    recA: BodyRecord,
+    recB: BodyRecord,
+  ): PhysicsConstraint {
+    switch (desc.type) {
+      case 'weld': {
+        const rotA = recA.node.rotationQuaternion ?? Quaternion.Identity()
+        const rotB = recB.node.rotationQuaternion ?? Quaternion.Identity()
+        // Anchor frames preserving the CURRENT relative pose:
+        // pivotA = B's origin in A's local space; axes = B's basis in A's space.
+        const invRotA = rotA.conjugate()
+        const relRot = invRotA.multiply(rotB)
+        const pivotA = recB.node.position
+          .subtract(recA.node.position)
+          .applyRotationQuaternion(invRotA)
+        const axisA = new Vector3(1, 0, 0).applyRotationQuaternion(relRot)
+        const perpA = new Vector3(0, 1, 0).applyRotationQuaternion(relRot)
+        return new PhysicsConstraint(
+          PhysicsConstraintType.LOCK,
+          {
+            pivotA,
+            pivotB: Vector3.Zero(),
+            axisA,
+            axisB: new Vector3(1, 0, 0),
+            perpAxisA: perpA,
+            perpAxisB: new Vector3(0, 1, 0),
+            collision: false,
+          },
+          this.scene,
+        )
+      }
+      case 'rope':
+        // A pure max-distance tether: slack below `length`, taut at it.
+        // The pair keeps colliding — a crate on a rope bonks the post.
+        return new PhysicsConstraint(
+          PhysicsConstraintType.DISTANCE,
+          {
+            pivotA: toBjs(desc.anchorA),
+            pivotB: toBjs(desc.anchorB),
+            maxDistance: desc.length,
+            collision: true,
+          },
+          this.scene,
+        )
+      case 'spring':
+        // Soft equality at restLength: force = stiffness·error − damping·vel.
+        return new SpringConstraint(
+          toBjs(desc.anchorA),
+          toBjs(desc.anchorB),
+          new Vector3(1, 0, 0),
+          new Vector3(1, 0, 0),
+          desc.restLength,
+          desc.restLength,
+          desc.stiffness,
+          desc.damping,
+          this.scene,
+        )
+      case 'hinge':
+      case 'slider': {
+        const frames = jointFrames(desc.axisA, desc.axisB, recA, recB)
+        const limits: { axis: PhysicsConstraintAxis; minLimit: number; maxLimit: number }[] = []
+        const lock = (axis: PhysicsConstraintAxis) =>
+          limits.push({ axis, minLimit: 0, maxLimit: 0 })
+        if (desc.type === 'hinge') {
+          lock(PhysicsConstraintAxis.LINEAR_X)
+          lock(PhysicsConstraintAxis.LINEAR_Y)
+          lock(PhysicsConstraintAxis.LINEAR_Z)
+          lock(PhysicsConstraintAxis.ANGULAR_Y)
+          lock(PhysicsConstraintAxis.ANGULAR_Z)
+          if (desc.limits) {
+            limits.push({
+              axis: PhysicsConstraintAxis.ANGULAR_X,
+              minLimit: desc.limits.min,
+              maxLimit: desc.limits.max,
+            })
+          }
+        } else {
+          lock(PhysicsConstraintAxis.LINEAR_Y)
+          lock(PhysicsConstraintAxis.LINEAR_Z)
+          lock(PhysicsConstraintAxis.ANGULAR_X)
+          lock(PhysicsConstraintAxis.ANGULAR_Y)
+          lock(PhysicsConstraintAxis.ANGULAR_Z)
+          if (desc.limits) {
+            limits.push({
+              axis: PhysicsConstraintAxis.LINEAR_X,
+              minLimit: desc.limits.min,
+              maxLimit: desc.limits.max,
+            })
+          }
+        }
+        return new Physics6DoFConstraint(
+          {
+            pivotA: toBjs(desc.anchorA),
+            pivotB: toBjs(desc.anchorB),
+            axisA: frames.axisA,
+            axisB: frames.axisB,
+            perpAxisA: frames.perpA,
+            perpAxisB: frames.perpB,
+            collision: false,
+          },
+          limits,
+          this.scene,
+        )
+      }
+    }
+  }
+
+  setConstraintMotor(id: ConstraintId, motor: ConstraintMotor): void {
+    const rec = this.constraints.get(id)
+    if (!rec || (rec.type !== 'hinge' && rec.type !== 'slider')) return
+    const axis =
+      rec.type === 'hinge' ? PhysicsConstraintAxis.ANGULAR_X : PhysicsConstraintAxis.LINEAR_X
+    const c = rec.constraint as Physics6DoFConstraint
+    c.setAxisMotorType(axis, PhysicsConstraintMotorType.VELOCITY)
+    c.setAxisMotorTarget(axis, motor.targetVelocity)
+    c.setAxisMotorMaxForce(axis, motor.maxForce)
+  }
+
   removeConstraint(id: ConstraintId): void {
-    const constraint = this.constraints.get(id)
-    if (!constraint) return
-    constraint.dispose()
+    const rec = this.constraints.get(id)
+    if (!rec) return
+    rec.constraint.dispose()
     this.constraints.delete(id)
   }
 
@@ -403,6 +526,42 @@ export class HavokWorld implements PhysicsWorld {
     }
     return shape
   }
+}
+
+function toBjs(v: Vec3): Vector3 {
+  return new Vector3(v.x, v.y, v.z)
+}
+
+/**
+ * Perpendicular joint frames that make the bodies' CURRENT pose the joint's
+ * zero: perpA is an arbitrary unit vector ⊥ axisA (in A local space) and
+ * perpB is its image through the current world alignment, re-orthogonalized
+ * against axisB. Without this, hinge/slider limits and motor angles would
+ * be measured from an arbitrary datum instead of "where you built it".
+ */
+function jointFrames(
+  axisALocal: Vec3,
+  axisBLocal: Vec3,
+  recA: BodyRecord,
+  recB: BodyRecord,
+): { axisA: Vector3; axisB: Vector3; perpA: Vector3; perpB: Vector3 } {
+  const axisA = toBjs(axisALocal).normalize()
+  const axisB = toBjs(axisBLocal).normalize()
+  // Arbitrary but stable perpendicular to axisA.
+  const seed = Math.abs(axisA.y) < 0.9 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0)
+  const perpA = Vector3.Cross(axisA, seed).normalize()
+  const rotA = recA.node.rotationQuaternion ?? Quaternion.Identity()
+  const rotB = recB.node.rotationQuaternion ?? Quaternion.Identity()
+  const worldPerpA = perpA.applyRotationQuaternion(rotA)
+  const perpBRaw = worldPerpA.applyRotationQuaternion(rotB.conjugate())
+  // Project out any axisB component (axes may not be perfectly aligned in
+  // world space when the player links two tilted props).
+  const perpB = perpBRaw.subtract(axisB.scale(Vector3.Dot(axisB, perpBRaw)))
+  if (perpB.lengthSquared() < 1e-8) {
+    const seedB = Math.abs(axisB.y) < 0.9 ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0)
+    return { axisA, axisB, perpA, perpB: Vector3.Cross(axisB, seedB).normalize() }
+  }
+  return { axisA, axisB, perpA, perpB: perpB.normalize() }
 }
 
 function setupWorld(scene: Scene, havok: unknown, ownsScene: boolean): HavokWorld {

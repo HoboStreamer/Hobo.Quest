@@ -32,6 +32,8 @@ export interface PropComponent {
   doorOpen?: boolean
   /** Growing crop on planter props (timestamp-based; no per-tick sim). */
   plant?: { seedId: string; plantedAt: number }
+  /** Remaining health for damageable props (absent = undamaged/no capability). */
+  health?: number
 }
 
 export interface ResourceComponent {

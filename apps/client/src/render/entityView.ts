@@ -367,26 +367,33 @@ export class EntityView {
       // Interpolated mirrors made standing on props mispredict every tick.
     }
 
-    // Held highlight: a temporary OUTLINE on the held prop only — cleared
-    // the moment it's released/frozen, even if the prop has settled out of
+    // Held/selection highlight: a temporary OUTLINE — cleared the moment
+    // it's released/frozen/deselected, even if the prop has settled out of
     // snapshots (the old overlay could stick because settled visuals skip
-    // the interpolation loop above).
+    // the interpolation loop above). Rigging selection (green) wins over
+    // the physgun-held blue.
     for (const v of this.visuals.values()) {
       if (!v.mesh || v.entity.kind !== 'prop') continue
+      const selected = v.entity.id === this.selectedId
       const held = this.state.heldBy.has(v.entity.id)
-      if (v.mesh.renderOutline !== held) {
-        v.mesh.renderOutline = held
-        v.mesh.outlineColor = HELD_OVERLAY
+      const want = held || selected
+      const color = selected ? SELECT_OVERLAY : HELD_OVERLAY
+      if (v.mesh.renderOutline !== want || (want && v.mesh.outlineColor !== color)) {
+        v.mesh.renderOutline = want
+        v.mesh.outlineColor = color
         v.mesh.outlineWidth = 0.03
         for (const child of v.mesh.getChildMeshes()) {
           const c = child as Mesh
-          c.renderOutline = held
-          c.outlineColor = HELD_OVERLAY
+          c.renderOutline = want
+          c.outlineColor = color
           c.outlineWidth = 0.03
         }
       }
     }
   }
+
+  /** Rigging tool first-pick highlight (null = nothing selected). */
+  selectedId: string | null = null
 
   /**
    * World position of a grab point given in an entity's local space (beam
@@ -412,6 +419,7 @@ export class EntityView {
 }
 
 const HELD_OVERLAY = new Color3(0.35, 0.65, 1)
+const SELECT_OVERLAY = new Color3(0.4, 0.95, 0.5)
 const _grabLocal = new Vector3()
 const _grabWorld = new Vector3()
 

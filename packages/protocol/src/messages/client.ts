@@ -48,6 +48,12 @@ export const ClientUseSchema = z.object({
   target: z.string().max(32),
 })
 
+/** Melee swing at an entity (another player, or a damageable prop). */
+export const ClientAttackSchema = z.object({
+  t: z.literal('attack'),
+  target: z.string().max(32),
+})
+
 export const ClientCraftSchema = z.object({
   t: z.literal('craft'),
   recipe: z.string().max(64),
@@ -62,6 +68,23 @@ export const ClientDropSchema = z.object({
   t: z.literal('drop'),
   slot: z.number().int().nonnegative().max(255),
   count: z.number().int().positive().max(9999),
+})
+
+/**
+ * Precise placement from the ghost preview: the item in `slot` becomes a
+ * dynamic prop at the requested pose. The server validates range, zone,
+ * bounds and the item's placeable capability — physics resolves any
+ * overlap the client lied about (the prop is never spawned frozen).
+ */
+export const ClientPlaceSchema = z.object({
+  t: z.literal('place'),
+  slot: z.number().int().nonnegative().max(255),
+  pos: z.tuple([
+    z.number().min(-2000).max(2000),
+    z.number().min(-100).max(500),
+    z.number().min(-2000).max(2000),
+  ]),
+  yaw: z.number().finite(),
 })
 
 export const ClientInvMoveSchema = z.object({
@@ -124,16 +147,42 @@ export const ClientTrustSchema = z.object({
   trusted: z.boolean(),
 })
 
-/** Weld two props (constraint tools — no player-facing UX yet). */
-export const ClientWeldSchema = z.object({
-  t: z.literal('weld'),
+const WorldPoint = z.tuple([
+  z.number().min(-2000).max(2000),
+  z.number().min(-2000).max(2000),
+  z.number().min(-2000).max(2000),
+])
+
+/**
+ * Create a constraint between two props with the rigging tool. Points are
+ * the world-space click locations on each prop; the server converts them
+ * to authoritative body-local anchors (clamped) and validates everything:
+ * type params, skill, materials, range, zone, ownership, limits.
+ */
+export const ClientConstraintSchema = z.object({
+  t: z.literal('constraint'),
+  kind: z.enum(['weld', 'rope', 'hinge', 'axis', 'slider', 'spring', 'motor']),
   a: z.string().max(32),
   b: z.string().max(32),
+  pointA: WorldPoint,
+  pointB: WorldPoint,
+  /** Joint axis in world space (hinge/axis/slider/motor). */
+  axis: z.tuple([z.number(), z.number(), z.number()]).optional(),
+  /** Rope/spring length override (defaults to the current anchor gap). */
+  length: z.number().min(0.05).max(20).optional(),
+  /** Hinge swing (rad) / slider travel (m) limits. */
+  limits: z
+    .object({ min: z.number().min(-10).max(10), max: z.number().min(-10).max(10) })
+    .optional(),
+  stiffness: z.number().min(0).max(10000).optional(),
+  damping: z.number().min(0).max(1000).optional(),
+  motorVel: z.number().min(-50).max(50).optional(),
+  motorForce: z.number().min(0).max(100000).optional(),
 })
 
-/** Remove all welds touching the target prop. */
-export const ClientUnweldSchema = z.object({
-  t: z.literal('unweld'),
+/** Remove all constraints touching the target prop (rigging tool RMB). */
+export const ClientConstraintRemoveSchema = z.object({
+  t: z.literal('constraint_remove'),
   target: z.string().max(32),
 })
 
@@ -174,14 +223,16 @@ export const ClientMessageSchema = z.union([
   ClientHelloSchema,
   ClientInputSchema,
   ClientUseSchema,
+  ClientAttackSchema,
   ClientCraftSchema,
   ClientDropSchema,
+  ClientPlaceSchema,
   ClientInvMoveSchema,
   ClientHotbarSelectSchema,
   ClientPhysgunSchema,
   ClientTrustSchema,
-  ClientWeldSchema,
-  ClientUnweldSchema,
+  ClientConstraintSchema,
+  ClientConstraintRemoveSchema,
   ClientConsumeSchema,
   ClientDrinkSchema,
   ClientTradeSchema,
@@ -192,14 +243,16 @@ export const ClientMessageSchema = z.union([
 export type ClientHello = z.infer<typeof ClientHelloSchema>
 export type ClientInput = z.infer<typeof ClientInputSchema>
 export type ClientUse = z.infer<typeof ClientUseSchema>
+export type ClientAttack = z.infer<typeof ClientAttackSchema>
 export type ClientCraft = z.infer<typeof ClientCraftSchema>
 export type ClientDrop = z.infer<typeof ClientDropSchema>
+export type ClientPlace = z.infer<typeof ClientPlaceSchema>
 export type ClientInvMove = z.infer<typeof ClientInvMoveSchema>
 export type ClientHotbarSelect = z.infer<typeof ClientHotbarSelectSchema>
 export type ClientPhysgun = z.infer<typeof ClientPhysgunSchema>
 export type ClientTrust = z.infer<typeof ClientTrustSchema>
-export type ClientWeld = z.infer<typeof ClientWeldSchema>
-export type ClientUnweld = z.infer<typeof ClientUnweldSchema>
+export type ClientConstraint = z.infer<typeof ClientConstraintSchema>
+export type ClientConstraintRemove = z.infer<typeof ClientConstraintRemoveSchema>
 export type ClientConsume = z.infer<typeof ClientConsumeSchema>
 export type ClientDrink = z.infer<typeof ClientDrinkSchema>
 export type ClientTrade = z.infer<typeof ClientTradeSchema>

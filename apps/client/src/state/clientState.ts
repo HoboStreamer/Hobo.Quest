@@ -1,4 +1,10 @@
-import type { ServerMessage, WireEntity, WireInventory, WireSkill } from '@hobo/protocol'
+import type {
+  ServerConstraintState,
+  ServerMessage,
+  WireEntity,
+  WireInventory,
+  WireSkill,
+} from '@hobo/protocol'
 import { TypedEmitter } from '@hobo/shared'
 
 /**
@@ -18,7 +24,7 @@ export interface ClientStateEvents {
   physgunBeam: { player: string; target: string | null }
   skills: WireSkill[]
   levelUp: { skill: string; level: number }
-  weldState: { a: string; b: string; active: boolean }
+  constraintState: ServerConstraintState
   friendsChanged: { id: string; name: string }[]
   stats: { hp: number; hunger: number; thirst: number; stamina: number; died?: boolean }
   timeSync: number
@@ -50,6 +56,8 @@ export class ClientState {
   skills: WireSkill[] = []
   /** entityId -> holder player entityId, for beam/highlight rendering. */
   readonly heldBy = new Map<string, string>()
+  /** Live constraints touching entities this client knows (for visuals). */
+  readonly constraints = new Map<string, ServerConstraintState>()
   /** Holder entity id -> grab point in the held body's local space. */
   readonly heldGrab = new Map<string, [number, number, number]>()
   stats = { hp: 100, hunger: 100, thirst: 100, stamina: 100 }
@@ -78,6 +86,11 @@ export class ClientState {
       case 'despawn':
         for (const id of msg.ids) {
           if (this.entities.delete(id)) this.events.emit('entityRemoved', id)
+          // Constraint visuals die with the props they touch; the server
+          // re-sends states if the prop comes back into interest.
+          for (const [cid, c] of this.constraints) {
+            if (c.a === id || c.b === id) this.constraints.delete(cid)
+          }
         }
         break
       case 'snap':
@@ -91,6 +104,7 @@ export class ClientState {
         if (msg.pos) e.pos = msg.pos
         if (msg.rot) e.rot = msg.rot
         if (msg.remaining !== undefined) e.remaining = msg.remaining
+        if (msg.health !== undefined) e.health = msg.health
         if (msg.plant !== undefined) {
           if (msg.plant === null) delete e.plant
           else e.plant = msg.plant
@@ -121,8 +135,10 @@ export class ClientState {
       case 'levelup':
         this.events.emit('levelUp', { skill: msg.skill, level: msg.level })
         break
-      case 'weld_state':
-        this.events.emit('weldState', { a: msg.a, b: msg.b, active: msg.active })
+      case 'constraint_state':
+        if (msg.active) this.constraints.set(msg.id, msg)
+        else this.constraints.delete(msg.id)
+        this.events.emit('constraintState', msg)
         break
       case 'friends':
         this.friends = msg.friends

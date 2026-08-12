@@ -29,6 +29,8 @@ export declare class EntityView {
   onSnapshot(snap: ServerSnapshot, localTime: number): void
   /** Per-frame: interpolate meshes/avatars toward buffered samples. */
   update(localTime: number): void
+  /** Rigging tool first-pick highlight (null = nothing selected). */
+  selectedId: string | null
   /**
    * World position of a grab point given in an entity's local space (beam
    * endpoints stick to the touched spot, not the prop center).

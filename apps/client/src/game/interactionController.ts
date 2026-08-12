@@ -1,4 +1,5 @@
 import { CollisionLayer, type PhysicsWorld } from '@hobo/physics'
+import type { ClientConstraint } from '@hobo/protocol'
 import { v3addScaled, vec3 } from '@hobo/shared'
 import { WATER_LEVEL, terrainHeight, type ContentRegistry } from '@hobo/content'
 import type { Connection } from '../net/connection.js'
@@ -7,6 +8,14 @@ import type { ClientState } from '../state/clientState.js'
 import type { InputAction, InputTracker } from '../input/inputTracker.js'
 import type { LocalPlayer } from './localPlayer.js'
 import { physgunGridSize, physgunSnapDeg } from '../weapons/physgunModule.js'
+import {
+  riggingHingeLimitDeg,
+  riggingKind,
+  riggingMotorSpeed,
+  riggingRopeSlack,
+  riggingSliderTravel,
+  riggingSpringStiffness,
+} from '../weapons/riggingModule.js'
 import type { WeaponSettings } from '../weapons/registry.js'
 
 /**
@@ -37,6 +46,14 @@ export interface AimTarget {
   def: string | undefined
   frozen: boolean
   point: { x: number; y: number; z: number }
+  /** Surface normal at the hit (rigging tool takes joint axes from it). */
+  normal: { x: number; y: number; z: number }
+}
+
+/** First endpoint picked with the rigging tool (awaiting the second). */
+export interface RiggingPick {
+  entityId: string
+  point: { x: number; y: number; z: number }
 }
 
 export class InteractionController {
@@ -49,6 +66,12 @@ export class InteractionController {
   lastTargetWasPlayer = false
   /** Hook: player pressed E on a trading post. */
   onShopOpen: (() => void) | null = null
+  /** Rigging tool: first selected endpoint (highlight + prompt read this). */
+  riggingFirst: RiggingPick | null = null
+  /** Ghost preview pose supplier (wired by main; null = no valid ghost). */
+  placementPose: (() => { x: number; y: number; z: number; yaw: number } | null) | null = null
+  /** Wheel rotates the placement ghost while a placeable is equipped. */
+  onPlacementRotate: ((delta: number) => void) | null = null
 
   private lastSwingMs = 0
   private pendingRotate = { dyaw: 0, dpitch: 0 }
@@ -67,7 +90,7 @@ export class InteractionController {
     input.captureLook = () => this.rotating && this.physgunActive
   }
 
-  equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'hammer' | null {
+  equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'rigging' | null {
     const defId = this.state.activeItemDef()
     if (!defId) return null
     return this.content.item(defId)?.tool?.kind ?? null
@@ -96,6 +119,7 @@ export class InteractionController {
       def: entity.def,
       frozen: entity.motion === 'frozen',
       point: hit.point,
+      normal: hit.normal,
     }
   }
 
@@ -126,8 +150,27 @@ export class InteractionController {
           this.physgunActive = true
           break
         }
-        // Eating: primary fire with food equipped consumes it.
+        if (tool === 'rigging') {
+          this.riggingPick()
+          break
+        }
+        // Placement: LMB with a placeable equipped places at the ghost.
         const defId = this.state.activeItemDef()
+        const itemDef = defId ? this.content.item(defId) : undefined
+        if (itemDef?.placeable && itemDef.world) {
+          const pose = this.placementPose?.()
+          if (pose) {
+            this.connection.send({
+              t: 'place',
+              slot: this.state.activeHotbar,
+              pos: [pose.x, pose.y, pose.z],
+              yaw: pose.yaw,
+            })
+            this.onSwing?.()
+          }
+          break
+        }
+        // Eating: primary fire with food equipped consumes it.
         if (defId && this.content.item(defId)?.food) {
           this.connection.send({ t: 'consume', slot: this.state.activeHotbar })
           this.onSwing?.()
@@ -147,6 +190,19 @@ export class InteractionController {
         if (this.physgunActive) {
           this.connection.send({ t: 'physgun', a: 'freeze' })
           this.endCarry()
+          break
+        }
+        if (tool === 'rigging') {
+          // Cut: remove every constraint on the aimed prop. A pending first
+          // pick is cancelled instead.
+          if (this.riggingFirst) {
+            this.riggingFirst = null
+            break
+          }
+          const target = this.aim()
+          if (target?.kind === 'prop') {
+            this.connection.send({ t: 'constraint_remove', target: target.entityId })
+          }
         }
         break
       }
@@ -235,6 +291,12 @@ export class InteractionController {
   onWheel(delta: number): void {
     if (this.physgunActive) {
       this.connection.send({ t: 'physgun', a: 'adjust', dist: -delta * 0.5 })
+      return
+    }
+    const defId = this.state.activeItemDef()
+    const def = defId ? this.content.item(defId) : undefined
+    if (def?.placeable && def.world) {
+      this.onPlacementRotate?.(delta * (Math.PI / 12))
     }
   }
 
@@ -242,6 +304,67 @@ export class InteractionController {
     if (this.physgunActive && this.equippedToolKind() !== 'physgun') {
       this.endCarry()
     }
+    if (this.equippedToolKind() !== 'rigging') this.riggingFirst = null
+  }
+
+  /**
+   * Rigging tool LMB: first click marks an endpoint, second click sends the
+   * constraint request built from the equipment-panel settings. The server
+   * re-validates everything (points, ownership, skill, materials, zone).
+   */
+  private riggingPick(): void {
+    this.onSwing?.()
+    const target = this.aim()
+    if (target?.kind !== 'prop') return
+    if (!this.riggingFirst) {
+      this.riggingFirst = { entityId: target.entityId, point: target.point }
+      return
+    }
+    const first = this.riggingFirst
+    this.riggingFirst = null
+    if (first.entityId === target.entityId) return
+    const kind = riggingKind(this.weaponSettings)
+    const pointA: [number, number, number] = [first.point.x, first.point.y, first.point.z]
+    const pointB: [number, number, number] = [target.point.x, target.point.y, target.point.z]
+    const msg: ClientConstraint = {
+      t: 'constraint',
+      kind,
+      a: first.entityId,
+      b: target.entityId,
+      pointA,
+      pointB,
+    }
+    if (kind === 'hinge' || kind === 'axis' || kind === 'slider' || kind === 'motor') {
+      // The joint axis comes from the second surface clicked (its normal);
+      // clicking the top of a plank hinges it flat, clicking the side
+      // hinges it like a door.
+      const n = target.normal
+      msg.axis = [n.x, n.y, n.z]
+    }
+    if (kind === 'rope') {
+      const gap = Math.hypot(pointB[0] - pointA[0], pointB[1] - pointA[1], pointB[2] - pointA[2])
+      msg.length = Math.max(0.3, gap * (1 + riggingRopeSlack(this.weaponSettings)))
+    }
+    if (kind === 'hinge') {
+      const deg = riggingHingeLimitDeg(this.weaponSettings)
+      if (deg > 0) {
+        const rad = (deg * Math.PI) / 180
+        msg.limits = { min: -rad, max: rad }
+      }
+    }
+    if (kind === 'slider') {
+      const travel = riggingSliderTravel(this.weaponSettings)
+      if (travel > 0) msg.limits = { min: -travel, max: travel }
+    }
+    if (kind === 'spring') {
+      msg.stiffness = riggingSpringStiffness(this.weaponSettings)
+      msg.damping = 15
+    }
+    if (kind === 'motor') {
+      msg.motorVel = riggingMotorSpeed(this.weaponSettings)
+      msg.motorForce = 500
+    }
+    this.connection.send(msg)
   }
 
   private swing(): void {
@@ -249,12 +372,26 @@ export class InteractionController {
     if (now - this.lastSwingMs < SWING_COOLDOWN_MS) return
     this.lastSwingMs = now
     // The swing always animates (punching air is allowed); it DOES
-    // something when a resource or another player is under the crosshair.
+    // something when a resource, player or damageable prop is under the
+    // crosshair. Resources gather (use); the rest is an attack.
     this.onSwing?.()
     const target = this.aim()
-    if (target?.kind !== 'resource' && target?.kind !== 'player') return
-    this.lastTargetWasPlayer = target.kind === 'player'
-    this.connection.send({ t: 'use', target: target.entityId })
+    if (!target) return
+    if (target.kind === 'resource') {
+      this.lastTargetWasPlayer = false
+      this.connection.send({ t: 'use', target: target.entityId })
+      return
+    }
+    if (target.kind === 'player') {
+      this.lastTargetWasPlayer = true
+      this.connection.send({ t: 'attack', target: target.entityId })
+      return
+    }
+    // Props: only structures with a health capability are attackable.
+    if (target.def && this.content.item(target.def)?.health) {
+      this.lastTargetWasPlayer = false
+      this.connection.send({ t: 'attack', target: target.entityId })
+    }
   }
 
   /** Standing in water (thirst refill by drinking). */

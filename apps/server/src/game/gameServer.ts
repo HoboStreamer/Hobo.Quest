@@ -37,6 +37,7 @@ import {
   newPlayerId,
   qfromYaw,
   quat,
+  v3dist,
   vec3,
   type EntityId,
   type Logger,
@@ -49,13 +50,15 @@ import type { ServerMetrics } from '../observability/metrics.js'
 import type { GameWorld } from './gameWorld.js'
 import {
   equippedTool,
+  handleConstraint,
   handleCraft,
   handleDrop,
   handleInvMove,
+  handlePlace,
   handleUse,
-  handleWeld,
   nearbyWorkstationKinds,
 } from './interactions.js'
+import type { ConstraintRecord } from './gameWorld.js'
 import { adjustDistance, driveHeld, freezeHeld, release, rotateHeld, tryGrab } from './physgun.js'
 import {
   createSession,
@@ -152,11 +155,28 @@ export class GameServer {
       case 'input':
         if (session.inputQueue.length < MAX_INPUT_QUEUE) session.inputQueue.push(msg)
         break
+      case 'attack': {
+        // Swing cooldown: silently drop spam faster than ~5 swings/sec.
+        if (this.tick - session.lastUseTick < 6) break
+        const victimSession = this.sessionsByEntity.get(msg.target as EntityId)
+        if (victimSession) {
+          this.handleMelee(session, victimSession)
+          break
+        }
+        const propTarget = this.world.entities.get(msg.target as EntityId)
+        if (propTarget?.prop) {
+          this.handlePropAttack(session, propTarget)
+          break
+        }
+        this.send(session, { t: 'result', action: 'attack', ok: false, error: 'no_target' })
+        break
+      }
       case 'use': {
         // Swing cooldown: silently drop spam faster than ~5 swings/sec.
         if (this.tick - session.lastUseTick < 6) break
         const targetSession = this.sessionsByEntity.get(msg.target as EntityId)
         if (targetSession) {
+          // Legacy path: melee also arrives as 'use' from older flows.
           this.handleMelee(session, targetSession)
           break
         }
@@ -177,9 +197,10 @@ export class GameServer {
         }
         if (gather.spawned) this.broadcastSpawn(gather.spawned)
         if (gather.changed?.prop) {
-          // Door swing / plant change: pin authoritative state everywhere.
+          // Door swing / plant change / repair: pin authoritative state.
           const e = gather.changed
           const plant = e.prop?.plant
+          const max = this.world.content.item(e.prop!.defId)?.health?.max
           this.broadcastToKnowing(e.id, {
             t: 'entity',
             id: e.id,
@@ -192,6 +213,7 @@ export class GameServer {
                   growSeconds: this.world.content.item(plant.seedId)?.seed?.growSeconds ?? 240,
                 }
               : null,
+            ...(max !== undefined ? { health: Math.round(e.prop!.health ?? max) } : {}),
           })
         }
         if (gather.changed?.resource) {
@@ -207,38 +229,57 @@ export class GameServer {
         this.handleTrust(session, msg.player, msg.trusted)
         break
       }
-      case 'weld': {
-        const { outcome, welded } = handleWeld(session, this.world, msg, (e) =>
+      case 'constraint': {
+        const { outcome, created } = handleConstraint(session, this.world, msg, (e) =>
           this.canManipulate(session, e),
         )
         this.send(session, outcome)
-        if (welded) {
-          this.broadcastAll({ t: 'weld_state', a: welded.a.id, b: welded.b.id, active: true })
+        if (created) {
+          this.broadcastConstraintState(created, true)
           this.sendSkills(session)
+          // Rope/spring/motor constraints consume materials.
+          this.sendInventory(session)
         }
         break
       }
-      case 'unweld': {
+      case 'constraint_remove': {
         const tool = equippedTool(session)
-        if (tool?.kind !== 'hammer') {
-          this.send(session, { t: 'result', action: 'unweld', ok: false, error: 'requires_hammer' })
+        if (tool?.kind !== 'rigging') {
+          this.send(session, {
+            t: 'result',
+            action: 'constraint',
+            ok: false,
+            error: 'requires_rigging_tool',
+          })
           break
         }
         const target = this.world.entities.get(msg.target as EntityId)
         if (!target?.prop) {
-          this.send(session, { t: 'result', action: 'unweld', ok: false, error: 'no_target' })
+          this.send(session, { t: 'result', action: 'constraint', ok: false, error: 'no_target' })
           break
         }
-        const removed = this.world.removeWeldsFor(target.id)
+        if (!this.canManipulate(session, target)) {
+          this.send(session, { t: 'result', action: 'constraint', ok: false, error: 'not_owner' })
+          break
+        }
+        eyePosition(session, _eyeScratch)
+        if (v3dist(_eyeScratch, target.transform.pos) > (tool.range ?? 6) + 1.5) {
+          this.send(session, {
+            t: 'result',
+            action: 'constraint',
+            ok: false,
+            error: 'out_of_range',
+          })
+          break
+        }
+        const removed = this.world.removeConstraintsFor(target.id)
         this.send(session, {
           t: 'result',
-          action: 'unweld',
+          action: 'constraint',
           ok: removed.length > 0,
-          ...(removed.length === 0 ? { error: 'no_welds' } : {}),
+          ...(removed.length === 0 ? { error: 'no_constraints' } : {}),
         })
-        for (const weld of removed) {
-          this.broadcastAll({ t: 'weld_state', a: weld.a, b: weld.b, active: false })
-        }
+        for (const rec of removed) this.broadcastConstraintState(rec, false)
         break
       }
       case 'craft': {
@@ -257,6 +298,18 @@ export class GameServer {
           this.sendInventory(session)
           if (droppedId) {
             const entity = this.world.entities.get(droppedId as EntityId)
+            if (entity) this.broadcastSpawn(entity)
+          }
+        }
+        break
+      }
+      case 'place': {
+        const { outcome, placedId } = handlePlace(session, this.world, msg)
+        this.send(session, outcome)
+        if (outcome.ok) {
+          this.sendInventory(session)
+          if (placedId) {
+            const entity = this.world.entities.get(placedId as EntityId)
             if (entity) this.broadcastSpawn(entity)
           }
         }
@@ -954,6 +1007,92 @@ export class GameServer {
     }
   }
 
+  /**
+   * Melee swing on a damageable prop: range + zone build rules + the same
+   * stamina/cooldown economics as PvP. Structures are only destructible
+   * where building is legal (safe city props are untouchable).
+   */
+  private handlePropAttack(attacker: PlayerSession, entity: GameEntity): void {
+    const def = entity.prop ? this.world.content.item(entity.prop.defId) : undefined
+    const cap = def?.health
+    if (!entity.prop || !cap) {
+      this.send(attacker, { t: 'result', action: 'attack', ok: false, error: 'not_damageable' })
+      return
+    }
+    const tool = equippedTool(attacker)
+    if (tool?.kind === 'physgun') {
+      this.send(attacker, { t: 'result', action: 'attack', ok: false, error: 'not_a_weapon' })
+      return
+    }
+    const heldDef = attacker.holstered
+      ? undefined
+      : this.world.content.item(attacker.inventory.get(attacker.activeHotbar)?.defId ?? '')
+    const weapon = heldDef?.weapon
+    const range = weapon?.range ?? (tool ? Math.min(tool.range, 3.5) : 2.4)
+    eyePosition(attacker, _eyeScratch)
+    if (v3dist(_eyeScratch, entity.transform.pos) > range + 1) {
+      this.send(attacker, { t: 'result', action: 'attack', ok: false, error: 'out_of_range' })
+      return
+    }
+    if (!this.world.zones.rulesAt(entity.transform.pos).build) {
+      this.send(attacker, { t: 'result', action: 'attack', ok: false, error: 'safe_zone' })
+      return
+    }
+    attacker.lastUseTick = this.tick
+    const exhausted = attacker.stats.stamina < 10
+    attacker.stats.stamina = Math.max(0, attacker.stats.stamina - 12)
+    attacker.statsDirty = true
+    const base = weapon?.damage ?? (tool ? 6 + tool.power * 4 : heldDef ? 5 : 6)
+    const damage = base * (exhausted ? 0.5 : 1) * cap.resistance
+    entity.prop.health = (entity.prop.health ?? cap.max) - damage
+    entity.dirty = true
+    this.send(attacker, { t: 'result', action: 'attack', ok: true })
+    if (entity.prop.health <= 0) {
+      this.destroyProp(entity)
+      return
+    }
+    this.broadcastToKnowing(entity.id, {
+      t: 'entity',
+      id: entity.id,
+      health: Math.round(entity.prop.health),
+    })
+    this.broadcastToKnowing(entity.id, { t: 'fx', kind: 'hurt', id: entity.id as string })
+  }
+
+  /** Destruction: scatter salvage + stored contents as physical props. */
+  private destroyProp(entity: GameEntity): void {
+    const def = entity.prop ? this.world.content.item(entity.prop.defId) : undefined
+    const drops: { defId: string; count: number }[] = []
+    for (const loot of def?.health?.destroyLoot ?? []) {
+      drops.push({ defId: loot.item, count: loot.count })
+    }
+    // A destroyed container spills everything it held.
+    for (const slot of entity.prop?.container ?? []) {
+      if (slot) drops.push({ defId: slot.defId, count: slot.count })
+    }
+    const around = entity.transform.pos
+    this.world.despawn(entity.id)
+    this.broadcastDespawn(entity.id)
+    for (const [i, drop] of drops.entries()) {
+      if (!this.world.content.item(drop.defId)) continue
+      const angle = (i / Math.max(drops.length, 1)) * Math.PI * 2
+      const spawned = this.world.spawnProp({
+        defId: drop.defId,
+        pos: vec3(
+          around.x + Math.cos(angle) * 0.4,
+          around.y + 0.4,
+          around.z + Math.sin(angle) * 0.4,
+        ),
+        rot: qfromYaw(quat(), angle),
+        motion: 'dynamic',
+        lootCount: drop.count,
+        velocity: vec3(Math.cos(angle) * 1.5, 2, Math.sin(angle) * 1.5),
+      })
+      this.broadcastSpawn(spawned)
+    }
+    this.log.info('prop destroyed', { def: def?.id ?? 'unknown', drops: drops.length })
+  }
+
   /** Death/rescue respawn: back to the city with restored vitals. */
   private respawn(session: PlayerSession, died: boolean): void {
     const spawn = worldSpawn(this.world.content.world).pos
@@ -1104,6 +1243,8 @@ export class GameServer {
 
     this.metrics.tick = this.tick
     this.metrics.entities = this.world.entities.size
+    this.metrics.constraints = this.world.constraintCount
+    this.metrics.constraintIslands = this.world.islands.islandCount()
     this.metrics.mapStatics = this.world.mapStaticCount()
     this.metrics.mapTerrains = this.world.mapTerrainCount()
     this.metrics.mapZones = this.world.mapZoneCount()
@@ -1205,6 +1346,17 @@ export class GameServer {
       }
       if (diff.left.length > 0) {
         this.send(session, { t: 'despawn', ids: diff.left as string[] })
+      }
+      // Constraints touching newly-known props (visuals need endpoints).
+      if (diff.entered.length > 0) {
+        const sent = new Set<string>()
+        for (const entity of diff.entered) {
+          for (const rec of this.world.constraintsFor(entity.id)) {
+            if (sent.has(rec.id)) continue
+            sent.add(rec.id)
+            this.send(session, constraintStateWire(rec, true))
+          }
+        }
       }
       const snapshot = buildSnapshot(session, this.world, this.sessions.values(), this.tick)
       const encoded = encodeServerMessage(snapshot)
@@ -1326,6 +1478,17 @@ export class GameServer {
     }
   }
 
+  /** Constraint create/remove: tell every client that knows either prop. */
+  private broadcastConstraintState(rec: ConstraintRecord, active: boolean): void {
+    const msg = constraintStateWire(rec, active)
+    const encoded = encodeServerMessage(msg)
+    for (const session of this.sessions.values()) {
+      if (session.known.has(rec.a) || session.known.has(rec.b)) {
+        this.sendRaw(session, encoded)
+      }
+    }
+  }
+
   private broadcastDespawn(id: string): void {
     for (const session of this.sessions.values()) {
       if (session.known.delete(id as EntityId)) {
@@ -1356,3 +1519,17 @@ export class GameServer {
 const _eyeScratch = vec3()
 const _relVel = vec3()
 const _bodyPosScratch = vec3()
+
+function constraintStateWire(rec: ConstraintRecord, active: boolean): ServerMessage {
+  return {
+    t: 'constraint_state',
+    id: rec.id,
+    kind: rec.type,
+    a: rec.a as string,
+    b: rec.b as string,
+    anchorA: rec.params.anchorA ?? [0, 0, 0],
+    anchorB: rec.params.anchorB ?? [0, 0, 0],
+    ...(rec.params.length !== undefined ? { length: rec.params.length } : {}),
+    active,
+  }
+}

@@ -17,6 +17,9 @@ export class ServerMetrics {
   messagesOut = 0
   snapshotBytes = 0
   dbDirtyQueue = 0
+  /** Live constraints and the multi-prop structures they form. */
+  constraints = 0
+  constraintIslands = 0
   /**
    * Live map layers, by stable id. These make "Save is live" checkable from
    * outside the process: a static added in the editor must show up here on
@@ -46,7 +49,10 @@ export class ServerMetrics {
       settledBodies: this.settledBodies,
       bytesOut: this.bytesOut,
       messagesOut: this.messagesOut,
+      snapshotBytes: this.snapshotBytes,
       dbDirtyQueue: this.dbDirtyQueue,
+      constraints: this.constraints,
+      constraintIslands: this.constraintIslands,
       mapStatics: this.mapStatics,
       mapTerrains: this.mapTerrains,
       mapZones: this.mapZones,

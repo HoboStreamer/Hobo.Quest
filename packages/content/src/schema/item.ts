@@ -91,7 +91,6 @@ export const ItemDefSchema = z.object({
     })
     .optional(),
 
-  /** Present iff the item can be placed from inventory into the world. */
   /** Present iff the item is a purpose-built melee weapon (damage override).
    * Any held item can swing — this capability makes it GOOD at it. Ranged
    * weapons will extend this shape (projectile, ammo) rather than fork it. */
@@ -101,6 +100,33 @@ export const ItemDefSchema = z.object({
       range: z.number().positive().default(2.6),
     })
     .optional(),
+
+  /**
+   * Present iff the placed prop is damageable/destructible. Health is NOT
+   * automatic — only structures/objects where destruction is gameplay get
+   * it. Zone rules still gate attacks (safe areas forbid destruction).
+   */
+  health: z
+    .object({
+      max: z.number().positive(),
+      /** Incoming damage multiplier (0.5 = armored). */
+      resistance: z.number().min(0).max(1).default(1),
+      /** E with this material equipped repairs the prop. */
+      repair: z
+        .object({
+          item: z.string(),
+          count: z.number().int().positive().default(1),
+          restore: z.number().positive(),
+        })
+        .optional(),
+      /** Items scattered when the prop is destroyed (salvage). */
+      destroyLoot: z
+        .array(z.object({ item: z.string(), count: z.number().int().positive() }))
+        .default([]),
+    })
+    .optional(),
+
+  /** Present iff the item can be placed from inventory into the world. */
 
   placeable: z
     .object({
@@ -128,7 +154,7 @@ export const ItemDefSchema = z.object({
    */
   tool: z
     .object({
-      kind: z.enum(['physgun', 'axe', 'pickaxe', 'hammer']),
+      kind: z.enum(['physgun', 'axe', 'pickaxe', 'rigging']),
       /** Harvest units per swing (multiplies node perUse). */
       power: z.number().int().positive().default(1),
       /** Use range in meters. */

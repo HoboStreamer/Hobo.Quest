@@ -12,7 +12,16 @@ import type {
   StaticBody,
   WorldShape,
 } from '@hobo/content'
-import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
+import {
+  ConstraintIslands,
+  EntityStore,
+  ZoneIndex,
+  validateConstraintParams,
+  type ConstraintParams,
+  type ConstraintType,
+  type GameEntity,
+  type MotionState,
+} from '@hobo/gameplay'
 import type { ConstraintDto, PersistenceStore, WorldEntityDto } from '@hobo/persistence'
 import { MapStaticLayer } from './mapStaticLayer.js'
 import { MapTerrainLayer } from './mapTerrainLayer.js'
@@ -20,6 +29,7 @@ import { planMapProvenance, provenanceState, readProvenance } from './mapProvena
 import {
   CollisionLayer,
   type BodyId,
+  type ConstraintDesc,
   type ConstraintId,
   type PhysicsWorld,
   type ShapeDesc,
@@ -50,10 +60,12 @@ import {
 
 const PROP_COLLIDES = CollisionLayer.Static | CollisionLayer.Prop | CollisionLayer.Player
 
-interface WeldRecord {
+export interface ConstraintRecord {
   id: string
+  type: ConstraintType
   a: EntityId
   b: EntityId
+  params: ConstraintParams
   physId: ConstraintId
 }
 
@@ -65,10 +77,12 @@ export class GameWorld {
   private readonly settled = new Set<EntityId>()
   private readonly deletedIds = new Set<EntityId>()
 
-  private readonly welds = new Map<string, WeldRecord>()
-  private readonly weldsByEntity = new Map<EntityId, Set<string>>()
-  private readonly weldsDirty = new Set<string>()
-  private readonly weldsDeleted = new Set<string>()
+  private readonly constraintRecords = new Map<string, ConstraintRecord>()
+  private readonly constraintsByEntity = new Map<EntityId, Set<string>>()
+  private readonly constraintsDirty = new Set<string>()
+  private readonly constraintsDeleted = new Set<string>()
+  /** Connected-constraint structure tracking (metrics, group semantics). */
+  readonly islands = new ConstraintIslands<EntityId>()
 
   constructor(
     readonly content: ContentRegistry,
@@ -294,7 +308,7 @@ export class GameWorld {
   despawn(id: EntityId): void {
     const entity = this.entities.remove(id)
     if (!entity) return
-    this.removeWeldsFor(id)
+    this.removeConstraintsFor(id)
     const bodyId = this.bodyByEntity.get(id)
     if (bodyId !== undefined) {
       this.physics.removeBody(bodyId)
@@ -349,67 +363,116 @@ export class GameWorld {
     if (motion === 'dynamic') this.settled.delete(entity.id)
   }
 
-  // ── Welds ──────────────────────────────────────────────────────────
+  // ── Constraints ────────────────────────────────────────────────────
 
-  hasWeld(a: EntityId, b: EntityId): boolean {
-    const set = this.weldsByEntity.get(a)
+  /** True when a constraint of this type already links the pair. */
+  hasConstraint(a: EntityId, b: EntityId, type: ConstraintType): boolean {
+    const set = this.constraintsByEntity.get(a)
     if (!set) return false
     for (const id of set) {
-      const weld = this.welds.get(id)
-      if (weld && (weld.b === b || weld.a === b)) return true
+      const rec = this.constraintRecords.get(id)
+      if (rec && rec.type === type && (rec.b === b || rec.a === b)) return true
     }
     return false
   }
 
-  weldCountFor(id: EntityId): number {
-    return this.weldsByEntity.get(id)?.size ?? 0
+  constraintCountFor(id: EntityId): number {
+    return this.constraintsByEntity.get(id)?.size ?? 0
   }
 
-  addWeld(a: GameEntity, b: GameEntity, id?: string): WeldRecord | null {
+  get constraintCount(): number {
+    return this.constraintRecords.size
+  }
+
+  /**
+   * Creates a validated constraint between two props. Params must already
+   * have passed `validateConstraintParams`; this maps them onto the physics
+   * engine, indexes the record and marks it for persistence.
+   */
+  addConstraintRecord(
+    a: GameEntity,
+    b: GameEntity,
+    type: ConstraintType,
+    params: ConstraintParams,
+    id?: string,
+  ): ConstraintRecord | null {
     const bodyA = this.bodyByEntity.get(a.id)
     const bodyB = this.bodyByEntity.get(b.id)
     if (bodyA === undefined || bodyB === undefined) return null
-    const physId = this.physics.addConstraint({ type: 'weld', bodyA, bodyB })
-    const record: WeldRecord = { id: id ?? newUid(), a: a.id, b: b.id, physId }
-    this.welds.set(record.id, record)
-    this.indexWeld(record.a, record.id)
-    this.indexWeld(record.b, record.id)
-    this.weldsDirty.add(record.id)
+    const desc = toPhysicsConstraint(type, params, bodyA, bodyB)
+    if (!desc) return null
+    const physId = this.physics.addConstraint(desc)
+    const record: ConstraintRecord = {
+      id: id ?? newUid(),
+      type,
+      a: a.id,
+      b: b.id,
+      params,
+      physId,
+    }
+    this.constraintRecords.set(record.id, record)
+    this.indexConstraint(record.a, record.id)
+    this.indexConstraint(record.b, record.id)
+    this.islands.addEdge(record.id, record.a, record.b)
+    this.constraintsDirty.add(record.id)
     this.settled.delete(a.id)
     this.settled.delete(b.id)
     return record
   }
 
-  /** Removes every weld touching the entity; returns the removed records. */
-  removeWeldsFor(entityId: EntityId): WeldRecord[] {
-    const ids = this.weldsByEntity.get(entityId)
+  /** Removes every constraint touching the entity; returns removed records. */
+  removeConstraintsFor(entityId: EntityId): ConstraintRecord[] {
+    const ids = this.constraintsByEntity.get(entityId)
     if (!ids || ids.size === 0) return []
-    const removed: WeldRecord[] = []
+    const removed: ConstraintRecord[] = []
     for (const id of [...ids]) {
-      const weld = this.welds.get(id)
-      if (!weld) continue
-      this.physics.removeConstraint(weld.physId)
-      this.welds.delete(id)
-      this.weldsByEntity.get(weld.a)?.delete(id)
-      this.weldsByEntity.get(weld.b)?.delete(id)
-      this.weldsDirty.delete(id)
-      this.weldsDeleted.add(id)
-      removed.push(weld)
+      const rec = this.constraintRecords.get(id)
+      if (!rec) continue
+      this.removeConstraintRecord(rec)
+      removed.push(rec)
     }
     return removed
   }
 
-  private indexWeld(entityId: EntityId, weldId: string): void {
-    let set = this.weldsByEntity.get(entityId)
-    if (!set) {
-      set = new Set()
-      this.weldsByEntity.set(entityId, set)
-    }
-    set.add(weldId)
+  private removeConstraintRecord(rec: ConstraintRecord): void {
+    this.physics.removeConstraint(rec.physId)
+    this.constraintRecords.delete(rec.id)
+    this.constraintsByEntity.get(rec.a)?.delete(rec.id)
+    this.constraintsByEntity.get(rec.b)?.delete(rec.id)
+    this.islands.removeEdge(rec.id)
+    this.constraintsDirty.delete(rec.id)
+    this.constraintsDeleted.add(rec.id)
+    // The freed bodies must re-settle on their own merits.
+    this.settled.delete(rec.a)
+    this.settled.delete(rec.b)
+    const bodyA = this.bodyByEntity.get(rec.a)
+    const bodyB = this.bodyByEntity.get(rec.b)
+    if (bodyA !== undefined) this.physics.wake(bodyA)
+    if (bodyB !== undefined) this.physics.wake(bodyB)
   }
 
-  allWelds(): IterableIterator<WeldRecord> {
-    return this.welds.values()
+  private indexConstraint(entityId: EntityId, constraintId: string): void {
+    let set = this.constraintsByEntity.get(entityId)
+    if (!set) {
+      set = new Set()
+      this.constraintsByEntity.set(entityId, set)
+    }
+    set.add(constraintId)
+  }
+
+  allConstraints(): IterableIterator<ConstraintRecord> {
+    return this.constraintRecords.values()
+  }
+
+  constraintsFor(entityId: EntityId): ConstraintRecord[] {
+    const ids = this.constraintsByEntity.get(entityId)
+    if (!ids) return []
+    const records: ConstraintRecord[] = []
+    for (const id of ids) {
+      const rec = this.constraintRecords.get(id)
+      if (rec) records.push(rec)
+    }
+    return records
   }
 
   // ── Resource respawn ───────────────────────────────────────────────
@@ -490,14 +553,23 @@ export class GameWorld {
       if (this.restoreEntity(row)) restored++
     }
 
-    // Constraints restore after entities; dangling records are pruned.
+    // Constraints restore after entities; dangling/invalid records are
+    // pruned (an unknown type from a future build, or a despawned prop).
     const constraintRows = store.constraints.loadAll()
     const pruned: string[] = []
     for (const row of constraintRows) {
       const a = this.entities.get(row.entityA as EntityId)
       const b = this.entities.get(row.entityB as EntityId)
-      if (a?.prop && b?.prop && this.addWeld(a, b, row.id)) {
-        this.weldsDirty.delete(row.id) // just loaded, not dirty
+      const type = parseConstraintType(row.type)
+      const params = (row.params ?? {}) as ConstraintParams
+      if (
+        a?.prop &&
+        b?.prop &&
+        type &&
+        validateConstraintParams(type, params).ok &&
+        this.addConstraintRecord(a, b, type, params, row.id)
+      ) {
+        this.constraintsDirty.delete(row.id) // just loaded, not dirty
       } else {
         pruned.push(row.id)
       }
@@ -518,8 +590,8 @@ export class GameWorld {
     }
     this.log.info('world restored', {
       entities: restored,
-      welds: this.welds.size,
-      prunedWelds: pruned.length,
+      constraints: this.constraintRecords.size,
+      prunedConstraints: pruned.length,
     })
   }
 
@@ -716,6 +788,9 @@ export class GameWorld {
       if (entity.prop && typeof row.state?.doorOpen === 'boolean') {
         entity.prop.doorOpen = row.state.doorOpen
       }
+      if (entity.prop && typeof row.state?.health === 'number') {
+        entity.prop.health = row.state.health
+      }
       if (entity.prop && row.state?.plant && typeof row.state.plant === 'object') {
         const plant = row.state.plant as { seedId?: string; plantedAt?: number }
         if (plant.seedId && typeof plant.plantedAt === 'number') {
@@ -766,20 +841,27 @@ export class GameWorld {
       store.worldEntities.deleteMany([...this.deletedIds])
       this.deletedIds.clear()
     }
-    if (this.weldsDirty.size > 0) {
+    if (this.constraintsDirty.size > 0) {
       const dtos: ConstraintDto[] = []
-      for (const id of this.weldsDirty) {
-        const weld = this.welds.get(id)
-        if (weld) {
-          dtos.push({ id: weld.id, type: 'weld', entityA: weld.a, entityB: weld.b, updatedAt: now })
+      for (const id of this.constraintsDirty) {
+        const rec = this.constraintRecords.get(id)
+        if (rec) {
+          dtos.push({
+            id: rec.id,
+            type: rec.type,
+            entityA: rec.a,
+            entityB: rec.b,
+            params: rec.params as Record<string, unknown>,
+            updatedAt: now,
+          })
         }
       }
       store.constraints.upsertMany(dtos)
-      this.weldsDirty.clear()
+      this.constraintsDirty.clear()
     }
-    if (this.weldsDeleted.size > 0) {
-      store.constraints.deleteMany([...this.weldsDeleted])
-      this.weldsDeleted.clear()
+    if (this.constraintsDeleted.size > 0) {
+      store.constraints.deleteMany([...this.constraintsDeleted])
+      this.constraintsDeleted.clear()
     }
     return dirty.length
   }
@@ -810,9 +892,89 @@ function entityToDto(entity: GameEntity, now: number): WorldEntityDto {
             ...(entity.prop.container ? { container: entity.prop.container } : {}),
             ...(entity.prop.doorOpen !== undefined ? { doorOpen: entity.prop.doorOpen } : {}),
             ...(entity.prop.plant ? { plant: entity.prop.plant } : {}),
+            ...(entity.prop.health !== undefined ? { health: entity.prop.health } : {}),
           }
         : null,
     updatedAt: now,
+  }
+}
+
+const KNOWN_CONSTRAINT_TYPES = new Set([
+  'weld',
+  'rope',
+  'hinge',
+  'axis',
+  'slider',
+  'spring',
+  'motor',
+])
+
+function parseConstraintType(raw: string): ConstraintType | null {
+  return KNOWN_CONSTRAINT_TYPES.has(raw) ? (raw as ConstraintType) : null
+}
+
+const asVec = (v: [number, number, number] | undefined): Vec3 =>
+  v ? vec3(v[0], v[1], v[2]) : vec3()
+
+/**
+ * Maps a gameplay constraint (type + validated params) onto a physics
+ * ConstraintDesc. 'axis' is a free hinge; 'motor' is a driven hinge.
+ */
+function toPhysicsConstraint(
+  type: ConstraintType,
+  params: ConstraintParams,
+  bodyA: BodyId,
+  bodyB: BodyId,
+): ConstraintDesc | null {
+  const anchorA = asVec(params.anchorA)
+  const anchorB = asVec(params.anchorB)
+  switch (type) {
+    case 'weld':
+      return { type: 'weld', bodyA, bodyB }
+    case 'rope':
+      if (params.length === undefined) return null
+      return { type: 'rope', bodyA, bodyB, anchorA, anchorB, length: params.length }
+    case 'spring':
+      if (params.length === undefined) return null
+      return {
+        type: 'spring',
+        bodyA,
+        bodyB,
+        anchorA,
+        anchorB,
+        restLength: params.length,
+        stiffness: params.stiffness ?? 400,
+        damping: params.damping ?? 15,
+      }
+    case 'hinge':
+    case 'axis':
+    case 'motor': {
+      if (!params.axisA || !params.axisB) return null
+      return {
+        type: 'hinge',
+        bodyA,
+        bodyB,
+        anchorA,
+        anchorB,
+        axisA: asVec(params.axisA),
+        axisB: asVec(params.axisB),
+        ...(type === 'hinge' && params.limits ? { limits: params.limits } : {}),
+        ...(type === 'motor' && params.motor ? { motor: params.motor } : {}),
+      }
+    }
+    case 'slider': {
+      if (!params.axisA || !params.axisB) return null
+      return {
+        type: 'slider',
+        bodyA,
+        bodyB,
+        anchorA,
+        anchorB,
+        axisA: asVec(params.axisA),
+        axisB: asVec(params.axisB),
+        ...(params.limits ? { limits: params.limits } : {}),
+      }
+    }
   }
 }
 

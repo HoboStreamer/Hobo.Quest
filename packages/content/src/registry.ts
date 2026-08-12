@@ -38,6 +38,19 @@ export class ContentRegistry {
       this.items.set(parsed.data.id, parsed.data)
     }
 
+    // Health-capability cross references (after every item is registered).
+    for (const item of this.items.values()) {
+      if (!item.health) continue
+      if (item.health.repair && !this.items.has(item.health.repair.item)) {
+        errors.push(`item '${item.id}' repairs with unknown item '${item.health.repair.item}'`)
+      }
+      for (const loot of item.health.destroyLoot) {
+        if (!this.items.has(loot.item)) {
+          errors.push(`item '${item.id}' destroy loot references unknown item '${loot.item}'`)
+        }
+      }
+    }
+
     for (const raw of defs.skills) {
       const parsed = SkillDefSchema.safeParse(raw)
       if (!parsed.success) {

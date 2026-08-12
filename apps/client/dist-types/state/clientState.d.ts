@@ -1,4 +1,10 @@
-import type { ServerMessage, WireEntity, WireInventory, WireSkill } from '@hobo/protocol'
+import type {
+  ServerConstraintState,
+  ServerMessage,
+  WireEntity,
+  WireInventory,
+  WireSkill,
+} from '@hobo/protocol'
 import { TypedEmitter } from '@hobo/shared'
 /**
  * Replicated game state as this client knows it, decoupled from both the
@@ -35,11 +41,7 @@ export interface ClientStateEvents {
     skill: string
     level: number
   }
-  weldState: {
-    a: string
-    b: string
-    active: boolean
-  }
+  constraintState: ServerConstraintState
   friendsChanged: {
     id: string
     name: string
@@ -96,6 +98,8 @@ export declare class ClientState {
   skills: WireSkill[]
   /** entityId -> holder player entityId, for beam/highlight rendering. */
   readonly heldBy: Map<string, string>
+  /** Live constraints touching entities this client knows (for visuals). */
+  readonly constraints: Map<string, ServerConstraintState>
   /** Holder entity id -> grab point in the held body's local space. */
   readonly heldGrab: Map<string, [number, number, number]>
   stats: {

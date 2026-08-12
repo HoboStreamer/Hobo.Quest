@@ -31,6 +31,15 @@ export const ITEMS: ItemDef[] = [
     maxStack: 1,
     tool: { kind: 'pickaxe', power: 2, range: 3.5 },
   },
+  {
+    id: 'rigging_tool',
+    name: 'Rigging Tool',
+    description:
+      'Links props together: weld, rope, hinge, bearing, slider, spring, motor. LMB picks two points; RMB cuts everything off a prop.',
+    category: 'tool',
+    maxStack: 1,
+    tool: { kind: 'rigging', power: 1, range: 6 },
+  },
 
   // ── Materials ──────────────────────────────────────────────────────
   {
@@ -213,9 +222,22 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'rope',
     name: 'Rope',
-    description: 'Braided scavenged fiber.',
+    description: 'Braided scavenged fiber. The rigging tool spends one per tether.',
     category: 'component',
     maxStack: 20,
+  },
+  {
+    id: 'salvaged_motor',
+    name: 'Salvaged Motor',
+    description: 'A rewound scrap motor. Drives one powered joint via the rigging tool.',
+    category: 'component',
+    maxStack: 5,
+    world: {
+      shape: { type: 'cylinder', radius: 0.12, height: 0.2 },
+      massKg: 6,
+      color: '#3a4a5a',
+      physgun: true,
+    },
   },
 
   // ── Building pieces (crafted physical objects, physgun-placed) ─────
@@ -231,6 +253,12 @@ export const ITEMS: ItemDef[] = [
       color: '#8a6238',
       physgun: true,
     },
+    health: {
+      max: 200,
+      resistance: 1,
+      repair: { item: 'wood_plank', count: 1, restore: 50 },
+      destroyLoot: [{ item: 'wood_plank', count: 2 }],
+    },
     placeable: { maxRange: 4, snapStep: 0.5 },
   },
   {
@@ -244,6 +272,12 @@ export const ITEMS: ItemDef[] = [
       massKg: 50,
       color: '#96703f',
       physgun: true,
+    },
+    health: {
+      max: 200,
+      resistance: 1,
+      repair: { item: 'wood_plank', count: 1, restore: 50 },
+      destroyLoot: [{ item: 'wood_plank', count: 2 }],
     },
     placeable: { maxRange: 4, snapStep: 0.5 },
   },
@@ -259,6 +293,12 @@ export const ITEMS: ItemDef[] = [
       color: '#7a5631',
       physgun: true,
     },
+    health: {
+      max: 120,
+      resistance: 1,
+      repair: { item: 'wood_plank', count: 1, restore: 60 },
+      destroyLoot: [{ item: 'wood_plank', count: 1 }],
+    },
     placeable: { maxRange: 4, snapStep: 0.25 },
   },
   {
@@ -272,6 +312,12 @@ export const ITEMS: ItemDef[] = [
       massKg: 70,
       color: '#67737c',
       physgun: true,
+    },
+    health: {
+      max: 450,
+      resistance: 0.6,
+      repair: { item: 'sheet_metal', count: 1, restore: 90 },
+      destroyLoot: [{ item: 'scrap_metal', count: 3 }],
     },
     placeable: { maxRange: 4, snapStep: 0.5 },
   },
@@ -288,6 +334,12 @@ export const ITEMS: ItemDef[] = [
       color: '#8a6a42',
       physgun: true,
     },
+    health: {
+      max: 150,
+      resistance: 1,
+      repair: { item: 'wood_plank', count: 1, restore: 50 },
+      destroyLoot: [{ item: 'wood_plank', count: 1 }],
+    },
     placeable: { maxRange: 3.5, snapStep: 0.35 },
   },
   {
@@ -302,6 +354,12 @@ export const ITEMS: ItemDef[] = [
       massKg: 45,
       color: '#6d5a3e',
       physgun: true,
+    },
+    health: {
+      max: 150,
+      resistance: 1,
+      repair: { item: 'wood_plank', count: 1, restore: 50 },
+      destroyLoot: [{ item: 'wood_plank', count: 2 }],
     },
     placeable: { maxRange: 3.5, snapStep: 0.35 },
   },
@@ -334,6 +392,12 @@ export const ITEMS: ItemDef[] = [
       color: '#a5713a',
       physgun: true,
     },
+    health: {
+      max: 100,
+      resistance: 1,
+      repair: { item: 'wood_plank', count: 1, restore: 50 },
+      destroyLoot: [{ item: 'wood_plank', count: 1 }],
+    },
     placeable: { maxRange: 3.5, snapStep: 0.35 },
   },
   {
@@ -347,6 +411,11 @@ export const ITEMS: ItemDef[] = [
       massKg: 85,
       color: '#5b6b73',
       physgun: true,
+    },
+    health: {
+      max: 180,
+      resistance: 0.8,
+      destroyLoot: [{ item: 'scrap_metal', count: 2 }],
     },
     placeable: { maxRange: 3.5, snapStep: 0 },
   },

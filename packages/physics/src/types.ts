@@ -15,11 +15,68 @@ export type BodyId = number
 export type ConstraintId = number
 
 /**
- * Constraint descriptions. 'weld' locks all six degrees of freedom at the
- * bodies' current relative pose. Future sandbox constraints (hinge, slider,
- * rope, spring, motor...) become new variants of this union.
+ * Constraint descriptions — the sandbox constraint set.
+ *
+ * All anchors/axes are in the LOCAL space of their body; the adapter
+ * preserves the bodies' relative pose at creation time (frames are derived
+ * so "now" is the joint's zero). Angular quantities are radians, linear
+ * are meters. 'weld' locks all six degrees of freedom; 'axis' (a free
+ * bearing) is a hinge without limits, expressed at the gameplay layer.
  */
-export type ConstraintDesc = { type: 'weld'; bodyA: BodyId; bodyB: BodyId }
+export interface ConstraintMotor {
+  /** Target velocity: rad/s on hinge axes, m/s on slider axes. */
+  targetVelocity: number
+  /** Peak force/torque the drive may apply. */
+  maxForce: number
+}
+
+export type ConstraintDesc =
+  | { type: 'weld'; bodyA: BodyId; bodyB: BodyId }
+  | {
+      type: 'rope'
+      bodyA: BodyId
+      bodyB: BodyId
+      anchorA: Vec3
+      anchorB: Vec3
+      /** Max anchor separation; the rope is slack below it. */
+      length: number
+    }
+  | {
+      type: 'hinge'
+      bodyA: BodyId
+      bodyB: BodyId
+      anchorA: Vec3
+      anchorB: Vec3
+      axisA: Vec3
+      axisB: Vec3
+      /** Swing limits about the axis; omitted = free bearing. */
+      limits?: { min: number; max: number }
+      /** Rotational friction (resists free swinging). */
+      friction?: number
+      motor?: ConstraintMotor
+    }
+  | {
+      type: 'slider'
+      bodyA: BodyId
+      bodyB: BodyId
+      anchorA: Vec3
+      anchorB: Vec3
+      axisA: Vec3
+      axisB: Vec3
+      /** Travel limits along the axis; omitted = unbounded rail. */
+      limits?: { min: number; max: number }
+      motor?: ConstraintMotor
+    }
+  | {
+      type: 'spring'
+      bodyA: BodyId
+      bodyB: BodyId
+      anchorA: Vec3
+      anchorB: Vec3
+      restLength: number
+      stiffness: number
+      damping: number
+    }
 
 /** Collision filter layers (bitmask). */
 export const CollisionLayer = {
@@ -86,11 +143,16 @@ export interface PhysicsWorld {
   wake(id: BodyId): void
 
   /**
-   * Creates a constraint between two bodies (current relative pose is
-   * preserved for 'weld'). Constrained bodies stop colliding with each other.
+   * Creates a constraint between two bodies, preserving their current
+   * relative pose (creation time is the joint's zero). Rigid joints (weld,
+   * hinge, slider) disable collision between the pair; rope and spring
+   * keep it.
    */
   addConstraint(desc: ConstraintDesc): ConstraintId
   removeConstraint(id: ConstraintId): void
+
+  /** Retunes a motorized hinge/slider's drive. No-op on other constraints. */
+  setConstraintMotor(id: ConstraintId, motor: ConstraintMotor): void
 
   /** First hit along a segment, filtered by collision mask. */
   raycast(from: Vec3, to: Vec3, collidesWith: number): RayHit | null

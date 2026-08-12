@@ -78,13 +78,22 @@ describe('sqlite store', () => {
   it('roundtrips constraints', () => {
     const store = openSqliteStore(':memory:')
     store.worldEntities.upsertMany([makeEntity('a'), makeEntity('b')])
+    const params = {
+      anchorA: [0.5, 0, 0],
+      anchorB: [-0.5, 0, 0],
+      axisA: [0, 1, 0],
+      axisB: [0, 1, 0],
+      limits: { min: -1, max: 1 },
+    }
     store.constraints.upsertMany([
-      { id: 'c1', type: 'weld', entityA: 'a', entityB: 'b', updatedAt: 100 },
+      { id: 'c1', type: 'weld', entityA: 'a', entityB: 'b', params: null, updatedAt: 100 },
+      { id: 'c2', type: 'hinge', entityA: 'a', entityB: 'b', params, updatedAt: 100 },
     ])
     expect(store.constraints.loadAll()).toEqual([
-      { id: 'c1', type: 'weld', entityA: 'a', entityB: 'b', updatedAt: 100 },
+      { id: 'c1', type: 'weld', entityA: 'a', entityB: 'b', params: null, updatedAt: 100 },
+      { id: 'c2', type: 'hinge', entityA: 'a', entityB: 'b', params, updatedAt: 100 },
     ])
-    store.constraints.deleteMany(['c1'])
+    store.constraints.deleteMany(['c1', 'c2'])
     expect(store.constraints.loadAll()).toEqual([])
     store.close()
   })
@@ -124,12 +133,23 @@ describe('sqlite store', () => {
     expect(player?.skills).toEqual({})
     expect(player?.friends).toEqual([])
     expect(player?.appearance).toBeNull()
-    // constraints table exists and works post-migration
+    // constraints table exists and works post-migration (incl. the v8
+    // params column)
     store.constraints.upsertMany([
-      { id: 'c1', type: 'weld', entityA: 'x', entityB: 'y', updatedAt: 1 },
+      { id: 'c1', type: 'weld', entityA: 'x', entityB: 'y', params: null, updatedAt: 1 },
+      {
+        id: 'c2',
+        type: 'rope',
+        entityA: 'x',
+        entityB: 'y',
+        params: { length: 2 },
+        updatedAt: 1,
+      },
     ])
-    expect(store.constraints.loadAll()).toHaveLength(1)
-    expect(store.meta.get('schema_version')).toBe('7')
+    const loaded = store.constraints.loadAll()
+    expect(loaded).toHaveLength(2)
+    expect(loaded.find((c) => c.id === 'c2')?.params).toEqual({ length: 2 })
+    expect(store.meta.get('schema_version')).toBe('8')
     store.close()
   })
 

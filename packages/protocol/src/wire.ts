@@ -56,6 +56,8 @@ export interface WireEntity {
   remaining?: number
   /** Growing crop (clients derive the stage from timestamps). */
   plant?: WirePlant
+  /** Remaining prop health — present only when damaged (max is content). */
+  health?: number
 }
 
 /** Per-tick dynamic state for an awake, relevant entity. */

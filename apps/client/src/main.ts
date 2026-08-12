@@ -43,6 +43,9 @@ import { customizeScreen } from './ui/customizeScreen.js'
 import { Hud } from './ui/hud.js'
 import { IconFactory } from './ui/iconFactory.js'
 import { registerPhysgunModule } from './weapons/physgunModule.js'
+import { registerRiggingModule } from './weapons/riggingModule.js'
+import { ConstraintLineRenderer } from './render/constraintLines.js'
+import { PlacementGhost } from './game/placementGhost.js'
 import { WeaponSettings, weaponModuleFor } from './weapons/registry.js'
 
 /**
@@ -162,6 +165,7 @@ async function start(): Promise<void> {
   const icons = new IconFactory(scene, content)
   const weaponSettings = new WeaponSettings()
   registerPhysgunModule()
+  registerRiggingModule()
   const hud = new Hud(uiRoot, state, content, connection, icons, weaponSettings)
 
   const world = content.world
@@ -195,6 +199,10 @@ async function start(): Promise<void> {
   const fpBody = new FirstPersonBody(scene, content, appearance, player, state)
   const viewmodel = new Viewmodel(scene, content, player.camera, appearance)
   const beams = new BeamRenderer(scene)
+  const constraintLines = new ConstraintLineRenderer(scene, state, view)
+  const ghost = new PlacementGhost(scene, physics, content)
+  interact.placementPose = () => (ghost.valid ? ghost.pose : null)
+  interact.onPlacementRotate = (delta) => ghost.rotate(delta)
 
   interact.onSwing = () => {
     viewmodel.triggerSwing()
@@ -262,6 +270,7 @@ async function start(): Promise<void> {
           const previousHadNoTerrain = liveMap.terrains.length === 0
           liveMap = parsed.map
           setMapOverride(compileMapFileV2(parsed.map))
+          ghost.refreshZones()
 
           const terrain = terrainWork(diff)
           if (terrain.added.length || terrain.removed.length || terrain.collision.length) {
@@ -428,6 +437,19 @@ async function start(): Promise<void> {
     }
     beams.update(elapsed, activeBeams)
 
+    // Rope/spring visuals + rigging first-pick highlight.
+    constraintLines.update()
+    view.selectedId = interact.riggingFirst?.entityId ?? null
+
+    // Placement ghost follows the crosshair while a placeable is equipped.
+    ghost.update(
+      state.activeItemDef(),
+      player.eye,
+      (out) => player.viewDir(out),
+      player.viewYaw,
+      input.shiftHeld,
+    )
+
     // Underwater: dense teal fog while the camera is submerged.
     const submerged = player.camera.position.y < WATER_LEVEL
     if (submerged !== wasSubmerged) {
@@ -461,6 +483,12 @@ function promptFor(
 ): string | null {
   const target = interact.aim()
   const tool = interact.equippedToolKind()
+  // Placement mode owns the prompt while a placeable is in hand.
+  const heldId = state.activeItemDef()
+  const heldItem = heldId ? content.item(heldId) : undefined
+  if (heldItem?.placeable && heldItem.world && !tool) {
+    return 'LMB — place · wheel — rotate · Shift — snap · G — toss'
+  }
   if (!target) {
     if (interact.standingInWater()) return 'E — drink'
     return null
@@ -480,6 +508,11 @@ function promptFor(
     return `${entity?.name ?? 'drifter'}${tool && tool !== 'physgun' ? ' — LMB attack' : ''}`
   }
   if (target.kind === 'prop') {
+    if (tool === 'rigging') {
+      return interact.riggingFirst
+        ? 'LMB — link to this prop · RMB — cancel'
+        : 'LMB — pick first point · RMB — cut links'
+    }
     if (target.def && content.item(target.def)?.container) {
       return 'E — open storage'
     }
@@ -501,6 +534,19 @@ function promptFor(
     if (interact.physgunActive)
       return 'RMB — freeze · E — rotate · Shift — grid · wheel — push/pull'
     const entity = state.entities.get(target.entityId)
+    // Damaged structures show their state; the right material repairs.
+    const healthCap = target.def ? content.item(target.def)?.health : undefined
+    if (healthCap && entity?.health !== undefined && entity.health < healthCap.max) {
+      const held = state.activeItemDef()
+      const label = `${Math.max(0, Math.round(entity.health))}/${healthCap.max}`
+      if (healthCap.repair && held === healthCap.repair.item) {
+        return `E — repair (${label})`
+      }
+      const mat = healthCap.repair
+        ? (content.item(healthCap.repair.item)?.name ?? healthCap.repair.item)
+        : null
+      return mat ? `Damaged ${label} — repair with ${mat}` : `Damaged ${label}`
+    }
     const owned = entity?.owner !== undefined && entity.owner !== state.myPlayerId
     if (owned) return 'Owned by another player'
     const itemName = content.item(target.def ?? '')?.name ?? 'prop'
