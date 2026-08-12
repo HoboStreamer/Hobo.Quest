@@ -91,6 +91,14 @@ export declare class GameWorld {
    * (Removal is by harvesting in game — reconcile never deletes.)
    */
   reconcileMapNodes(): void
+  /**
+   * Apply the map's authored zones. Idempotent by construction: the map layer
+   * is REPLACED, never appended, so saving the same map twice cannot stack
+   * duplicate rule volumes the way merging into `content.world.zones` would.
+   * The base content zones are untouched, so a map can add a restriction but
+   * never lift one the world def declared.
+   */
+  reconcileMapZones(): void
   /** Live map save: spawn editor props that have no live counterpart nearby. */
   reconcileMapProps(): void
   private seedResources

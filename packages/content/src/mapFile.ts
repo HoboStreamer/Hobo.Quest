@@ -1,4 +1,4 @@
-import type { FaceStyle, StaticBody } from './schema/world.js'
+import type { FaceStyle, MapLight, StaticBody } from './schema/world.js'
 import type { SurfaceMaterialData } from './surface.js'
 import type { MapNodeSpawn, MapOverride, MapPropSpawn } from './terrain.js'
 
@@ -13,31 +13,21 @@ import type { MapNodeSpawn, MapOverride, MapPropSpawn } from './terrain.js'
  * Editor-placed light. Covers every Babylon punctual/ambient light type:
  * point, spot (angle+exponent), directional (sun-like), hemispheric
  * (ambient dome with ground color) and rectangular area lights.
+ *
+ * The shape lives in `schema/world.ts` as `MapLightSchema` so there is ONE
+ * definition: this used to be a hand-written interface next to an untyped
+ * `z.record(unknown)` on the wire, which meant an authored light was
+ * validated nowhere and could reach Babylon malformed.
  */
-export interface MapLight {
-  id: string
-  type: 'point' | 'spot' | 'directional' | 'hemi' | 'rect'
-  pos: [number, number, number]
-  /** Direction for spot/directional/hemi/rect (unit-ish vector). */
-  dir?: [number, number, number]
-  /** Diffuse color (hex). */
-  color?: string
-  /** Specular highlight color (hex). */
-  specular?: string
-  intensity?: number
-  /** Reach in meters (point/spot). */
-  range?: number
-  /** Spot cone angle in radians. */
-  angle?: number
-  /** Spot decay exponent. */
-  exponent?: number
-  /** Hemispheric ground (bounce) color. */
-  ground?: string
-  /** Rect area light [width, height] in meters. */
-  size?: [number, number]
-  /** Cast shadows (spot/directional/point). */
-  shadows?: boolean
-}
+export type { MapLight } from './schema/world.js'
+
+/**
+ * v1 seeds predate stable document ids. The migration assigns one to every
+ * object it carries forward, so nothing downstream of `parseMapFile` has to
+ * cope with an identity-less map object.
+ */
+export type LegacyNodeSpawn = Omit<MapNodeSpawn, 'id'> & { id?: string }
+export type LegacyPropSpawn = Omit<MapPropSpawn, 'id'> & { id?: string }
 
 /** A custom texture: either embedded (legacy dataUrl) or server-hosted. */
 export interface MapTextureEntry {
@@ -61,9 +51,9 @@ export interface MapFile {
   /** Editor-placed statics appended to the world def. */
   statics: StaticBody[]
   /** Editor-placed resource nodes (trees, deposits, piles…). */
-  nodes?: MapNodeSpawn[]
+  nodes?: LegacyNodeSpawn[]
   /** Props seeded into FRESH worlds (crates, barrels, merchant stalls). */
-  props?: MapPropSpawn[]
+  props?: LegacyPropSpawn[]
   /** Extra sculptable terrain patches (mountains, cave shells…). */
   terrains?: {
     id: string

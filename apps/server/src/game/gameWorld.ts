@@ -69,6 +69,7 @@ export class GameWorld {
     private readonly log: Logger,
   ) {
     this.zones = new ZoneIndex(content.world.zones)
+    this.reconcileMapZones()
     this.buildStaticWorld()
   }
 
@@ -538,6 +539,17 @@ export class GameWorld {
       })
       this.log.info('map node spawned', { node: node.node, x: node.pos[0], z: node.pos[2] })
     }
+  }
+
+  /**
+   * Apply the map's authored zones. Idempotent by construction: the map layer
+   * is REPLACED, never appended, so saving the same map twice cannot stack
+   * duplicate rule volumes the way merging into `content.world.zones` would.
+   * The base content zones are untouched, so a map can add a restriction but
+   * never lift one the world def declared.
+   */
+  reconcileMapZones(): void {
+    this.zones.setMapZones(getMapOverride()?.zones ?? [])
   }
 
   /** Live map save: spawn editor props that have no live counterpart nearby. */

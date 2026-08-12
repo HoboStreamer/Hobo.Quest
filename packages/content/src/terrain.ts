@@ -1,5 +1,5 @@
 import type { SurfaceMaterialData } from './surface.js'
-import type { FaceStyle, WorldDef } from './schema/world.js'
+import type { FaceStyle, WorldDef, ZoneDef } from './schema/world.js'
 
 /**
  * Deterministic terrain heightfield shared by server physics, client
@@ -103,14 +103,19 @@ function padsFor(world: WorldDef): Pad[] {
 // replaces the procedural noise everywhere — server physics, client
 // prediction and rendering all sample the same grid.
 
+/**
+ * Map-authored seeds. `id` is REQUIRED: the map editor owns these objects and
+ * reconciles them by stable id, and an array index is not identity. Player-
+ * created props are a different thing entirely and never appear here.
+ */
 export interface MapNodeSpawn {
-  id?: string
+  id: string
   node: string
   pos: [number, number, number]
 }
 
 export interface MapPropSpawn {
-  id?: string
+  id: string
   item: string
   pos: [number, number, number]
   yaw?: number
@@ -159,6 +164,13 @@ export interface MapOverride {
   props?: MapPropSpawn[]
   /** Every terrain object in the map. May be empty. */
   terrains: TerrainPatchData[]
+  /**
+   * Map-authored zones. These AUGMENT the base world's content zones rather
+   * than replacing them: rules combine most-restrictive-wins, so a map can add
+   * a no-PvP area without being able to unlock one the world def declared.
+   * The base list is never mutated — see `ZoneIndex.setMapZones`.
+   */
+  zones?: ZoneDef[]
   /** Editor-placed spawn point (overrides the world def). */
   spawn?: [number, number, number]
   spawnYaw?: number

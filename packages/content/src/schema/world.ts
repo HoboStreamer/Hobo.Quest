@@ -9,6 +9,55 @@ import { WorldShapeSchema } from './item.js'
  */
 
 const vec3 = z.tuple([z.number(), z.number(), z.number()])
+const finiteVec3 = vec3.refine((v) => v.every(Number.isFinite), 'must be finite')
+
+/**
+ * Canonical authored colour: lower-case six-digit hex. One definition shared
+ * by every schema that carries a colour, so a value cannot be accepted by one
+ * layer of the stack and rejected — or silently dropped — by another.
+ */
+export const HexColorSchema = z.string().regex(/^#[0-9a-f]{6}$/, 'must be #rrggbb lower-case hex')
+
+/**
+ * Editor-placed light. Covers every Babylon punctual/ambient light type:
+ * point, spot (angle + exponent), directional (sun-like), hemispheric
+ * (ambient dome with ground colour) and rectangular area lights.
+ *
+ * This is the ONE definition. The map wire used to validate lights as
+ * `z.record(z.string(), z.unknown())` beside a hand-written interface of the
+ * same name, so an authored light was checked nowhere and reached Babylon
+ * malformed.
+ */
+export const MapLightSchema = z.object({
+  /** Stable document id (selection, collab locks, live reconciliation). */
+  id: z.string().min(1).max(64),
+  type: z.enum(['point', 'spot', 'directional', 'hemi', 'rect']),
+  pos: finiteVec3,
+  /** Direction for spot/directional/hemi/rect (unit-ish vector). */
+  dir: finiteVec3.optional(),
+  color: HexColorSchema.optional(),
+  specular: HexColorSchema.optional(),
+  intensity: z.number().min(0).max(1000).optional(),
+  /** Reach in metres (point/spot). */
+  range: z.number().min(0).max(100_000).optional(),
+  /** Spot cone angle in radians. */
+  angle: z
+    .number()
+    .min(0)
+    .max(Math.PI * 2)
+    .optional(),
+  /** Spot decay exponent. */
+  exponent: z.number().min(0).max(1000).optional(),
+  /** Hemispheric ground (bounce) colour. */
+  ground: HexColorSchema.optional(),
+  /** Rect area light [width, height] in metres. */
+  size: z
+    .tuple([z.number(), z.number()])
+    .refine((v) => v.every((n) => Number.isFinite(n) && n > 0), 'rect size must be finite and > 0')
+    .optional(),
+  shadows: z.boolean().optional(),
+})
+export type MapLight = z.infer<typeof MapLightSchema>
 
 /**
  * Hammer-style face/surface styling: texture + tint + UV transform.
@@ -76,7 +125,11 @@ export const PropSpawnSchema = z.object({
 })
 
 export const ZoneDefSchema = z.object({
-  id: z.string().regex(/^[a-z0-9_]+$/),
+  /**
+   * Stable zone id. Dashes are permitted so the map editor can mint ids in the
+   * same `<kind>-<n>` shape it uses for every other document object.
+   */
+  id: z.string().regex(/^[a-z0-9_-]+$/),
   name: z.string(),
   /** Axis-aligned box zone; richer volumes later. */
   min: vec3,

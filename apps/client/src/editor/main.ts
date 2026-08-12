@@ -25,9 +25,7 @@ import {
   setMapOverride,
   type FaceStyle,
   type MapLight,
-  type MapNodeSpawn,
   type MapTextureEntry,
-  type StaticBody,
   MAX_PAINT_LAYERS,
   allocateLayer,
   migrateLegacyMix,
@@ -38,6 +36,11 @@ import {
   emptyMapV2,
   parseMapFile,
   type MapFileV2,
+  type MapLightV2,
+  type MapNodeV2,
+  type MapPropV2,
+  type MapZoneV2,
+  type StaticObjectV2,
 } from '@hobo/content'
 import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer.js'
 import { meshForShape } from '../render/sceneSetup.js'
@@ -195,8 +198,11 @@ async function boot(): Promise<void> {
   const bootDoc: MapFileV2 = bootParsed.ok ? bootParsed.map : emptyMapV2()
   if (!bootParsed.ok && bootParsed.issues.length > 0)
     console.warn('[editor] map rejected, starting empty:', bootParsed.issues.slice(0, 5))
-  let placedStatics: StaticBody[] = bootDoc.statics
-  let placedNodes: MapNodeSpawn[] = bootDoc.nodes as MapNodeSpawn[]
+  // Ids are guaranteed by `parseMapFile` (see `normalizeMapIds`): every
+  // editable object arrives with stable document identity, so nothing here
+  // has to invent one after the fact.
+  let placedStatics: StaticObjectV2[] = bootDoc.statics
+  let placedNodes: MapNodeV2[] = bootDoc.nodes
   // The legacy top-level heightfield is gone: every terrain is an ordinary
   // object in `patches` below. This buffer only feeds the old main-terrain
   // mesh, which is retired — it stays flat and disabled.
@@ -264,15 +270,15 @@ async function boot(): Promise<void> {
 
   // ── Placed objects (statics + node stand-ins) ───────────────────────
   const modelCache = new ModelCache(scene)
-  const staticMeshes = new Map<Mesh, StaticBody>()
-  const nodeMeshes = new Map<Mesh, MapNodeSpawn>()
-  const applyBodyToMesh = (mesh: Mesh, s: StaticBody): void => {
+  const staticMeshes = new Map<Mesh, StaticObjectV2>()
+  const nodeMeshes = new Map<Mesh, MapNodeV2>()
+  const applyBodyToMesh = (mesh: Mesh, s: Omit<StaticObjectV2, 'id'>): void => {
     mesh.position.set(s.pos[0], s.pos[1], s.pos[2])
     mesh.rotationQuaternion = null
     if (s.rot) mesh.rotation.set(s.rot[0], s.rot[1], s.rot[2])
     else mesh.rotation.set(0, s.yaw, 0)
   }
-  const renderStatic = (s: StaticBody): Mesh => {
+  const renderStatic = (s: StaticObjectV2): Mesh => {
     const mesh = meshForShape(scene, `s:${Math.random()}`, s.shape, s.color)
     applyStaticStyle(scene, mesh, s) // textures + per-face styles render here too
     applyBodyToMesh(mesh, s)
@@ -298,16 +304,8 @@ async function boot(): Promise<void> {
     }
     return mesh
   }
-  const propMeshes = new Map<
-    Mesh,
-    { id?: string; item: string; pos: [number, number, number]; yaw?: number }
-  >()
-  const renderProp = (pr: {
-    id?: string
-    item: string
-    pos: [number, number, number]
-    yaw?: number
-  }): Mesh => {
+  const propMeshes = new Map<Mesh, MapPropV2>()
+  const renderProp = (pr: MapPropV2): Mesh => {
     const rep = content.worldRepOf(pr.item)
     const mesh = meshForShape(scene, `pr:${Math.random()}`, rep.shape, rep.color)
     const h =
@@ -321,7 +319,7 @@ async function boot(): Promise<void> {
     propMeshes.set(mesh, pr)
     return mesh
   }
-  const renderNode = (n: MapNodeSpawn): Mesh => {
+  const renderNode = (n: MapNodeV2): Mesh => {
     const look = NODE_LOOKS[n.node] ?? {
       color: '#888888',
       shape: { type: 'sphere', radius: 0.6 } as const,
@@ -492,7 +490,7 @@ async function boot(): Promise<void> {
     })
     updateDirty()
   }
-  const findMesh = (body?: StaticBody, node?: MapNodeSpawn): Mesh | null => {
+  const findMesh = (body?: StaticObjectV2, node?: MapNodeV2): Mesh | null => {
     if (body) for (const [m, b] of staticMeshes) if (b === body) return m
     if (node) for (const [m, n] of nodeMeshes) if (n === node) return m
     return null
@@ -644,7 +642,7 @@ async function boot(): Promise<void> {
     } else if (op.kind === 'batch') {
       for (const it of op.items) {
         const src = dir === 'undo' ? it.before : it.after
-        Object.assign(it.body, JSON.parse(JSON.stringify(src)) as StaticBody)
+        Object.assign(it.body, JSON.parse(JSON.stringify(src)) as StaticObjectV2)
         const m = findMesh(it.body)
         if (m) rebuildSelectedMesh(it.body, m)
       }
@@ -683,7 +681,7 @@ async function boot(): Promise<void> {
       }
     } else {
       const src = dir === 'undo' ? op.before : op.after
-      Object.assign(op.body, JSON.parse(JSON.stringify(src)) as StaticBody)
+      Object.assign(op.body, JSON.parse(JSON.stringify(src)) as StaticObjectV2)
       const m = findMesh(op.body)
       if (m) {
         rebuildSelectedMesh(op.body, m)
@@ -752,18 +750,9 @@ async function boot(): Promise<void> {
     bootDoc.models
   let mapTextures: MapTextureEntry[] = bootDoc.textures as MapTextureEntry[]
   registerCustomTextures(mapTextures)
-  let mapLightsArr: MapLight[] = bootDoc.lights as unknown as MapLight[]
-  let placedProps: { id?: string; item: string; pos: [number, number, number]; yaw?: number }[] =
-    bootDoc.props.map((p) => ({
-      item: p.item,
-      pos: p.pos,
-      ...(p.id ? { id: p.id } : {}),
-      ...(p.yaw !== undefined ? { yaw: p.yaw } : {}),
-    }))
-  // Stable document ids: everything editable gets one (persisted on save).
-  for (const b of placedStatics) b.id = b.id ?? newId('s')
-  for (const n of placedNodes) n.id = n.id ?? newId('n')
-  for (const pr of placedProps) pr.id = pr.id ?? newId('pr')
+  let mapLightsArr: MapLightV2[] = bootDoc.lights
+  let mapZones: MapZoneV2[] = bootDoc.zones
+  let placedProps: MapPropV2[] = bootDoc.props
   let spawnPos: [number, number, number] | null = bootDoc.spawn ?? null
   let spawnYaw = bootDoc.spawnYaw ?? 0
 
@@ -1098,7 +1087,7 @@ async function boot(): Promise<void> {
     ghostFor = idx
     return ghost
   }
-  const placeableShape = (def: Placeable): StaticBody['shape'] => {
+  const placeableShape = (def: Placeable): StaticObjectV2['shape'] => {
     if (def.kind === 'static') return def.shape!
     if (def.kind === 'node') return NODE_LOOKS[def.node!]?.shape ?? { type: 'sphere', radius: 0.6 }
     if (def.kind === 'model') {
@@ -1108,7 +1097,7 @@ async function boot(): Promise<void> {
     }
     return { type: 'box', size: [0.3, 3, 0.3] } // spawn flag pole
   }
-  const shapeHeight = (shape: StaticBody['shape']): number =>
+  const shapeHeight = (shape: StaticObjectV2['shape']): number =>
     shape.type === 'box'
       ? shape.size[1]
       : shape.type === 'cylinder'
@@ -1163,7 +1152,7 @@ async function boot(): Promise<void> {
             n.normalizeToNew(),
             new Quaternion(),
           ).multiply(Quaternion.RotationAxis(new Vector3(0, 1, 0), placeYaw))
-    const h = shapeHeight(shape as StaticBody['shape'])
+    const h = shapeHeight(shape as StaticObjectV2['shape'])
     const off = n.scale(h / 2 + 0.001)
     const pos = new Vector3(
       snapVal(pick.pickedPoint.x + off.x),
@@ -1226,7 +1215,7 @@ async function boot(): Promise<void> {
       const model = mapModels.find((mm) => mm.id === def.modelId)
       if (!model) return
       const e = pose.rot.toEulerAngles()
-      const body: StaticBody = {
+      const body: StaticObjectV2 = {
         id: newId('s'),
         shape: { type: 'box', size: [model.bounds[0], model.bounds[1], model.bounds[2]] },
         pos: [pose.pos.x, pose.pos.y, pose.pos.z],
@@ -1274,7 +1263,7 @@ async function boot(): Promise<void> {
     }
     if (def.kind === 'node') {
       const ground = sampleH(pose.pos.x, pose.pos.z)
-      const node: MapNodeSpawn = {
+      const node: MapNodeV2 = {
         id: newId('n'),
         node: def.node!,
         pos: [pose.pos.x, 0, pose.pos.z],
@@ -1286,9 +1275,9 @@ async function boot(): Promise<void> {
       return
     }
     const e = pose.rot.toEulerAngles()
-    const body: StaticBody = {
+    const body: StaticObjectV2 = {
       id: newId('s'),
-      shape: JSON.parse(JSON.stringify(def.shape)) as StaticBody['shape'],
+      shape: JSON.parse(JSON.stringify(def.shape)) as StaticObjectV2['shape'],
       pos: [pose.pos.x, pose.pos.y, pose.pos.z],
       yaw: e.y,
       ...(Math.abs(e.x) > 0.01 || Math.abs(e.z) > 0.01
@@ -1482,12 +1471,12 @@ async function boot(): Promise<void> {
   document.getElementById('gm-rot')?.addEventListener('click', () => setGizmoMode('rotate'))
   document.getElementById('gm-scale')?.addEventListener('click', () => setGizmoMode('scale'))
   const props = $e('props')
-  let selected: { mesh: Mesh; body: StaticBody; editBefore: StaticBody | null } | null = null
-  let selectedNode: { mesh: Mesh; node: MapNodeSpawn; before: [number, number, number] } | null =
+  let selected: { mesh: Mesh; body: StaticObjectV2; editBefore: StaticObjectV2 | null } | null =
     null
+  let selectedNode: { mesh: Mesh; node: MapNodeV2; before: [number, number, number] } | null = null
   let selectedProp: {
     mesh: Mesh
-    prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number }
+    prop: MapPropV2
     before: [number, number, number]
   } | null = null
   let selectedPatch: { mesh: Mesh; patch: PatchState } | null = null
@@ -1533,10 +1522,7 @@ async function boot(): Promise<void> {
   }
 
   /** Props select like nodes: move gizmo + inspector, Del removes. */
-  const selectProp = (
-    mesh: Mesh,
-    prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number },
-  ): void => {
+  const selectProp = (mesh: Mesh, prop: MapPropV2): void => {
     deselect()
     selectedProp = { mesh, prop, before: [prop.pos[0], prop.pos[1], prop.pos[2]] }
     setGizmoMode('move')
@@ -1630,7 +1616,7 @@ async function boot(): Promise<void> {
   }
 
   /** Nodes: position-only gizmo; drag end re-grounds and records undo. */
-  const selectNode = (mesh: Mesh, node: MapNodeSpawn): void => {
+  const selectNode = (mesh: Mesh, node: MapNodeV2): void => {
     deselect()
     selectedNode = { mesh, node, before: [node.pos[0], node.pos[1], node.pos[2]] }
     setGizmoMode('move')
@@ -1649,16 +1635,16 @@ async function boot(): Promise<void> {
   // ── Multi-select: Shift+click accumulates statics; a pivot node carries
   // the gizmo and the meshes ride it, then transforms bake into each body
   // as one undoable batch.
-  const multiSel: { mesh: Mesh; body: StaticBody; before: StaticBody }[] = []
+  const multiSel: { mesh: Mesh; body: StaticObjectV2; before: StaticObjectV2 }[] = []
   const multiPatches: {
     mesh: Mesh
     patch: PatchState
     before: { origin: [number, number, number]; rot?: [number, number, number] }
   }[] = []
-  const multiNodes: { mesh: Mesh; node: MapNodeSpawn; before: [number, number, number] }[] = []
+  const multiNodes: { mesh: Mesh; node: MapNodeV2; before: [number, number, number] }[] = []
   const multiProps: {
     mesh: Mesh
-    prop: { id?: string; item: string; pos: [number, number, number]; yaw?: number }
+    prop: MapPropV2
     before: [number, number, number]
   }[] = []
   const multiTotal = (): number =>
@@ -1930,7 +1916,7 @@ async function boot(): Promise<void> {
     status.textContent = 'sculpt with the Terrain tool · move/rotate/SCALE like any object'
     afterSelect([`terrain:${patch.id}`], attachGizmoToPivot)
   }
-  const rebuildSelectedMesh = (body: StaticBody, oldMesh: Mesh): Mesh => {
+  const rebuildSelectedMesh = (body: StaticObjectV2, oldMesh: Mesh): Mesh => {
     const wasSelected = selected?.mesh === oldMesh
     staticMeshes.delete(oldMesh)
     oldMesh.dispose()
@@ -1941,7 +1927,7 @@ async function boot(): Promise<void> {
     }
     return m
   }
-  const fillProps = (body: StaticBody): void => {
+  const fillProps = (body: StaticObjectV2): void => {
     const deg = (r: number) => Math.round((r * 180) / Math.PI)
     const rot = body.rot ?? [0, body.yaw, 0]
     $('p-x').value = String(body.pos[0])
@@ -1974,7 +1960,7 @@ async function boot(): Promise<void> {
     const lc = document.getElementById('p-lamp') as HTMLInputElement | null
     if (lc) lc.checked = body.decor === 'lamp'
   }
-  const select = (mesh: Mesh, body: StaticBody): void => {
+  const select = (mesh: Mesh, body: StaticObjectV2): void => {
     deselect()
     selected = { mesh, body, editBefore: null }
     setGizmoMode(gizmoMode)
@@ -1985,7 +1971,8 @@ async function boot(): Promise<void> {
     fillProps(body)
     afterSelect(body.id ? [body.id] : [], attachGizmoToPivot)
   }
-  const snapshotBody = (b: StaticBody): StaticBody => JSON.parse(JSON.stringify(b)) as StaticBody
+  const snapshotBody = (b: StaticObjectV2): StaticObjectV2 =>
+    JSON.parse(JSON.stringify(b)) as StaticObjectV2
   const commitEdit = (): void => {
     if (!selected?.editBefore) return
     pushUndo({
@@ -2163,7 +2150,7 @@ async function boot(): Promise<void> {
   }
   const propInput = (
     id: string,
-    apply: (v: number, b: StaticBody) => void,
+    apply: (v: number, b: StaticObjectV2) => void,
     positive = false,
   ): void => {
     $(id).addEventListener('change', () => {
@@ -2187,7 +2174,7 @@ async function boot(): Promise<void> {
   propInput('p-x', (v, b) => (b.pos[0] = v))
   propInput('p-y', (v, b) => (b.pos[1] = v))
   propInput('p-z', (v, b) => (b.pos[2] = v))
-  const setRot = (b: StaticBody): void => {
+  const setRot = (b: StaticObjectV2): void => {
     const r: [number, number, number] = [
       rad(Number($('r-x').value)),
       rad(Number($('r-y').value)),
@@ -2255,7 +2242,7 @@ async function boot(): Promise<void> {
   /** Apply a color or texture change to EVERY selected object (one undo). */
   const groupApplyStyle = (change: { color?: string; tex?: string | null }): void => {
     const subOps: UndoOp[] = []
-    const items: { body: StaticBody; before: StaticBody; after: StaticBody }[] = []
+    const items: { body: StaticObjectV2; before: StaticObjectV2; after: StaticObjectV2 }[] = []
     for (const it of multiSel) {
       it.mesh.setParent(null)
       const before = snapshotBody(it.body)
@@ -2565,7 +2552,7 @@ async function boot(): Promise<void> {
   $e('p-dup').addEventListener('click', () => {
     if (multiTotal() > 0) {
       const subOps: UndoOp[] = []
-      const newBodies: { mesh: Mesh; body: StaticBody }[] = []
+      const newBodies: { mesh: Mesh; body: StaticObjectV2 }[] = []
       for (const it of multiSel) {
         const copy = snapshotBody(it.body)
         copy.id = newId('s')
@@ -2613,7 +2600,7 @@ async function boot(): Promise<void> {
   // ── Face Edit tool (Hammer-style texture application) ───────────────
   interface FaceSel {
     mesh: Mesh
-    body?: StaticBody
+    body?: StaticObjectV2
     patch?: PatchState
     /** Box face index 0..5, or null = whole surface. */
     face: number | null
@@ -2717,9 +2704,9 @@ async function boot(): Promise<void> {
     }
     const style = reset ? {} : collectFaceStyle()
     const subOps: UndoOp[] = []
-    const items: { body: StaticBody; before: StaticBody; after: StaticBody }[] = []
+    const items: { body: StaticObjectV2; before: StaticObjectV2; after: StaticObjectV2 }[] = []
     // Group per body so a box with several selected faces rebuilds ONCE.
-    const byBody = new Map<StaticBody, FaceSel[]>()
+    const byBody = new Map<StaticObjectV2, FaceSel[]>()
     for (const fs of targets) {
       if (fs.body) {
         const list = byBody.get(fs.body) ?? []
@@ -3555,7 +3542,8 @@ async function boot(): Promise<void> {
     statics: placedStatics,
     nodes: placedNodes,
     props: placedProps,
-    lights: mapLightsArr as unknown as MapFileV2['lights'],
+    lights: mapLightsArr,
+    zones: mapZones,
     models: mapModels,
     textures: mapTextures,
     ...(spawnPos ? { spawn: spawnPos, spawnYaw } : {}),
@@ -3636,15 +3624,11 @@ async function boot(): Promise<void> {
       staticMeshes.clear()
       nodeMeshes.clear()
       placedStatics = map.statics
-      placedNodes = map.nodes as MapNodeSpawn[]
+      placedNodes = map.nodes
+      mapZones = map.zones
       for (const m of propMeshes.keys()) m.dispose()
       propMeshes.clear()
-      placedProps = map.props.map((p) => ({
-        item: p.item,
-        pos: p.pos,
-        ...(p.id ? { id: p.id } : {}),
-        ...(p.yaw !== undefined ? { yaw: p.yaw } : {}),
-      }))
+      placedProps = map.props
       for (const st of placedStatics) renderStatic(st)
       for (const n of placedNodes) renderNode(n)
       for (const pr of placedProps) renderProp(pr)

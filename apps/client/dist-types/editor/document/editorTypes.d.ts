@@ -8,9 +8,10 @@
  */
 import type {
   FaceStyle,
-  MapLight,
-  MapNodeSpawn,
-  StaticBody,
+  MapLightV2,
+  MapNodeV2,
+  MapPropV2,
+  StaticObjectV2,
   SurfaceMaterialData,
 } from '@hobo/content'
 import type { MaskPatch } from '../materials/paintMask.js'
@@ -45,23 +46,23 @@ export type UndoOp =
     }
   | {
       kind: 'place'
-      body?: StaticBody
-      node?: MapNodeSpawn
+      body?: StaticObjectV2
+      node?: MapNodeV2
     }
   | {
       kind: 'delete'
-      body?: StaticBody
-      node?: MapNodeSpawn
+      body?: StaticObjectV2
+      node?: MapNodeV2
     }
   | {
       kind: 'edit'
-      body: StaticBody
-      before: StaticBody
-      after: StaticBody
+      body: StaticObjectV2
+      before: StaticObjectV2
+      after: StaticObjectV2
     }
   | {
       kind: 'nodemove'
-      node: MapNodeSpawn
+      node: MapNodeV2
       before: [number, number, number]
       after: [number, number, number]
     }
@@ -76,28 +77,19 @@ export type UndoOp =
   | {
       kind: 'propedit'
       add: boolean
-      prop: {
-        item: string
-        pos: [number, number, number]
-        yaw?: number
-      }
+      prop: MapPropV2
     }
   | {
       kind: 'batch'
       items: {
-        body: StaticBody
-        before: StaticBody
-        after: StaticBody
+        body: StaticObjectV2
+        before: StaticObjectV2
+        after: StaticObjectV2
       }[]
     }
   | {
       kind: 'propmove'
-      prop: {
-        id?: string
-        item: string
-        pos: [number, number, number]
-        yaw?: number
-      }
+      prop: MapPropV2
       before: [number, number, number]
       after: [number, number, number]
     }
@@ -128,21 +120,21 @@ export type UndoOp =
     }
   | {
       kind: 'lightadd'
-      light: MapLight
+      light: MapLightV2
     }
   | {
       kind: 'lightdelete'
-      light: MapLight
+      light: MapLightV2
     }
   | {
       kind: 'lightedit'
-      light: MapLight
-      before: MapLight
-      after: MapLight
+      light: MapLightV2
+      before: MapLightV2
+      after: MapLightV2
     }
   | {
       kind: 'batchdelete'
-      bodies: StaticBody[]
+      bodies: StaticObjectV2[]
     }
   | {
       kind: 'group'

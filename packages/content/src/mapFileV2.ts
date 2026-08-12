@@ -12,7 +12,15 @@
  * genuinely empty.
  */
 import { z } from 'zod'
-import { FaceStyleSchema, StaticBodySchema, type FaceStyle } from './schema/world.js'
+import {
+  FaceStyleSchema,
+  HexColorSchema,
+  MapLightSchema,
+  StaticBodySchema,
+  ZoneDefSchema,
+  type FaceStyle,
+  type ZoneDef,
+} from './schema/world.js'
 import {
   decodeHeights,
   encodeHeights,
@@ -35,13 +43,6 @@ const scaleVec3 = vec3.refine(
   (v) => v.every((n) => Number.isFinite(n) && Math.abs(n) > 1e-4),
   'scale components must be finite and non-zero',
 )
-
-/**
- * Canonical authored colour: lower-case six-digit hex. One definition, used by
- * every schema that carries a tint, so a colour cannot be valid in one layer of
- * the stack and silently dropped by another.
- */
-export const HexColorSchema = z.string().regex(/^#[0-9a-f]{6}$/, 'must be #rrggbb lower-case hex')
 
 export const SurfaceStyleSchemaV2 = z.object({
   tex: z.string().max(120).optional(),
@@ -92,20 +93,76 @@ export const TerrainObjectSchemaV2 = z.object({
   surface: SurfaceMaterialSchemaV2.optional(),
 })
 
+/** Every editable document object carries one of these. */
+const documentId = z.string().min(1).max(64)
+
+/**
+ * A static in a MAP is an ordinary static body plus a mandatory document id
+ * and optional per-surface authoring. `StaticBodySchema` keeps `id` optional
+ * because base world content is not editable and needs no identity; anything
+ * the editor owns must be addressable, so v2 requires it.
+ *
+ * The richer surface authoring lives here rather than in `schema/world.ts`
+ * so the runtime physics schema never has to import `surface.ts`.
+ */
+export const StaticObjectSchemaV2 = StaticBodySchema.extend({
+  id: documentId,
+  /** Whole-object surface (paintable). */
+  surface: SurfaceMaterialSchemaV2.optional(),
+  /**
+   * Per-surface overrides keyed by a stable surface id: `face:0`..`face:5` for
+   * box faces, `mesh:<node path>/material:<slot>` for imported model slots.
+   */
+  surfaces: z.record(z.string().max(200), SurfaceMaterialSchemaV2).optional(),
+})
+
+/** Re-exported under the v2 name; the definition lives in `schema/world.ts`. */
+export const MapLightSchemaV2 = MapLightSchema
+
+/** How far from the origin an authored zone may reach. */
+export const ZONE_WORLD_LIMIT = 100_000
+
+/**
+ * A map-authored zone. Same shape and semantics as a content-authored
+ * `ZoneDef` — reused, not re-declared — with the finiteness and ordering
+ * checks an interactive editor needs so a dragged handle cannot produce an
+ * inverted or infinite volume.
+ */
+export const MapZoneSchemaV2 = ZoneDefSchema.extend({
+  id: documentId.regex(/^[a-z0-9_-]+$/, 'zone ids are lower-case alphanumeric, _ or -'),
+  name: z.string().min(1).max(80),
+  min: finiteVec3,
+  max: finiteVec3,
+}).superRefine((z0, ctx) => {
+  for (let axis = 0; axis < 3; axis++) {
+    if (z0.min[axis]! > z0.max[axis]!)
+      ctx.addIssue({
+        code: 'custom',
+        message: `zone "${z0.id}": min exceeds max on axis ${'xyz'[axis]}`,
+      })
+  }
+  const out = [...z0.min, ...z0.max].some((n) => Math.abs(n) > ZONE_WORLD_LIMIT)
+  if (out)
+    ctx.addIssue({
+      code: 'custom',
+      message: `zone "${z0.id}": bounds exceed ±${ZONE_WORLD_LIMIT} m`,
+    })
+})
+
 export const MapFileV2Schema = z.object({
   v: z.literal(2),
   /** Monotonic per-save revision; the server stamps the canonical hash. */
   revision: z.string().max(128).optional(),
   terrains: z.array(TerrainObjectSchemaV2).max(4096),
-  statics: z.array(StaticBodySchema).max(20_000),
+  statics: z.array(StaticObjectSchemaV2).max(20_000),
   nodes: z
-    .array(z.object({ id: z.string().optional(), node: z.string(), pos: finiteVec3 }))
+    .array(z.object({ id: documentId, node: z.string(), pos: finiteVec3 }))
     .max(20_000)
     .default([]),
   props: z
     .array(
       z.object({
-        id: z.string().optional(),
+        id: documentId,
         item: z.string(),
         pos: finiteVec3,
         yaw: z.number().optional(),
@@ -113,7 +170,9 @@ export const MapFileV2Schema = z.object({
     )
     .max(20_000)
     .default([]),
-  lights: z.array(z.record(z.string(), z.unknown())).max(256).default([]),
+  lights: z.array(MapLightSchemaV2).max(256).default([]),
+  /** Map-authored zones; they augment the base world's content zones. */
+  zones: z.array(MapZoneSchemaV2).max(512).default([]),
   models: z
     .array(z.object({ id: z.string(), name: z.string(), glb: z.string(), bounds: vec3 }))
     .max(512)
@@ -135,6 +194,15 @@ export const MapFileV2Schema = z.object({
 
 export type MapFileV2 = z.infer<typeof MapFileV2Schema>
 export type TerrainObjectV2 = z.infer<typeof TerrainObjectSchemaV2>
+export type StaticObjectV2 = z.infer<typeof StaticObjectSchemaV2>
+export type MapLightV2 = z.infer<typeof MapLightSchemaV2>
+export type MapZoneV2 = z.infer<typeof MapZoneSchemaV2>
+export type MapNodeV2 = MapFileV2['nodes'][number]
+export type MapPropV2 = MapFileV2['props'][number]
+export type MapModelV2 = MapFileV2['models'][number]
+
+/** The synthetic document id for the spawn point (stored top-level on the wire). */
+export const SPAWN_OBJECT_ID = 'spawn'
 
 /** A brand-new map: genuinely empty, no starter island, no hidden ground. */
 export function emptyMapV2(): MapFileV2 {
@@ -145,9 +213,66 @@ export function emptyMapV2(): MapFileV2 {
     nodes: [],
     props: [],
     lights: [],
+    zones: [],
     models: [],
     textures: [],
   }
+}
+
+/** Arrays of document objects, in the order ids are minted. */
+const ID_KINDS = [
+  ['terrains', 'terrain'],
+  ['statics', 's'],
+  ['nodes', 'n'],
+  ['props', 'pr'],
+  ['lights', 'light'],
+  ['zones', 'zone'],
+] as const
+
+/**
+ * Give every editable object a stable id.
+ *
+ * Early v2 inherited `id?: string` from runtime schemas that had no need for
+ * identity. Selection, history, collaboration locks, the Outliner and live
+ * reconciliation all key on ids, and an array index is not identity — it
+ * changes the moment something ahead of it is deleted. So ids are mandatory
+ * from here on, and anything that predates that rule gets one assigned
+ * deterministically on the way in and persisted on the next save.
+ *
+ * Runs on the RAW object before schema validation, because after this the
+ * schema requires the ids it produces. Deterministic: the same input always
+ * yields the same ids.
+ */
+export function normalizeMapIds(raw: unknown): unknown {
+  if (raw === null || typeof raw !== 'object') return raw
+  const map = raw as Record<string, unknown>
+  const out: Record<string, unknown> = { ...map }
+
+  const taken = new Set<string>()
+  const readId = (o: unknown): string | null => {
+    const id = (o as { id?: unknown } | null)?.id
+    return typeof id === 'string' && id.length > 0 && id.length <= 64 ? id : null
+  }
+  for (const [key] of ID_KINDS) {
+    for (const item of Array.isArray(map[key]) ? (map[key] as unknown[]) : []) {
+      const id = readId(item)
+      if (id !== null) taken.add(id)
+    }
+  }
+
+  for (const [key, prefix] of ID_KINDS) {
+    const list = map[key]
+    if (!Array.isArray(list)) continue
+    out[key] = list.map((item, i) => {
+      if (item === null || typeof item !== 'object' || readId(item) !== null) return item
+      let id = `${prefix}-${i}`
+      // Only if an authored object already claimed the natural name.
+      for (let n = 0; taken.has(id); n++) id = `${prefix}-${i}-${n}`
+      taken.add(id)
+      return { ...(item as Record<string, unknown>), id }
+    })
+  }
+  return out
 }
 
 /** Deterministic ids so a v1 map migrates to the SAME v2 ids every time. */
@@ -224,7 +349,7 @@ export function parseMapFile(raw: unknown): ParsedMap {
   if (raw === null || typeof raw !== 'object') return { ok: false, issues: ['not an object'] }
   const version = (raw as { v?: unknown }).v
   if (version === 2) {
-    const r = MapFileV2Schema.safeParse(raw)
+    const r = MapFileV2Schema.safeParse(normalizeMapIds(raw))
     if (!r.success) return { ok: false, issues: r.error.issues.map(describeIssue) }
     const extra = validateMapFile(r.data)
     if (extra.length > 0) return { ok: false, issues: extra }
@@ -232,14 +357,37 @@ export function parseMapFile(raw: unknown): ParsedMap {
   }
   if (version === 1) {
     const migrated = migrateV1ToV2(raw as MapFile)
-    const r = MapFileV2Schema.safeParse(migrated)
+    const r = MapFileV2Schema.safeParse(normalizeMapIds(migrated))
     if (!r.success) return { ok: false, issues: r.error.issues.map(describeIssue) }
+    const extra = validateMapFile(r.data)
+    if (extra.length > 0) return { ok: false, issues: extra }
     return { ok: true, map: r.data, migrated: true }
   }
   return { ok: false, issues: [`unsupported map version ${String(version)}`] }
 }
 
 const describeIssue = (i: z.ZodIssue): string => `${i.path.join('.') || '(root)'}: ${i.message}`
+
+/** Surface checks shared by terrain and static authoring. */
+function surfaceIssues(
+  what: string,
+  surf: z.infer<typeof SurfaceMaterialSchemaV2>,
+  knownTexture: (ref: string) => boolean,
+): string[] {
+  const issues: string[] = []
+  if (surf.base.tex && !knownTexture(surf.base.tex))
+    issues.push(`${what}: missing base texture "${surf.base.tex}"`)
+  const channels = new Set<string>()
+  for (const l of surf.paint?.layers ?? []) {
+    if (channels.has(l.channel)) issues.push(`${what}: two paint layers on channel ${l.channel}`)
+    channels.add(l.channel)
+    if (!knownTexture(l.tex)) issues.push(`${what}: missing paint texture "${l.tex}"`)
+    if (l.tex === 'none' && !l.color) issues.push(`${what}: a plain-colour layer has no colour`)
+  }
+  if ((surf.paint?.layers.length ?? 0) > 0 && !surf.paint?.mask)
+    issues.push(`${what}: paint layers without a mask`)
+  return issues
+}
 
 /**
  * Cross-field checks the schema cannot express: duplicate ids, height counts
@@ -270,34 +418,23 @@ export function validateMapFile(map: MapFileV2): string[] {
       issues.push(
         `terrain "${t.id}": ${actual} height samples, expected ${expected} for sub=${t.sub}`,
       )
-    const surf = t.surface
-    if (!surf) continue
-    if (surf.base.tex && !knownTexture(surf.base.tex))
-      issues.push(`terrain "${t.id}": missing base texture "${surf.base.tex}"`)
-    const channels = new Set<string>()
-    for (const l of surf.paint?.layers ?? []) {
-      if (channels.has(l.channel))
-        issues.push(`terrain "${t.id}": two paint layers on channel ${l.channel}`)
-      channels.add(l.channel)
-      if (!knownTexture(l.tex)) issues.push(`terrain "${t.id}": missing paint texture "${l.tex}"`)
-    }
-    if ((surf.paint?.layers.length ?? 0) > 0 && !surf.paint?.mask)
-      issues.push(`terrain "${t.id}": paint layers without a mask`)
+    if (t.surface) issues.push(...surfaceIssues(`terrain "${t.id}"`, t.surface, knownTexture))
   }
   const modelIds = new Set(map.models.map((m) => m.id))
   for (const b of map.statics) {
-    if (b.id) claim(b.id, 'static')
+    claim(b.id, 'static')
     if (b.model && !modelIds.has(b.model))
-      issues.push(`static "${b.id ?? '?'}": references missing model "${b.model}"`)
-    if (b.tex && !knownTexture(b.tex))
-      issues.push(`static "${b.id ?? '?'}": missing texture "${b.tex}"`)
+      issues.push(`static "${b.id}": references missing model "${b.model}"`)
+    if (b.tex && !knownTexture(b.tex)) issues.push(`static "${b.id}": missing texture "${b.tex}"`)
+    for (const [sid, surf] of Object.entries(b.surfaces ?? {}))
+      issues.push(...surfaceIssues(`static "${b.id}" surface "${sid}"`, surf, knownTexture))
+    if (b.surface) issues.push(...surfaceIssues(`static "${b.id}"`, b.surface, knownTexture))
   }
-  for (const n of map.nodes) if (n.id) claim(n.id, 'node')
-  for (const p of map.props) if (p.id) claim(p.id, 'prop')
-  for (const l of map.lights) {
-    const id = (l as { id?: string }).id
-    if (id) claim(id, 'light')
-  }
+  for (const n of map.nodes) claim(n.id, 'node')
+  for (const p of map.props) claim(p.id, 'prop')
+  for (const l of map.lights) claim(l.id, 'light')
+  for (const z0 of map.zones) claim(z0.id, 'zone')
+  if (seen.has(SPAWN_OBJECT_ID)) issues.push(`"${SPAWN_OBJECT_ID}" is reserved for the spawn point`)
   return issues
 }
 
@@ -359,13 +496,14 @@ export function compileMapFileV2(map: MapFileV2): MapOverride {
       ...(t.surface?.base.color ? { color: t.surface.base.color } : {}),
       ...(t.surface?.base.uv ? { uv: t.surface.base.uv as FaceStyle } : {}),
     })),
-    nodes: map.nodes.map((n) => ({ node: n.node, pos: n.pos, ...(n.id ? { id: n.id } : {}) })),
+    nodes: map.nodes.map((n) => ({ id: n.id, node: n.node, pos: n.pos })),
     props: map.props.map((p) => ({
+      id: p.id,
       item: p.item,
       pos: p.pos,
-      ...(p.id ? { id: p.id } : {}),
       ...(p.yaw !== undefined ? { yaw: p.yaw } : {}),
     })),
+    zones: map.zones.map((z0): ZoneDef => ({ ...z0, min: [...z0.min], max: [...z0.max] })),
     ...(map.spawn ? { spawn: map.spawn } : {}),
     ...(map.spawnYaw !== undefined ? { spawnYaw: map.spawnYaw } : {}),
   }
