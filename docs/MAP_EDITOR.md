@@ -191,6 +191,22 @@ local space. Without that the stroke was recorded and then displayed nowhere.
 The projection is approximate on faces oblique to the dominant axis, so the
 Inspector says which projection a surface is using.
 
+Two traps that only show up on a real glb, both covered by
+`render/paintedStatic.test.ts` against a headless scene:
+
+- `ModelCache` instantiates models as `InstancedMesh`, which shares its
+  source's material. Assigning one a material either does nothing or repaints
+  every placement — so an overlay is cloned from the SOURCE mesh and given the
+  instance's own pose.
+- The clone shares the cached template's geometry, so baking UVs into it would
+  alter the template and every other placement. `makeGeometryUnique()` runs
+  first; the cached `AssetContainer` is never touched.
+
+Model children are deliberately not pickable, so a click selects the object
+rather than a nameless sub-mesh — `hitTest` therefore re-picks against the
+object's own geometry for model statics, or the brush would land on the
+invisible proxy box and record a face of a cube nobody can see.
+
 ---
 
 ## Assets
@@ -310,12 +326,12 @@ assertion would only measure the machine's software renderer.
 
 What the profiler found, and what was done:
 
-| Symptom (counter)                                     | Cause                                                                                                 | Fix                                                                          |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `views.rebuildFromUpdate` on a colour edit             | Inspector edits `replace` the whole object for one clean undo step, and `replaced` carried no key list, so every view read it as "everything changed" — including `shape`, which forces a rebuild. Retinting an imported model re-instantiated its glTF. | `replaced` now carries `changedKeys`, exactly like `updated`.                 |
-| Whole owner table scanned per removal                  | `destroy`/`reindex` walked every mesh in the scene looking for one object's. Deleting 50 objects on a 600-object map walked it 50 times.                                                                | A reverse index (`ownedMeshes`), so removal touches only its own meshes.       |
-| Scene-sized array allocated several times a second     | `allMeshes()` rebuilt from every view on each hover pick.                                              | Cached, invalidated whenever the mesh set actually changes.                    |
-| Linear scan per document read                          | `get(id)` scanned the wire array. `get` is the hottest read there is — hover, every view update, the Outliner, the Inspector — so every mouse move walked hundreds of entries. | `byId` index maintained by add/replace/remove/reindex; `update` mutates in place. |
+| Symptom (counter)                                  | Cause                                                                                                                                                                                                                                                    | Fix                                                                               |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `views.rebuildFromUpdate` on a colour edit         | Inspector edits `replace` the whole object for one clean undo step, and `replaced` carried no key list, so every view read it as "everything changed" — including `shape`, which forces a rebuild. Retinting an imported model re-instantiated its glTF. | `replaced` now carries `changedKeys`, exactly like `updated`.                     |
+| Whole owner table scanned per removal              | `destroy`/`reindex` walked every mesh in the scene looking for one object's. Deleting 50 objects on a 600-object map walked it 50 times.                                                                                                                 | A reverse index (`ownedMeshes`), so removal touches only its own meshes.          |
+| Scene-sized array allocated several times a second | `allMeshes()` rebuilt from every view on each hover pick.                                                                                                                                                                                                | Cached, invalidated whenever the mesh set actually changes.                       |
+| Linear scan per document read                      | `get(id)` scanned the wire array. `get` is the hottest read there is — hover, every view update, the Outliner, the Inspector — so every mouse move walked hundreds of entries.                                                                           | `byId` index maintained by add/replace/remove/reindex; `update` mutates in place. |
 
 Already in place before that pass: hover picking is throttled to every sixth
 frame, the Outliner patches rather than rebuilds on selection changes, mask
@@ -349,9 +365,10 @@ you if the default chord is taken.
 ## Gates
 
 ```
-pnpm typecheck    pnpm test        # 510 tests, includes the architecture audit
+pnpm typecheck    pnpm test        # 633 tests, includes the architecture audit
 pnpm lint         pnpm build
-pnpm format:check pnpm test:editor # 76 browser checks
+pnpm format:check pnpm test:editor # 139 browser checks
+pnpm test:collab                   # 26 checks, two browser contexts
 node --import tsx apps/server/scripts/sliceTest.ts
 ```
 

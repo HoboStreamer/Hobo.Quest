@@ -240,4 +240,3 @@ export function instantiateMapLight(scene: Scene, l: MapLight): Light | null {
   light.intensity = l.intensity ?? LIGHT_DEFAULTS.intensity[l.type]
   return light
 }
-

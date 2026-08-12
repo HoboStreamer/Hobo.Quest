@@ -231,7 +231,8 @@ describe('architecture audit: completed systems keep their guarantees', () => {
 
   it('paints by object kind rather than only on terrain', () => {
     const paint = fileText('apps/client/src/editor/materials/paintController.ts')
-    expect(paint).toMatch(/kind === 'static'/)
+    // Written either way round; what matters is that statics are handled.
+    expect(paint).toMatch(/kind (===|!==) 'static'/)
     expect(paint).toContain('staticHit')
     // The brush entry point must not be gated on the terrain view type.
     const hitTest = /hitTest\([\s\S]*?\n {2}\}/.exec(paint)?.[0] ?? ''

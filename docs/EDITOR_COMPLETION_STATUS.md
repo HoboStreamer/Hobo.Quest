@@ -16,12 +16,13 @@ what exists. This file is the record of the program and what is left.
 | Gate               | Command                                              | Status                      |
 | ------------------ | ---------------------------------------------------- | --------------------------- |
 | Types              | `pnpm typecheck`                                     | green                       |
-| Unit + audit       | `pnpm test`                                          | green — 510 tests, 40 files |
-| Architecture audit | `pnpm audit:editor`                                  | **green — 8 of 8**          |
+| Unit + audit       | `pnpm test`                                          | green — 633 tests, 47 files |
+| Architecture audit | `pnpm audit:editor`                                  | **green — 19 of 19**        |
 | Lint               | `pnpm lint`                                          | green                       |
 | Format             | `pnpm format:check`                                  | green                       |
 | Build              | `pnpm build`                                         | green                       |
-| Editor E2E         | `pnpm test:editor`                                   | green — 76/76               |
+| Editor E2E         | `pnpm test:editor`                                   | green — 139/139             |
+| Collaboration E2E  | `pnpm test:collab`                                   | green — 26/26               |
 | Server slice       | `node --import tsx apps/server/scripts/sliceTest.ts` | green                       |
 
 `apps/client/src/editor/main.ts` **531 bytes** (was 171 KB).
