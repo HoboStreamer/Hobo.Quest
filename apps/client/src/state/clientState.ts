@@ -26,8 +26,17 @@ export interface ClientStateEvents {
   levelUp: { skill: string; level: number }
   constraintState: ServerConstraintState
   friendsChanged: { id: string; name: string }[]
-  stats: { hp: number; hunger: number; thirst: number; stamina: number; died?: boolean }
+  stats: {
+    hp: number
+    hunger: number
+    thirst: number
+    stamina: number
+    temp: number
+    statuses: string[]
+    died?: boolean
+  }
   timeSync: number
+  weather: string
   container: { id: string; size: number; slots: { i: number; def: string; count: number }[] }
   announce: string
   fx: { kind: 'hurt' | 'death'; id: string }
@@ -60,9 +69,18 @@ export class ClientState {
   readonly constraints = new Map<string, ServerConstraintState>()
   /** Holder entity id -> grab point in the held body's local space. */
   readonly heldGrab = new Map<string, [number, number, number]>()
-  stats = { hp: 100, hunger: 100, thirst: 100, stamina: 100 }
+  stats = {
+    hp: 100,
+    hunger: 100,
+    thirst: 100,
+    stamina: 100,
+    temp: 37,
+    statuses: [] as string[],
+  }
   /** Shared world clock (fraction of the day cycle). */
   dayFraction = 0.34
+  /** Authoritative weather (rendering + prompts). */
+  weather: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog' = 'clear'
 
   apply(msg: ServerMessage): void {
     switch (msg.t) {
@@ -145,11 +163,22 @@ export class ClientState {
         this.events.emit('friendsChanged', msg.friends)
         break
       case 'stats':
-        this.stats = { hp: msg.hp, hunger: msg.hunger, thirst: msg.thirst, stamina: msg.stamina }
+        this.stats = {
+          hp: msg.hp,
+          hunger: msg.hunger,
+          thirst: msg.thirst,
+          stamina: msg.stamina,
+          temp: msg.temp,
+          statuses: msg.statuses,
+        }
         this.events.emit('stats', { ...this.stats, ...(msg.died ? { died: true } : {}) })
         break
       case 'time':
         this.dayFraction = msg.frac
+        if (this.weather !== msg.weather) {
+          this.weather = msg.weather
+          this.events.emit('weather', msg.weather)
+        }
         this.events.emit('timeSync', msg.frac)
         break
       case 'announce':

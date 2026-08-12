@@ -3,13 +3,22 @@ import {
   DEFAULT_MOVEMENT,
   Inventory,
   SkillSet,
+  activeStatuses,
+  ambientTemperature,
   applyDamage,
+  containerAdd,
+  containerSort,
+  createEnvironment,
+  stepEnvironment,
   eat,
   hullHeightFor,
+  precipitation,
   stepMovement,
   tickSurvival,
   type CollisionQueries,
+  type EnvironmentState,
   type GameEntity,
+  type WeatherKind,
 } from '@hobo/gameplay'
 import {
   DROP_LOOT,
@@ -93,6 +102,8 @@ export class GameServer {
   /** Body excluded from the current movement sweep (the moving player's own). */
   private sweepSelf: BodyId | undefined
   private lastFlushTick = 0
+  /** Authoritative world environment: clock, weather, temperature. */
+  private readonly env: EnvironmentState
 
   constructor(
     private readonly config: ServerConfig,
@@ -101,6 +112,20 @@ export class GameServer {
     private readonly metrics: ServerMetrics,
     private readonly log: Logger,
   ) {
+    // The world clock and weather survive restarts (a rainy dusk stays a
+    // rainy dusk).
+    const savedTime = Number(store.meta.get('env_time') ?? Number.NaN)
+    this.env = createEnvironment(Number.isFinite(savedTime) ? savedTime : 0.34)
+    const savedWeather = store.meta.get('env_weather')
+    if (
+      savedWeather === 'clear' ||
+      savedWeather === 'cloudy' ||
+      savedWeather === 'rain' ||
+      savedWeather === 'storm' ||
+      savedWeather === 'fog'
+    ) {
+      this.env.weather = savedWeather as WeatherKind
+    }
     // Players block players: sweeps include the Player layer, minus the
     // mover's own kinematic body.
     this.moveQueries = {
@@ -384,7 +409,7 @@ export class GameServer {
           break
         }
         session.inventory.removeFromSlot(msg.slot, 1)
-        eat(session.stats, food)
+        eat(session.stats, food, Date.now())
         session.statsDirty = true
         session.dirty = true
         this.send(session, { t: 'result', action: 'consume', ok: true })
@@ -464,11 +489,13 @@ export class GameServer {
           })
           break
         }
+        const maxStackOf = (defId: string) => this.world.content.item(defId)?.maxStack ?? 1
         let ok = false
         if (msg.dir === 'in') {
           const stack = session.inventory.get(msg.slot)
           if (stack) {
-            const moved = this.containerAdd(box, stack.defId, stack.count)
+            const want = msg.count !== undefined ? Math.min(msg.count, stack.count) : stack.count
+            const moved = containerAdd(box, stack.defId, want, maxStackOf)
             if (moved > 0) {
               session.inventory.removeFromSlot(msg.slot, moved)
               ok = true
@@ -477,8 +504,9 @@ export class GameServer {
         } else {
           const slot = box[msg.slot]
           if (slot) {
-            const leftover = session.inventory.add(slot.defId, slot.count)
-            const moved = slot.count - leftover
+            const want = msg.count !== undefined ? Math.min(msg.count, slot.count) : slot.count
+            const leftover = session.inventory.add(slot.defId, want)
+            const moved = want - leftover
             if (moved > 0) {
               slot.count -= moved
               if (slot.count <= 0) box[msg.slot] = null
@@ -499,6 +527,27 @@ export class GameServer {
         }
         break
       }
+      case 'container_sort': {
+        const entity = this.world.entities.get(msg.target as EntityId)
+        const denied = this.containerAccessDenied(session, entity)
+        const box = entity?.prop?.container
+        if (denied || !entity || !box) {
+          this.send(session, {
+            t: 'result',
+            action: 'container',
+            ok: false,
+            error: denied ?? 'no_container',
+          })
+          break
+        }
+        containerSort(box, (defId) => this.world.content.item(defId)?.maxStack ?? 1)
+        entity.dirty = true
+        this.send(session, { t: 'result', action: 'container', ok: true })
+        for (const other of this.sessions.values()) {
+          if (other.openContainer === entity.id) this.sendContainer(other, entity)
+        }
+        break
+      }
     }
   }
 
@@ -516,32 +565,6 @@ export class GameServer {
     if (d > 4.5) return 'out_of_range'
     if (!this.canManipulate(session, entity)) return 'not_owner'
     return null
-  }
-
-  /** Adds to a container with stacking; returns how many items fit. */
-  private containerAdd(
-    box: ({ defId: string; count: number } | null)[],
-    defId: string,
-    count: number,
-  ): number {
-    const maxStack = this.world.content.item(defId)?.maxStack ?? 1
-    let left = count
-    for (const slot of box) {
-      if (left <= 0) break
-      if (slot && slot.defId === defId && slot.count < maxStack) {
-        const take = Math.min(maxStack - slot.count, left)
-        slot.count += take
-        left -= take
-      }
-    }
-    for (let i = 0; i < box.length && left > 0; i++) {
-      if (!box[i]) {
-        const take = Math.min(maxStack, left)
-        box[i] = { defId, count: take }
-        left -= take
-      }
-    }
-    return count - left
   }
 
   private sendContainer(session: PlayerSession, entity: GameEntity): void {
@@ -610,9 +633,8 @@ export class GameServer {
     this.log.info('supply drop spawned', { site: site.join(',') })
   }
 
-  private dayFraction(): number {
-    // 20-minute shared day/night cycle anchored to server uptime.
-    return (this.tick / this.config.tickRate / 1200 + 0.34) % 1
+  private timeWire(): ServerMessage {
+    return { t: 'time', frac: this.env.timeOfDay, weather: this.env.weather }
   }
 
   onDisconnect(conn: GameConnection): void {
@@ -777,7 +799,7 @@ export class GameServer {
     this.sendInventory(session)
     this.sendSkills(session)
     this.sendFriends(session)
-    this.send(session, { t: 'time', frac: this.dayFraction() })
+    this.send(session, this.timeWire())
     this.metrics.sessions = this.sessions.size
     this.log.info('player connected', {
       playerId: playerId as string,
@@ -1119,6 +1141,8 @@ export class GameServer {
       hunger: Math.round(session.stats.hunger),
       thirst: Math.round(session.stats.thirst),
       stamina: Math.round(session.stats.stamina),
+      temp: Math.round(session.stats.bodyTemp * 10) / 10,
+      statuses: activeStatuses(session.stats, Date.now()) as string[],
     }
   }
 
@@ -1182,19 +1206,45 @@ export class GameServer {
       }
     }
 
-    // 6. Once a second: survival vitals, void rescue, world clock sync.
+    // 6. Once a second: environment, survival vitals, void rescue, clock.
     if (this.tick % this.config.tickRate === 0) {
+      const weatherBefore = this.env.weather
+      stepEnvironment(this.env, 1, Math.random)
+      if (this.env.weather !== weatherBefore) {
+        this.broadcastAll(this.timeWire())
+        this.log.info('weather changed', { from: weatherBefore, to: this.env.weather })
+      }
+      const ambientC = ambientTemperature(this.env)
+      const raining = precipitation(this.env) > 0
+      const nowMs = Date.now()
       for (const session of this.sessions.values()) {
         const sprinting =
           (session.buttons & Buttons.Sprint) !== 0 &&
           Math.hypot(session.move.vel.x, session.move.vel.z) > 1
+        // Wet: wading/swimming, or out in the rain (no roof detection yet —
+        // "indoors" arrives with the shelter model).
+        const inWater =
+          terrainHeight(this.world.content.world, session.move.pos.x, session.move.pos.z) <
+          WATER_LEVEL - 0.03
+        // Warmth: standing near a lit campfire (workstation scan; the
+        // spatial index will replace this walk).
+        const nearHeat = nearbyWorkstationKinds(session, this.world).has('campfire')
         const before = { ...session.stats }
-        const died = tickSurvival(session.stats, 1, sprinting)
+        const statusesBefore = activeStatuses(session.stats, nowMs).join(',')
+        const died = tickSurvival(session.stats, 1, {
+          sprinting,
+          ambientC,
+          wet: inWater || raining,
+          nearHeat,
+          nowMs,
+        })
         if (
           Math.round(before.health) !== Math.round(session.stats.health) ||
           Math.round(before.hunger) !== Math.round(session.stats.hunger) ||
           Math.round(before.thirst) !== Math.round(session.stats.thirst) ||
-          Math.round(before.stamina) !== Math.round(session.stats.stamina)
+          Math.round(before.stamina) !== Math.round(session.stats.stamina) ||
+          Math.round(before.bodyTemp * 2) !== Math.round(session.stats.bodyTemp * 2) ||
+          activeStatuses(session.stats, nowMs).join(',') !== statusesBefore
         ) {
           session.statsDirty = true
         }
@@ -1212,7 +1262,7 @@ export class GameServer {
         }
       }
       if (this.tick % (this.config.tickRate * 10) === 0) {
-        this.broadcastAll({ t: 'time', frac: this.dayFraction() })
+        this.broadcastAll(this.timeWire())
       }
       this.tickSupplyDrops()
     }
@@ -1368,6 +1418,9 @@ export class GameServer {
   // ── Persistence ────────────────────────────────────────────────────
 
   flush(): void {
+    // World clock + weather ride along with every flush (tiny meta writes).
+    this.store.meta.set('env_time', String(this.env.timeOfDay))
+    this.store.meta.set('env_weather', this.env.weather)
     const wrote = this.world.flushDirty(this.store)
     const dirtyPlayers: PlayerDto[] = []
     for (const session of this.sessions.values()) {

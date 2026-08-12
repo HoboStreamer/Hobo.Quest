@@ -163,14 +163,19 @@ export interface ServerStats {
   hunger: number
   thirst: number
   stamina: number
+  /** Body temperature °C (37 normal). */
+  temp: number
+  /** Active status effect ids (cold, wet, well_fed, bleeding...). */
+  statuses: string[]
   /** Set on the update that killed you (client shows death feedback). */
   died?: boolean
 }
 
-/** World clock sync: fraction of the day cycle [0..1). */
+/** World clock + weather sync: fraction of the day cycle [0..1). */
 export interface ServerTime {
   t: 'time'
   frac: number
+  weather: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog'
 }
 
 /** The world map was edited live — refetch /map.json and rebuild terrain. */

@@ -114,6 +114,7 @@ export class Hud {
         <div class="vital"><span>FOOD</span><div class="vital-bar"><div id="bar-hunger" class="vital-fill hunger"></div></div></div>
         <div class="vital"><span>H2O</span><div class="vital-bar"><div id="bar-thirst" class="vital-fill thirst"></div></div></div>
         <div class="vital"><span>STAM</span><div class="vital-bar"><div id="bar-stamina" class="vital-fill stamina"></div></div></div>
+        <div class="vital-extras" id="vital-extras"></div>
       </div>
       <div class="announce" id="announce"></div>
       <div class="death-screen" id="death-screen">
@@ -131,6 +132,7 @@ export class Hud {
         <div class="hint-line">Click an item to move it · your inventory below</div>
         <div class="container-grid" id="container-player"></div>
         <div class="cust-actions">
+          <button id="container-sort" class="cust-btn">Sort</button>
           <button id="container-pickup" class="cust-btn">Pick up (empty box)</button>
           <button id="container-close" class="cust-btn">Close</button>
         </div>
@@ -164,6 +166,11 @@ export class Hud {
       if (this.openContainerId) {
         this.connection.send({ t: 'use', target: this.openContainerId })
         this.closeContainer()
+      }
+    })
+    this.byId('container-sort').addEventListener('click', () => {
+      if (this.openContainerId) {
+        this.connection.send({ t: 'container_sort', target: this.openContainerId })
       }
     })
   }
@@ -253,6 +260,28 @@ export class Hud {
     ;(this.byId('bar-hunger').style as CSSStyleDeclaration).width = `${s.hunger}%`
     ;(this.byId('bar-thirst').style as CSSStyleDeclaration).width = `${s.thirst}%`
     ;(this.byId('bar-stamina').style as CSSStyleDeclaration).width = `${s.stamina}%`
+    // Body temperature + active statuses (only shown when noteworthy).
+    const extras = this.byId('vital-extras')
+    const chips: string[] = []
+    if (s.temp <= 35.5) chips.push(`🌡 ${s.temp.toFixed(1)}°C`)
+    else if (s.temp >= 38.5) chips.push(`🌡 ${s.temp.toFixed(1)}°C`)
+    const ICONS: Record<string, string> = {
+      wet: '💧 wet',
+      cold: '🥶 cold',
+      freezing: '🧊 FREEZING',
+      overheated: '🥵 overheated',
+      well_fed: '🍲 well fed',
+      bleeding: '🩸 bleeding',
+    }
+    for (const id of s.statuses) chips.push(ICONS[id] ?? id)
+    extras.replaceChildren(
+      ...chips.map((text) => {
+        const chip = document.createElement('span')
+        chip.className = 'status-chip'
+        chip.textContent = text
+        return chip
+      }),
+    )
   }
 
   /** Opens (or refreshes) the storage panel for a container entity. */
@@ -310,6 +339,19 @@ export class Hud {
             })
           }
         })
+        // Right-click: take half the stack.
+        cell.addEventListener('contextmenu', (e) => {
+          e.preventDefault()
+          if (this.openContainerId && stack.count > 1) {
+            this.connection.send({
+              t: 'container_move',
+              target: this.openContainerId,
+              dir: 'out',
+              slot: i,
+              count: Math.ceil(stack.count / 2),
+            })
+          }
+        })
       }
       grid.appendChild(cell)
     }
@@ -334,6 +376,19 @@ export class Hud {
             target: this.openContainerId,
             dir: 'in',
             slot: slot.i,
+          })
+        }
+      })
+      // Right-click: stash half the stack.
+      cell.addEventListener('contextmenu', (e) => {
+        e.preventDefault()
+        if (this.openContainerId && slot.stack.count > 1) {
+          this.connection.send({
+            t: 'container_move',
+            target: this.openContainerId,
+            dir: 'in',
+            slot: slot.i,
+            count: Math.ceil(slot.stack.count / 2),
           })
         }
       })

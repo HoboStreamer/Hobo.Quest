@@ -380,6 +380,18 @@ export class GameWorld {
     return this.constraintsByEntity.get(id)?.size ?? 0
   }
 
+  /** A weld/hinge/axis/slider/motor (collision-off joint) links the pair. */
+  private pairHasRigidJoint(a: EntityId, b: EntityId): boolean {
+    const set = this.constraintsByEntity.get(a)
+    if (!set) return false
+    for (const id of set) {
+      const rec = this.constraintRecords.get(id)
+      if (!rec || (rec.a !== b && rec.b !== b)) continue
+      if (rec.type !== 'rope' && rec.type !== 'spring') return true
+    }
+    return false
+  }
+
   get constraintCount(): number {
     return this.constraintRecords.size
   }
@@ -401,6 +413,13 @@ export class GameWorld {
     if (bodyA === undefined || bodyB === undefined) return null
     const desc = toPhysicsConstraint(type, params, bodyA, bodyB)
     if (!desc) return null
+    // Mixed collision flags between one pair are explosive: a weld holds
+    // the bodies overlapped while a rope's contact solver fights to push
+    // them apart, and cutting releases the stored energy as a launch. Any
+    // rigid joint on the pair turns the soft joint's collision off.
+    if ((desc.type === 'rope' || desc.type === 'spring') && this.pairHasRigidJoint(a.id, b.id)) {
+      desc.collision = false
+    }
     const physId = this.physics.addConstraint(desc)
     const record: ConstraintRecord = {
       id: id ?? newUid(),

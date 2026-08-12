@@ -23,7 +23,6 @@ import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import {
   Physics6DoFConstraint,
   PhysicsConstraint,
-  SpringConstraint,
 } from '@babylonjs/core/Physics/v2/physicsConstraint.js'
 import {
   PhysicsConstraintAxis,
@@ -300,28 +299,38 @@ export class HavokWorld implements PhysicsWorld {
       }
       case 'rope':
         // A pure max-distance tether: slack below `length`, taut at it.
-        // The pair keeps colliding — a crate on a rope bonks the post.
+        // The pair keeps colliding by default — a crate on a rope bonks
+        // the post — unless a rigid joint already links them.
         return new PhysicsConstraint(
           PhysicsConstraintType.DISTANCE,
           {
             pivotA: toBjs(desc.anchorA),
             pivotB: toBjs(desc.anchorB),
             maxDistance: desc.length,
-            collision: true,
+            collision: desc.collision ?? true,
           },
           this.scene,
         )
       case 'spring':
         // Soft equality at restLength: force = stiffness·error − damping·vel.
-        return new SpringConstraint(
-          toBjs(desc.anchorA),
-          toBjs(desc.anchorB),
-          new Vector3(1, 0, 0),
-          new Vector3(1, 0, 0),
-          desc.restLength,
-          desc.restLength,
-          desc.stiffness,
-          desc.damping,
+        // (Built as the 6DoF SpringConstraint does, plus the collision flag.)
+        return new Physics6DoFConstraint(
+          {
+            pivotA: toBjs(desc.anchorA),
+            pivotB: toBjs(desc.anchorB),
+            axisA: new Vector3(1, 0, 0),
+            axisB: new Vector3(1, 0, 0),
+            collision: desc.collision ?? true,
+          },
+          [
+            {
+              axis: PhysicsConstraintAxis.LINEAR_DISTANCE,
+              minLimit: desc.restLength,
+              maxLimit: desc.restLength,
+              stiffness: desc.stiffness,
+              damping: desc.damping,
+            },
+          ],
           this.scene,
         )
       case 'hinge':

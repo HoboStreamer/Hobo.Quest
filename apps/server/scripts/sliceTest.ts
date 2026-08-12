@@ -119,7 +119,16 @@ class TestClient {
   constraintEvents: { id: string; kind: string; a: string; b: string; active: boolean }[] = []
   /** What MY beam currently holds (from physgun_state broadcasts). */
   heldTarget: string | null = null
-  stats: { hp: number; hunger: number; thirst: number; stamina: number } | null = null
+  stats: {
+    hp: number
+    hunger: number
+    thirst: number
+    stamina: number
+    temp: number
+    statuses: string[]
+  } | null = null
+  /** Latest authoritative weather from the time message. */
+  lastWeather: string | null = null
   /** Mirrors the server's hotbar toggle: re-pressing the active slot holsters. */
   activeSlot = -1
   holstered = false
@@ -216,7 +225,17 @@ class TestClient {
         if (msg.player === this.entityId) this.heldTarget = msg.target ?? null
         break
       case 'stats':
-        this.stats = { hp: msg.hp, hunger: msg.hunger, thirst: msg.thirst, stamina: msg.stamina }
+        this.stats = {
+          hp: msg.hp,
+          hunger: msg.hunger,
+          thirst: msg.thirst,
+          stamina: msg.stamina,
+          temp: msg.temp,
+          statuses: msg.statuses,
+        }
+        break
+      case 'time':
+        this.lastWeather = msg.weather
         break
       case 'container':
         this.lastContainer = { id: msg.id, size: msg.size, slots: msg.slots }
@@ -676,7 +695,19 @@ async function main(): Promise<void> {
     while (a.count('berries') <= berriesBefore && Date.now() - start < 5000) await sleep(100)
   }
   assert(a.count('berries') > berriesBefore, 'berries in inventory')
+  // A second handful so the container phase can split-stash later.
+  await sleep(300)
+  await a.use(bush.id)
+  await pollUntil(() => a.count('berries') >= berriesBefore + 3)
   assert(a.stats !== null, 'vitals replicated')
+  // Stage 3: vitals carry body temperature + statuses, and the world clock
+  // carries authoritative weather.
+  assert(
+    typeof a.stats.temp === 'number' && a.stats.temp > 30 && a.stats.temp < 42,
+    `body temperature replicated (${a.stats.temp})`,
+  )
+  assert(Array.isArray(a.stats.statuses), 'status list replicated')
+  assert(a.lastWeather !== null, `weather replicated (${a.lastWeather})`)
   a.results.length = 0
   a.send({ t: 'consume', slot: a.slotOf('berries') })
   await a.waitFor((m) => m.t === 'result' && m.action === 'consume')
@@ -717,8 +748,29 @@ async function main(): Promise<void> {
   await a.waitFor((m) => m.t === 'inventory' && a.count('stone') > 0, 5000)
   const berrySlot = a.slotOf('berries')
   assert(berrySlot >= 0, 'berries left to stash')
-  a.send({ t: 'container_move', target: boxId, dir: 'in', slot: berrySlot })
-  await a.waitFor((m) => m.t === 'container' && m.slots.some((sl) => sl.def === 'berries'), 5000)
+  const berriesHeld = a.count('berries')
+  if (berriesHeld >= 2) {
+    // Stage 3: split — stash only part of the stack.
+    const half = Math.floor(berriesHeld / 2)
+    a.send({ t: 'container_move', target: boxId, dir: 'in', slot: berrySlot, count: half })
+    await a.waitFor((m) => m.t === 'container' && m.slots.some((sl) => sl.def === 'berries'), 5000)
+    await pollUntil(() => a.count('berries') === berriesHeld - half)
+    assert(a.count('berries') === berriesHeld - half, 'split stash moved only the requested count')
+  } else {
+    a.send({ t: 'container_move', target: boxId, dir: 'in', slot: berrySlot })
+    await a.waitFor((m) => m.t === 'container' && m.slots.some((sl) => sl.def === 'berries'), 5000)
+  }
+  // Stage 3: sort compacts and orders the box (berries currently in a
+  // later slot than the empty ones ahead of it after the stone left).
+  a.results.length = 0
+  a.send({ t: 'container_sort', target: boxId })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'container')
+  assert(a.results.at(-1)?.ok === true, 'container sort accepted')
+  await pollUntil(() => a.lastContainer?.slots.some((sl) => sl.i === 0) ?? false)
+  assert(
+    a.lastContainer?.slots.some((sl) => sl.i === 0),
+    'sorted contents start at slot 0',
+  )
 
   console.log('phase: doors — craft, install (freeze), swing on E')
   await craftAndWait(a, 'craft_planks', 'wood_plank')
@@ -823,6 +875,13 @@ async function main(): Promise<void> {
   }
   const rigA = await dropScrap()
   await sleep(300)
+  // Turn before the second drop so the props land apart, not overlapped —
+  // welding interpenetrating bodies stores explosive depenetration energy.
+  const turnedYaw = ((a.me?.yaw ?? 0) + 0.9) % (Math.PI * 2)
+  for (let i = 0; i < 10; i++) {
+    a.input(0, 0, turnedYaw)
+    await sleep(33)
+  }
   const rigB = await dropScrap()
   await sleep(900) // both settle
 
@@ -960,6 +1019,9 @@ async function main(): Promise<void> {
     a.constraintEvents.filter((e) => !e.active).length === 2,
     'both removals broadcast (weld + rope)',
   )
+  // Cutting wakes the freed bodies; let them come to rest before re-linking
+  // so the weld pins the settled pose.
+  await sleep(1200)
   a.results.length = 0
   a.constraintEvents.length = 0
   a.send({
@@ -971,7 +1033,12 @@ async function main(): Promise<void> {
     pointB: a.entities.get(rigB.id)!.pos,
   })
   await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
-  assert(a.results.at(-1)?.ok === true, 'persistent weld re-created')
+  assert(
+    a.results.at(-1)?.ok === true,
+    `persistent weld re-created (${JSON.stringify(a.results.at(-1))} A=${JSON.stringify(
+      a.entities.get(rigA.id)?.pos,
+    )} B=${JSON.stringify(a.entities.get(rigB.id)?.pos)} me=${JSON.stringify(a.me?.pos)})`,
+  )
   await pollUntil(() => a.constraintEvents.some((e) => e.kind === 'weld' && e.active))
   const persistedWeldId = a.constraintEvents.find((e) => e.kind === 'weld' && e.active)?.id ?? ''
   assert(persistedWeldId, 'persistent weld id captured')

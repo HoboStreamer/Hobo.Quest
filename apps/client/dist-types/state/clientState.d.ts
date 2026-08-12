@@ -51,9 +51,12 @@ export interface ClientStateEvents {
     hunger: number
     thirst: number
     stamina: number
+    temp: number
+    statuses: string[]
     died?: boolean
   }
   timeSync: number
+  weather: string
   container: {
     id: string
     size: number
@@ -107,9 +110,13 @@ export declare class ClientState {
     hunger: number
     thirst: number
     stamina: number
+    temp: number
+    statuses: string[]
   }
   /** Shared world clock (fraction of the day cycle). */
   dayFraction: number
+  /** Authoritative weather (rendering + prompts). */
+  weather: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog'
   apply(msg: ServerMessage): void
   countOf(defId: string): number
   /** Item def id in the active hotbar slot (null when holstered). */

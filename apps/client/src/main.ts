@@ -300,7 +300,10 @@ async function start(): Promise<void> {
         }
       })()
     }
-    if (msg.t === 'time') environment.setDayFraction(msg.frac)
+    if (msg.t === 'time') {
+      environment.setDayFraction(msg.frac)
+      environment.setWeather(msg.weather)
+    }
     if (msg.t === 'snap') {
       player.onSnapshot(msg)
       view.onSnapshot(msg, performance.now() / 1000)
@@ -450,8 +453,10 @@ async function start(): Promise<void> {
       input.shiftHeld,
     )
 
-    // Underwater: dense teal fog while the camera is submerged.
+    // Underwater: dense teal fog while the camera is submerged (weather
+    // haze yields via environment.underwater).
     const submerged = player.camera.position.y < WATER_LEVEL
+    environment.underwater = submerged
     if (submerged !== wasSubmerged) {
       wasSubmerged = submerged
       if (submerged) {

@@ -663,6 +663,22 @@ input {
   align-items: center;
   gap: 6px;
 }
+.vital-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 0;
+}
+.status-chip {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: #e8edf2;
+  background: rgba(10, 14, 18, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+  padding: 1px 6px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
 .vital span {
   width: 38px;
   font-size: 10px;

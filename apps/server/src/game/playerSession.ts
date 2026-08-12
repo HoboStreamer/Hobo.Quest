@@ -4,8 +4,8 @@ import type { Inventory, SkillSet } from '@hobo/gameplay'
 import {
   CraftQueue,
   createMoveState,
-  createStats,
   eyeOffsetFor,
+  normalizeStats,
   type PlayerMoveState,
   type SurvivalStats,
 } from '@hobo/gameplay'
@@ -108,7 +108,7 @@ export interface SessionInit {
   skills: SkillSet
   friends: Set<string>
   appearance: Appearance
-  stats?: SurvivalStats | undefined
+  stats?: Partial<SurvivalStats> | undefined
   content: ContentRegistry
   send(text: string): void
   closeConnection(code: number, reason: string): void
@@ -135,7 +135,7 @@ export function createSession(init: SessionInit): PlayerSession {
     holstered: false,
     held: null,
     grabbing: false,
-    stats: init.stats ?? createStats(),
+    stats: normalizeStats(init.stats),
     statsDirty: true,
     openContainer: null,
     fallVy: 0,

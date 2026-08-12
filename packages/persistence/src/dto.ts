@@ -1,4 +1,4 @@
-import type { InventoryDto, SkillsDto } from '@hobo/gameplay'
+import type { InventoryDto, SkillsDto, SurvivalStats } from '@hobo/gameplay'
 import type { Appearance } from '@hobo/protocol'
 
 /**
@@ -37,8 +37,9 @@ export interface PlayerDto {
   appearance: Appearance | null
   /** Character slot under this account token (0..2, MMO-style). */
   charSlot: number
-  /** Survival vitals; null for players from before the survival system. */
-  stats: { health: number; hunger: number; thirst: number; stamina: number } | null
+  /** Survival vitals; null/partial rows predate newer fields — the loader
+   * normalizes (see @hobo/gameplay normalizeStats). */
+  stats: Partial<SurvivalStats> | null
   updatedAt: number
 }
 

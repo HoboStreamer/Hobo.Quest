@@ -40,6 +40,10 @@ export type ConstraintDesc =
       anchorB: Vec3
       /** Max anchor separation; the rope is slack below it. */
       length: number
+      /** Pair collision (default true). Disable when a rigid joint already
+       * links the pair — mixed collision flags on overlapped bodies store
+       * explosive depenetration energy. */
+      collision?: boolean
     }
   | {
       type: 'hinge'
@@ -76,6 +80,8 @@ export type ConstraintDesc =
       restLength: number
       stiffness: number
       damping: number
+      /** Pair collision (default true); see rope. */
+      collision?: boolean
     }
 
 /** Collision filter layers (bitmask). */

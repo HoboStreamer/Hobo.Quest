@@ -97,7 +97,7 @@ export interface SessionInit {
   skills: SkillSet
   friends: Set<string>
   appearance: Appearance
-  stats?: SurvivalStats | undefined
+  stats?: Partial<SurvivalStats> | undefined
   content: ContentRegistry
   send(text: string): void
   closeConnection(code: number, reason: string): void

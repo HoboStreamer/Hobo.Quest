@@ -35,6 +35,9 @@ import type { WaterMaterial } from '@babylonjs/materials/water/waterMaterial.js'
 
 /** Full day/night cycle length (seconds of real time). */
 const DAY_SECONDS = 1200
+// Scene fog mode constants (Scene is imported type-only here).
+const FOGMODE_NONE = 0
+const FOGMODE_EXP2 = 2
 
 export class Environment {
   readonly sun: DirectionalLight
@@ -136,6 +139,33 @@ export class Environment {
     this.targetT = frac * DAY_SECONDS
   }
 
+  /** Server-authoritative weather: light/haze/cloud response (render only). */
+  private weather: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog' = 'clear'
+  /** True while the weather system owns scene fog (vs the underwater look). */
+  private ownsFog = false
+  /** Set by main each frame; underwater fog wins over weather haze. */
+  underwater = false
+  private weatherDim = 0
+  private weatherDimTarget = 0
+  private weatherHaze = 0
+  private weatherHazeTarget = 0
+  private weatherCloud = 0
+  private weatherCloudTarget = 0
+
+  setWeather(kind: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog'): void {
+    this.weather = kind
+    const look = {
+      clear: { dim: 0, haze: 0, cloud: 0 },
+      cloudy: { dim: 0.3, haze: 0.15, cloud: 0.7 },
+      rain: { dim: 0.5, haze: 0.35, cloud: 1 },
+      storm: { dim: 0.7, haze: 0.5, cloud: 1 },
+      fog: { dim: 0.35, haze: 1, cloud: 0.5 },
+    }[kind]
+    this.weatherDimTarget = look.dim
+    this.weatherHazeTarget = look.haze
+    this.weatherCloudTarget = look.cloud
+  }
+
   /** Advance time of day; call once per frame. */
   update(dt: number, cameraPos: Vector3): void {
     this.t = (this.t + dt) % DAY_SECONDS
@@ -161,21 +191,44 @@ export class Environment {
     this.skyMat.turbidity = 4.5 + dusk * 5
     this.skyMat.cameraOffset.y = cameraPos.y
 
-    // Light curves: warm days, brief amber dusk, blue moonlit nights.
+    // Weather eases in over a few seconds; abrupt snaps read as bugs.
+    const blend = Math.min(1, dt * 0.35)
+    this.weatherDim += (this.weatherDimTarget - this.weatherDim) * blend
+    this.weatherHaze += (this.weatherHazeTarget - this.weatherHaze) * blend
+    this.weatherCloud += (this.weatherCloudTarget - this.weatherCloud) * blend
+
+    // Light curves: warm days, brief amber dusk, blue moonlit nights —
+    // dimmed under weather.
     const day = Math.max(0, elevation)
     const night = Math.max(0, -elevation)
-    this.sun.intensity = day * 1.25 + night * 0.12 + 0.03
+    const dim = 1 - this.weatherDim * 0.65
+    this.sun.intensity = (day * 1.25 + night * 0.12 + 0.03) * dim
     this.sun.diffuse.set(
       1 - night * 0.35,
       0.96 - dusk * 0.22 - night * 0.3,
       0.88 - dusk * 0.4 - night * 0.05,
     )
-    this.hemi.intensity = 0.34 + day * 0.5
+    this.hemi.intensity = (0.34 + day * 0.5) * (1 - this.weatherDim * 0.35)
     this.hemi.diffuse.set(1 - night * 0.25, 1 - night * 0.2, 1)
 
-    // Clouds drift, and fade out at night (they'd glow unrealistically).
+    // Weather haze: distance fog that thickens with fog/storm. Underwater
+    // fog (main.ts) always wins while submerged.
+    if (this.underwater) {
+      this.ownsFog = false
+    } else if (this.weatherHaze > 0.02) {
+      this.scene.fogMode = FOGMODE_EXP2
+      this.scene.fogDensity = this.weatherHaze * 0.028
+      const fogTint = 0.55 * (0.35 + day * 0.65)
+      this.scene.fogColor.set(fogTint, fogTint * 1.05, fogTint * 1.12)
+      this.ownsFog = true
+    } else if (this.ownsFog) {
+      this.scene.fogMode = FOGMODE_NONE
+      this.ownsFog = false
+    }
+
+    // Clouds drift, thicken with weather, and fade out at night.
     this.clouds.rotation.y += dt * 0.0025
-    this.cloudMat.alpha = 0.55 * Math.min(1, 0.15 + day * 1.4)
+    this.cloudMat.alpha = (0.55 + this.weatherCloud * 0.4) * Math.min(1, 0.15 + day * 1.4)
 
     // Moon opposite the sun, visible once the sun is low.
     this.moon.position.copyFrom(cameraPos).addInPlace(dir.scale(820))

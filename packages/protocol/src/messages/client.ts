@@ -216,6 +216,14 @@ export const ClientContainerMoveSchema = z.object({
   /** 'in': player slot -> container; 'out': container slot -> player. */
   dir: z.enum(['in', 'out']),
   slot: z.number().int().min(0).max(63),
+  /** When present, split: move only `count` items from the stack. */
+  count: z.number().int().positive().max(9999).optional(),
+})
+
+/** Compact + sort an open container (merges partial stacks, orders by item). */
+export const ClientContainerSortSchema = z.object({
+  t: z.literal('container_sort'),
+  target: z.string().max(32),
 })
 
 export const ClientMessageSchema = z.union([
@@ -238,6 +246,7 @@ export const ClientMessageSchema = z.union([
   ClientTradeSchema,
   ClientContainerOpenSchema,
   ClientContainerMoveSchema,
+  ClientContainerSortSchema,
 ])
 
 export type ClientHello = z.infer<typeof ClientHelloSchema>
@@ -258,4 +267,5 @@ export type ClientDrink = z.infer<typeof ClientDrinkSchema>
 export type ClientTrade = z.infer<typeof ClientTradeSchema>
 export type ClientContainerOpen = z.infer<typeof ClientContainerOpenSchema>
 export type ClientContainerMove = z.infer<typeof ClientContainerMoveSchema>
+export type ClientContainerSort = z.infer<typeof ClientContainerSortSchema>
 export type ClientMessage = z.infer<typeof ClientMessageSchema>

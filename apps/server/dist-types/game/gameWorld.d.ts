@@ -98,6 +98,8 @@ export declare class GameWorld {
   /** True when a constraint of this type already links the pair. */
   hasConstraint(a: EntityId, b: EntityId, type: ConstraintType): boolean
   constraintCountFor(id: EntityId): number
+  /** A weld/hinge/axis/slider/motor (collision-off joint) links the pair. */
+  private pairHasRigidJoint
   get constraintCount(): number
   /**
    * Creates a validated constraint between two props. Params must already

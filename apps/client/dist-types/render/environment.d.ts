@@ -24,6 +24,19 @@ export declare class Environment {
   attachCamera(camera: Camera): void
   /** Sync toward the server's shared day fraction (smoothed, no sun jumps). */
   setDayFraction(frac: number): void
+  /** Server-authoritative weather: light/haze/cloud response (render only). */
+  private weather
+  /** True while the weather system owns scene fog (vs the underwater look). */
+  private ownsFog
+  /** Set by main each frame; underwater fog wins over weather haze. */
+  underwater: boolean
+  private weatherDim
+  private weatherDimTarget
+  private weatherHaze
+  private weatherHazeTarget
+  private weatherCloud
+  private weatherCloudTarget
+  setWeather(kind: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog'): void
   /** Advance time of day; call once per frame. */
   update(dt: number, cameraPos: Vector3): void
 }

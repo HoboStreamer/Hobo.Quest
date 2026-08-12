@@ -39,16 +39,37 @@ Completed:       Stage 1 audit + baseline; Stage 2 sandbox depth:
                  - metrics: constraints + constraintIslands; constraint
                    stress smoke (200 props/370 welds settle, sleeping steps
                    ~1.6ms, impact wakes 15, re-settles)
-Tests:           649 unit tests pass (was 634; +15 constraint domain;
-                 persistence tests extended in place); constraintSmoke.ts
-                 (physics) OK; sliceTest extended with rigging + prop-
-                 health phases + constraint restart persistence + hostile
-                 inputs — all green; audit:editor green
-Remaining:       Stages 3-13 (see ROADMAP.md)
-Next exact step: Stage 3 — container domain module (shared by boxes/
-                 machines/vehicles/merchants), equipment metadata,
-                 temperature + status effects, server environment state
-                 (time/weather)
+                 STAGE 3 (item/container/survival depth):
+                 - container domain module in @hobo/gameplay (add/take/
+                   move/split/sort/canFit/transfer on the shared slot-array
+                   shape) — gameServer refactored onto it; container_move
+                   gains count (split), new container_sort; client Sort
+                   button + right-click-half in the storage panel
+                 - server-authoritative environment (@hobo/gameplay
+                   environment): 20-min day clock + markov weather
+                   (clear/cloudy/rain/storm/fog) + ambient temperature
+                   curve; persisted in meta (env_time/env_weather);
+                   time message now carries weather; broadcast on change
+                 - survival v2: bodyTemp (drift bands from EFFECTIVE temp =
+                   ambient + campfire heat − wetness), timed status-effect
+                   framework (wet/cold/freezing/overheated/well_fed/
+                   bleeding) with structural consequences (stamina regen,
+                   thirst rate, hp drain, regen boost); eat() big meals
+                   apply well_fed; normalizeStats migrates old saves
+                 - stats message carries temp + statuses; HUD shows temp +
+                   status chips; weather renders as light dim + fog haze +
+                   cloud thickening (underwater fog still wins)
+                 - physics fix: rope/spring collision flag; a rigid joint
+                   on the same pair turns soft-joint collision off
+                   (mixed flags on overlapped bodies exploded on cut)
+Tests:           669 unit tests pass (+8 containers, +4 environment, +8
+                 survival); constraintSmoke OK; sliceTest extended:
+                 temp/status/weather replication, container sort + split,
+                 rigging explosion regression — all green; audit:editor OK
+Remaining:       Stages 4-13 (see ROADMAP.md)
+Next exact step: Stage 4 — data-driven crops (several, stages/water/
+                 regrow), farming props + logical water, machine
+                 production (inputs→time→outputs), power/fuel foundations
 ```
 
 ## Architecture facts (verified, load-bearing)
@@ -146,14 +167,14 @@ Next exact step: Stage 3 — container domain module (shared by boxes/
 
 ### Containers
 
-- **Implemented (basic).** `container` capability (storage box 12, supply
-  crate 6); open/move in/out with range (4.5 m) + trust validation; live
-  push to all viewers; persistence in entity state JSON; stocked containers
-  refuse pickup.
-- Missing: container-to-container transfer, quick transfer, split/sort/
-  filter in container UI, containers as machine/vehicle interfaces. The
-  container operations bypass the Inventory class (ad-hoc array code in
-  gameServer.ts containerAdd) — should be unified into a domain module.
+- **Implemented (Stage 3).** Shared container domain in @hobo/gameplay
+  (containerAdd/Take/Move/Sort/CanFit/Count/Transfer on the slot-array
+  shape) used by storage boxes, supply crates and — coming — machine
+  inputs/outputs, vehicle trunks, merchant stock. Server ops: open/move
+  (with split count)/sort, range + trust validated, live-pushed to every
+  viewer. Client: click to move, right-click for half, Sort button.
+- container-to-container transfer exists in the domain (containerTransfer)
+  and gets its first server consumer with machines (Stage 4).
 
 ### Crafting / workstations
 
@@ -168,12 +189,16 @@ Next exact step: Stage 3 — container domain module (shared by boxes/
 
 ### Survival
 
-- **Implemented (foundation).** Health/hunger/thirst/stamina, 1 Hz tick,
-  starvation/regen, sprint stamina, eat/drink (world water + food items),
-  fall damage, death → city respawn (keeps inventory!), void rescue.
-- Missing: temperature/wetness/shelter, status effects framework, rest,
-  death inventory-drop semantics (currently nothing drops — relevant to
-  extraction risk design later).
+- **Implemented (Stage 3 depth).** Health/hunger/thirst/stamina + body
+  temperature with legible bands: EFFECTIVE temp = ambient (day curve +
+  weather) + campfire warmth − wetness; below 2°C effective the body
+  chills → cold (half stamina regen) → freezing (hp drain); above 32°C it
+  overheats (thirst ×2.5). Timed status framework (wet/cold/freezing/
+  overheated/well_fed/bleeding) with per-status dps + structural rules;
+  big meals apply well_fed (regen boost). Old saves normalized.
+- Death → city respawn keeping inventory (extraction stage will formalize
+  at-risk vs secured semantics). No rest mechanic yet; no clothing
+  insulation yet (armor/equipment arrives Stage 5).
 
 ### Farming
 
@@ -248,9 +273,11 @@ Next exact step: Stage 3 — container domain module (shared by boxes/
 
 ### World clock / environment
 
-- **Partial.** 20-min day cycle anchored to server uptime (dayFraction),
-  broadcast every 10 s; client renders sun/moon/sky/lamps. NOT persisted,
-  no weather, no gameplay effect (light only).
+- **Implemented (Stage 3).** Server-authoritative EnvironmentState:
+  20-min day cycle + weighted-transition weather spells (clear/cloudy/
+  rain/storm/fog), ambient temperature curve consumed by survival (and by
+  farming moisture in Stage 4). Persisted in meta; time message carries
+  weather; client renders light dim, fog haze, cloud thickening.
 
 ### UI
 

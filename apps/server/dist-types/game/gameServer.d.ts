@@ -30,6 +30,8 @@ export declare class GameServer {
   /** Body excluded from the current movement sweep (the moving player's own). */
   private sweepSelf
   private lastFlushTick
+  /** Authoritative world environment: clock, weather, temperature. */
+  private readonly env
   constructor(
     config: ServerConfig,
     world: GameWorld,
@@ -47,8 +49,6 @@ export declare class GameServer {
   onMessage(conn: GameConnection, msg: ClientMessage): void
   /** Range + prop-protection gate shared by all container operations. */
   private containerAccessDenied
-  /** Adds to a container with stacking; returns how many items fit. */
-  private containerAdd
   private sendContainer
   /** Live supply crate (one at a time), plus its expiry tick. */
   private supplyCrateId
@@ -60,7 +60,7 @@ export declare class GameServer {
    * crate despawns once emptied (or after 6 minutes).
    */
   private tickSupplyDrops
-  private dayFraction
+  private timeWire
   onDisconnect(conn: GameConnection): void
   private handleHello
   private handlePhysgun
