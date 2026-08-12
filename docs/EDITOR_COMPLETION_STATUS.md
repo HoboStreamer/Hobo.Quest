@@ -13,16 +13,16 @@ Do not mark an item done here without the audit or a test proving it.
 
 ## Gate status (verified this session, not assumed)
 
-| Gate                   | Command                                              | Status                      |
-| ---------------------- | ---------------------------------------------------- | --------------------------- |
-| Types                  | `pnpm typecheck`                                     | green                       |
-| Unit                   | `pnpm test`                                          | green — 233 tests, 21 files |
-| Lint                   | `pnpm lint`                                          | green                       |
-| Format                 | `pnpm format:check`                                  | green                       |
-| Build                  | `pnpm build`                                         | green                       |
-| Editor E2E             | `pnpm test:editor`                                   | green — 55/55               |
+| Gate                   | Command                                              | Status                                          |
+| ---------------------- | ---------------------------------------------------- | ----------------------------------------------- |
+| Types                  | `pnpm typecheck`                                     | green                                           |
+| Unit                   | `pnpm test`                                          | green — 233 tests, 21 files                     |
+| Lint                   | `pnpm lint`                                          | green                                           |
+| Format                 | `pnpm format:check`                                  | green                                           |
+| Build                  | `pnpm build`                                         | green                                           |
+| Editor E2E             | `pnpm test:editor`                                   | green — 55/55                                   |
 | Server slice           | `node --import tsx apps/server/scripts/sliceTest.ts` | green (walk step is timing-flaky; reruns clean) |
-| **Architecture audit** | `pnpm audit:editor`                                  | **RED — 4 of 8 green**      |
+| **Architecture audit** | `pnpm audit:editor`                                  | **RED — 4 of 8 green**                          |
 
 Sizes: `apps/client/src/editor/main.ts` **163 KB** (target ≤ 25 KB),
 `apps/client/editor.html` **23 KB** with an 11 KB inline `<style>` block
@@ -36,16 +36,16 @@ in `vitest.config.ts`.
 
 ## Audit detail
 
-| Audit check                                      | State                    |
-| ------------------------------------------------ | ------------------------ |
-| scans a meaningful number of files               | PASS                     |
-| no reverse v2 → v1 runtime projection            | PASS                     |
-| no special "main terrain" concept                | **PASS** (milestone 2)   |
-| no Babylon TerrainMaterial for authored surfaces | **PASS** (milestone 2)   |
-| no parallel multi-selection arrays               | FAIL                     |
-| no UndoOp/applyOp history mechanism              | FAIL                     |
-| main.ts is boot/wiring (< 25 KB)                 | FAIL — 163 KB            |
-| editor.html has no giant inline `<style>`        | FAIL — 11 KB block       |
+| Audit check                                      | State                  |
+| ------------------------------------------------ | ---------------------- |
+| scans a meaningful number of files               | PASS                   |
+| no reverse v2 → v1 runtime projection            | PASS                   |
+| no special "main terrain" concept                | **PASS** (milestone 2) |
+| no Babylon TerrainMaterial for authored surfaces | **PASS** (milestone 2) |
+| no parallel multi-selection arrays               | FAIL                   |
+| no UndoOp/applyOp history mechanism              | FAIL                   |
+| main.ts is boot/wiring (< 25 KB)                 | FAIL — 163 KB          |
+| editor.html has no giant inline `<style>`        | FAIL — 11 KB block     |
 
 ---
 
