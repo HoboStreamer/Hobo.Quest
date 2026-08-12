@@ -1,3 +1,4 @@
+import './editor.css'
 import { Engine } from '@babylonjs/core/Engines/engine.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera.js'
