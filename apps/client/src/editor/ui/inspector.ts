@@ -351,6 +351,15 @@ export class Inspector {
 
     const { fields, kinds } = commonFields(this.doc, ids)
     this.specs = fields
+    // Every selected id has gone (an undo removed them): show the empty
+    // state rather than asking for the kind of something that is not there.
+    if (kinds.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'inspector-empty'
+      empty.textContent = 'Nothing selected'
+      this.root.append(empty)
+      return
+    }
 
     const title = document.createElement('div')
     title.className = 'inspector-title'

@@ -145,6 +145,7 @@ export const ACTIONS: ActionDef[] = [
   // UI
   { id: 'ui.sidebar', label: 'Toggle sidebar', group: 'ui', default: { code: 'Backquote' } },
   { id: 'ui.settings', label: 'Settings', group: 'ui', default: { code: 'F2' } },
+  { id: 'tool.zone', label: 'Zone tool', group: 'tools', default: { code: 'Digit0' } },
   {
     id: 'transform.worldLocal',
     label: 'World / Local space',

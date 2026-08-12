@@ -6,7 +6,7 @@
  * main.ts so adding a placeable is a data edit, not surgery on boot().
  */
 import type { StaticBody } from '@hobo/content'
-export type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select' | 'face' | 'light'
+export type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select' | 'face' | 'light' | 'zone'
 export declare const newId: (prefix: string) => string
 export interface Placeable {
   name: string

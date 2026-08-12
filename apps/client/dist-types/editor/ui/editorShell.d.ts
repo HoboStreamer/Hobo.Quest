@@ -16,6 +16,8 @@ export interface ShellElements {
   brush: HTMLElement
   placement: HTMLElement
   face: HTMLElement
+  light: HTMLElement
+  zone: HTMLElement
   resizers: {
     outliner: HTMLElement
     inspector: HTMLElement

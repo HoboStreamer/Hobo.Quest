@@ -7,7 +7,7 @@
  */
 import type { StaticBody } from '@hobo/content'
 
-export type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select' | 'face' | 'light'
+export type Tool = 'terrain' | 'paint' | 'entity' | 'mesh' | 'select' | 'face' | 'light' | 'zone'
 
 /** Session-stable id generator for map objects (never array positions). */
 let idCounter = 0

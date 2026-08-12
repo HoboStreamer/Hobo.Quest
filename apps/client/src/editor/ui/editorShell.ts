@@ -31,6 +31,8 @@ export interface ShellElements {
   brush: HTMLElement
   placement: HTMLElement
   face: HTMLElement
+  light: HTMLElement
+  zone: HTMLElement
   resizers: { outliner: HTMLElement; inspector: HTMLElement; dock: HTMLElement }
   collapse: Record<'outliner' | 'inspector' | 'dock', HTMLButtonElement>
 }
@@ -43,6 +45,7 @@ export const TOOLS: [Tool, string, string][] = [
   ['paint', '🖌', 'Paint'],
   ['face', '▦', 'Face'],
   ['light', '💡', 'Light'],
+  ['zone', '🟦', 'Zone'],
 ]
 
 const el = <K extends keyof HTMLElementTagNameMap>(
@@ -219,6 +222,28 @@ export function buildShell(mount: HTMLElement, canvas: HTMLCanvasElement): Shell
     ),
     labelled('Snap', slider('snap', 0, 8, 0.25, 1)),
   )
+  // Light and Zone creation controls.
+  const light = el('div', 'strip', 'light-strip')
+  light.append(
+    labelled(
+      'Type',
+      select('light-type', [
+        { value: 'point', label: 'Point' },
+        { value: 'spot', label: 'Spot' },
+        { value: 'directional', label: 'Directional' },
+        { value: 'hemi', label: 'Hemispheric' },
+        { value: 'rect', label: 'Rect area' },
+      ]),
+    ),
+    labelled('Colour', colorInput('light-color', '#ffeecc')),
+    labelled('Intensity', slider('light-intensity', 0.1, 12, 0.1, 3)),
+  )
+  const zone = el('div', 'strip', 'zone-strip')
+  zone.append(
+    labelled('Size', slider('zone-size', 2, 80, 1, 16)),
+    labelled('Height', slider('zone-height', 2, 60, 1, 12)),
+  )
+
   const face = el('div', 'strip', 'face-strip')
   const faceInfo = el('span', 'face-info', 'face-info')
   const faceApply = el('button', 'mini', 'f-apply')
@@ -232,7 +257,7 @@ export function buildShell(mount: HTMLElement, canvas: HTMLCanvasElement): Shell
     faceApply,
     faceInfo,
   )
-  viewport.append(canvas, brush, placement, face)
+  viewport.append(canvas, brush, placement, face, light, zone)
 
   // ── Dock ────────────────────────────────────────────────────────────
   const dock = el('section', 'panel dock-panel')
@@ -311,6 +336,8 @@ export function buildShell(mount: HTMLElement, canvas: HTMLCanvasElement): Shell
     brush,
     placement,
     face,
+    light,
+    zone,
     resizers,
     collapse: {
       outliner: outlinerCollapse,

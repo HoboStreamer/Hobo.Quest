@@ -166,6 +166,14 @@ type Probe = {
   paintedSurfaces: (id: string) => Record<string, { layers: number; hasMask: boolean }>
   maskUploadCount: () => number
   save: () => Promise<void>
+  zoneOf: (id: string) => {
+    min: number[]
+    max: number[]
+    rules: { pvp: boolean; build: boolean; physgun: boolean }
+  } | null
+  setLightType: (t: string) => void
+  lightSummaries: () => { type: string; ok: boolean; hasAngle: boolean }[]
+  setProperty: (ids: string[], key: string, value: unknown) => void
   dirty: boolean
   groupMove: (dx: number, dy: number, dz: number) => void
 }
@@ -966,6 +974,78 @@ section('N. v1 migration smoke — old maps still load')
     },
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+section('T. Zone and Light tools create real objects')
+await withMap(
+  PORT + 7,
+  { v: 2, terrains: [], statics: [], nodes: [], props: [], lights: [], zones: [] },
+  async (pg) => {
+    // Both tools must work on an EMPTY map, where a placement ray hits
+    // nothing at all.
+    await probeOf(pg, (p) => p.setToolByName('zone'))
+    await pg.waitForTimeout(200)
+    await pg.mouse.click(760, 430)
+    await pg.waitForTimeout(400)
+
+    let counts = await probeOf(pg, (p) => p.objectCounts())
+    ok('the Zone tool creates a zone', counts['zones'] === 1, counts)
+    const zoneId = (await probeOf(pg, (p) => p.selectionIds()))[0]
+    ok('and selects it', zoneId?.startsWith('zone-') === true, zoneId)
+
+    const zone = await probeArgs(pg, ([p, id]) => p.zoneOf(id as unknown as string), zoneId!)
+    ok('with a real volume', zone !== null && zone.max[1] > zone.min[1], zone)
+    ok('and permissive default rules', zone?.rules.pvp === true, zone?.rules)
+
+    // Scaling the gizmo resizes the VOLUME, not just a mesh.
+    await probeArgs(
+      pg,
+      ([p, id]) => p.setProperty([id as unknown as string], 'rules.pvp', false),
+      zoneId!,
+    )
+    await pg.waitForTimeout(250)
+    const edited = await probeArgs(pg, ([p, id]) => p.zoneOf(id as unknown as string), zoneId!)
+    ok('the Inspector edits its rules', edited?.rules.pvp === false, edited?.rules)
+
+    await probeOf(pg, (p) => p.undo())
+    await pg.waitForTimeout(250)
+    const undone = await probeArgs(pg, ([p, id]) => p.zoneOf(id as unknown as string), zoneId!)
+    ok('and the rule change undoes', undone?.rules.pvp === true, undone?.rules)
+
+    // ── Lights ────────────────────────────────────────────────────────
+    await probeOf(pg, (p) => p.setToolByName('light'))
+    await pg.waitForTimeout(200)
+    await pg.mouse.click(700, 400)
+    await pg.waitForTimeout(400)
+    counts = await probeOf(pg, (p) => p.objectCounts())
+    ok('the Light tool creates a point light', counts['lights'] === 1, counts)
+
+    await probeOf(pg, (p) => p.setLightType('spot'))
+    await pg.mouse.click(820, 460)
+    await pg.waitForTimeout(400)
+    counts = await probeOf(pg, (p) => p.objectCounts())
+    ok('and a spot light', counts['lights'] === 2, counts)
+
+    const lights = await probeOf(pg, (p) => p.lightSummaries())
+    ok(
+      'each light has a usable direction or range',
+      lights.every((l) => l.ok),
+      lights,
+    )
+    ok(
+      'the spot got a cone and shadows',
+      lights.some((l) => l.type === 'spot' && l.hasAngle),
+      lights,
+    )
+
+    await probeOf(pg, (p) => p.undo())
+    await pg.waitForTimeout(250)
+    ok(
+      'placing a light is one undoable step',
+      (await probeOf(pg, (p) => p.objectCounts()))['lights'] === 1,
+    )
+  },
+)
 
 // ════════════════════════════════════════════════════════════════════════
 section('S. Painting past terrain: box faces, cylinder, sphere')

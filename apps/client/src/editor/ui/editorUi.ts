@@ -236,6 +236,8 @@ export function createEditorUi(opts: EditorUiOptions): EditorUi {
     shell.brush.classList.toggle('on', tools.is('terrain') || tools.is('paint'))
     shell.placement.classList.toggle('on', tools.is('mesh') || tools.is('entity'))
     shell.face.classList.toggle('on', tools.is('face'))
+    shell.light.classList.toggle('on', tools.is('light'))
+    shell.zone.classList.toggle('on', tools.is('zone'))
     refreshStatus()
   }
 

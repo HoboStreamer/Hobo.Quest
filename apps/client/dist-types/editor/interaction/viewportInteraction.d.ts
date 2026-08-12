@@ -29,6 +29,9 @@ export interface ViewportHandlers {
   onPaintStart: () => void
   onPaintMove: () => void
   onFacePick: (mode: SelectMode) => void
+  /** Light and Zone both create one object at the clicked point. */
+  onPlaceLight: () => void
+  onPlaceZone: () => void
   /** Frame update: hover highlight, brush cursor, placement preview. */
   onFrame: () => void
 }

@@ -32,6 +32,9 @@ export interface ViewportHandlers {
   onPaintStart: () => void
   onPaintMove: () => void
   onFacePick: (mode: SelectMode) => void
+  /** Light and Zone both create one object at the clicked point. */
+  onPlaceLight: () => void
+  onPlaceZone: () => void
   /** Frame update: hover highlight, brush cursor, placement preview. */
   onFrame: () => void
 }
@@ -120,6 +123,12 @@ export class ViewportInteraction {
         return
       case 'face':
         if (e.button === 0) handlers.onFacePick(selectModeOf(e))
+        return
+      case 'light':
+        if (e.button === 0) handlers.onPlaceLight()
+        return
+      case 'zone':
+        if (e.button === 0) handlers.onPlaceZone()
         return
       default: {
         // Select is also what "no tool" does: with nothing active you can

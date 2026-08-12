@@ -52,6 +52,8 @@ import { SelectionVisuals } from './selection/selectionVisuals.js'
 import { ToolManager } from './tools/toolManager.js'
 import { PlacementTool, objectForPlacement } from './tools/placementTool.js'
 import { sculptDab, toTerrainLocal, type SculptMode } from './tools/terrainTool.js'
+import { lightForPlacement, type LightType } from './tools/lightTool.js'
+import { zoneForPlacement } from './tools/zoneTool.js'
 import { EditorCameraController } from './viewport/editorCameraController.js'
 import { EditorViewRegistry } from './viewport/editorViewRegistry.js'
 import { GizmoController, type GizmoMode } from './viewport/gizmoController.js'
@@ -179,6 +181,13 @@ export async function bootEditor(): Promise<void> {
 
   const selection = new SelectionManager()
   const visuals = new SelectionVisuals(scene, views)
+  // Selection follows deletion. An undo that removes an object must not
+  // leave its id selected: the Inspector would then be asked to render the
+  // kind of something the document no longer has.
+  doc.subscribe((changes) => {
+    if (changes.some((c) => c.type === 'removed' || c.type === 'documentReplaced'))
+      selection.retain((id) => doc.has(id))
+  })
   const history = new CommandHistory<EditorDocument>(doc)
   const interaction = new InteractionController()
   const prefs = { current: readPreferences() }
@@ -605,6 +614,53 @@ export async function bootEditor(): Promise<void> {
     ui.refreshAll()
   }
 
+  // ── Light and Zone placement ────────────────────────────────────────
+  /** Where a creation click lands, falling back to the camera ray. */
+  const creationPoint = (): {
+    point: [number, number, number]
+    normal: [number, number, number]
+  } => {
+    const hit = viewport.pickPoint()
+    if (hit)
+      return {
+        point: [hit.point.x, hit.point.y, hit.point.z],
+        normal: [hit.normal.x, hit.normal.y, hit.normal.z],
+      }
+    // Empty map, or aimed at the sky: put it a sensible distance ahead so a
+    // click always produces something rather than silently nothing.
+    const ahead = camera.position.add(camera.getDirection(Vector3.Forward()).scale(18))
+    return { point: [ahead.x, Math.max(1, ahead.y), ahead.z], normal: [0, 1, 0] }
+  }
+
+  const placeLight = (): void => {
+    const { point, normal } = creationPoint()
+    const light = lightForPlacement({
+      type: (document.getElementById('light-type') as HTMLSelectElement).value as LightType,
+      color: (document.getElementById('light-color') as HTMLInputElement).value.toLowerCase(),
+      intensity: Number((document.getElementById('light-intensity') as HTMLInputElement).value),
+      point,
+      normal,
+    })
+    history.apply(addObject('light', light as never, `place ${light.type} light`))
+    selection.replace(light.id)
+    ui.refreshAll()
+    ui.setMessage(`💡 ${light.type} light placed`)
+  }
+
+  const placeZone = (): void => {
+    const { point } = creationPoint()
+    const zone = zoneForPlacement({
+      point,
+      size: Number((document.getElementById('zone-size') as HTMLInputElement).value),
+      height: Number((document.getElementById('zone-height') as HTMLInputElement).value),
+      taken: (id) => doc.has(id),
+    })
+    history.apply(addObject('zone', zone as never, 'create zone'))
+    selection.replace(zone.id)
+    ui.refreshAll()
+    ui.setMessage(`🟦 ${zone.name} created — scale it with the gizmo, set rules in the Inspector`)
+  }
+
   // ── Face tool ───────────────────────────────────────────────────────
   const pickFace = (mode: SelectMode): void => {
     const hit = viewport.pickPoint()
@@ -640,6 +696,8 @@ export async function bootEditor(): Promise<void> {
       onPaintMove: paintAt,
       onStrokeEnd: endStroke,
       onFacePick: pickFace,
+      onPlaceLight: placeLight,
+      onPlaceZone: placeZone,
       onFrame: () => undefined,
     },
   })
@@ -1127,6 +1185,20 @@ export async function bootEditor(): Promise<void> {
     },
     /** Paint at a screen point with the current brush, as a user drag does. */
     maskUploadCount: () => saveController.maskUploadCount(),
+    zoneOf: (id: string) => {
+      const z = doc.get(id, 'zone')
+      return z ? { min: [...z.min], max: [...z.max], rules: { ...z.rules } } : null
+    },
+    setLightType: (t: string) => {
+      ;(document.getElementById('light-type') as HTMLSelectElement).value = t
+    },
+    lightSummaries: () =>
+      doc.listByKind('light').map((l) => ({
+        type: l.type,
+        // A light with neither reach nor direction lights nothing.
+        ok: (l.range ?? 0) > 0 || l.dir !== undefined || l.type === 'hemi',
+        hasAngle: l.angle !== undefined,
+      })),
     save: () => saveController.save(),
   }
 }
