@@ -1,6 +1,6 @@
 # Map editor completion — tracked status
 
-**Branch:** `editor-completion` · **Last commit:** `630a880`
+**Branch:** `editor-completion` · **Last commit:** `f389131`
 
 This is the live checklist for the editor-completion program. It is updated at
 the end of every working session. **The authoritative machine-checked version
@@ -105,8 +105,9 @@ by deleting the exclude line in `vitest.config.ts`.
 - [ ] snap settings UI
 - [ ] `editor.html` free of inline CSS
 - [ ] `main.ts` a small boot/wiring layer
-- [ ] docs describe reality (`docs/MAP_EDITOR.md` still describes the wire as
-      v1-projected, which is now wrong — **fix this early next session**)
+- [ ] docs fully describe reality — MAP_EDITOR.md now matches for the v2 wire
+      and carries a Status section, but it will need updating again as each
+      remaining phase lands
 
 ---
 
