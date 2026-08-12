@@ -1,84 +1,163 @@
 # Roadmap
 
-## Phase 0 — Vertical slice ✅ (current)
+Status legend: **done** = playable and tested, **partial** = real but
+incomplete, **next** = current development target, **future** = not started.
+A system is never "done" because a schema exists — it must have at least one
+real playable vertical implementation.
 
-Proves every major system cooperates end-to-end (verified by
-`apps/server/scripts/sliceTest.ts` on every change):
+See `docs/GAMEPLAY_DEVELOPMENT_STATUS.md` for the detailed per-system audit.
 
-- [x] Browser client connects to a dedicated authoritative server
-- [x] Babylon rendering (WebGPU/WebGL) of a test world from shared content defs
-- [x] Source-style kinematic movement (accel/air-strafe/friction/step-up),
-      fixed timestep, client prediction + server reconciliation
-- [x] Multiple clients see each other (interest-managed replication)
-- [x] Havok props with sleep-aware snapshotting
-- [x] Gathering from resource nodes (range-validated)
-- [x] Inventory (stacks, moves, splits) + hotbar, server-authoritative
-- [x] Data-driven crafting with craft time + workstation gating
-- [x] Crafted placeable props: inventory item → validated placement → physics entity
-- [x] Physgun: grab / drag / rotate / push-pull / freeze / unfreeze
-- [x] Persistence: world entities + players survive server restart
-- [x] Zone rule system (safe-pad test zone)
-- [x] Structured logs, /metrics, /healthz
+## Phase 0 — Vertical slice ✅ done
 
-## Phase 0.5 — City, skills, tools, protection ✅
+Proved every major system cooperates end-to-end (verified by
+`apps/server/scripts/sliceTest.ts` on every change): authoritative server,
+Babylon client (WebGPU/WebGL), Source-style predicted movement, interest-
+managed replication, Havok props with sleep-aware snapshotting, gathering,
+inventory, data-driven crafting, physgun building, persistence across
+restart, zone rules, logs//metrics//healthz.
 
-- [x] Hoboville world: walled safe city (spawn/plaza/buildings), forest,
-      quarry, scrapyard; city zone forbids PvP/build/physgun
-- [x] Tool system: items carry a `tool` capability; the equipped hotbar item
-      decides primary fire (physgun starter kit, stone axe, stone pickaxe)
-- [x] Gathering professions: typed resource nodes (trees/deposits/piles) with
-      tool gating, hand-gather bootstrap piles, timed respawn (world never
-      runs dry)
-- [x] Skills: woodcutting, mining, scavenging, crafting, construction — XP
-      from gathering/crafting, level-gated recipes, skills UI
-- [x] Building content: walls, floors, beams, metal wall (skill-gated),
-      storage box, campfire — craft, place, physgun-position, freeze
-- [x] Prop protection: placed props are owner-locked; "trust" friends system
-      (persistent, works with offline owners)
-- [x] Physics constraint foundation (weld/lock) — engine + persistence ready,
-      no player-facing tool yet
+## Phase 0.5 — City, skills, tools, protection ✅ done
 
-## Phase 1 — Sandbox depth
+Hoboville safe city (map-authored, zone-enforced), tool capability system,
+gathering professions with respawning typed nodes, 6 skills with XP/levels/
+recipe gates, building content, prop protection with persistent trust,
+weld constraint foundation (engine + persistence — no player-facing tool).
 
-- Constraint tools: expose weld/rope/hinge/slider on top of the existing
-  constraint layer when a good UX presents itself (physics islands sleep as
-  units)
-- Container entities (crate inventory), item dropping/world pickup
-- Placement ghost preview + surface snapping improvements
-- Prop health/damage; harvesting tools with efficiency
-- Binary snapshot codec + delta compression once bandwidth measurements demand
+## Phase 0.75 — Survival & sandbox life ✅ done (was undocumented)
 
-## Phase 2 — World & survival
+Shipped after 0.5, ahead of the old roadmap: hunger/thirst/stamina/health
+vitals with eating/drinking, food items + campfire cooking, fall damage,
+death/respawn; melee PvP with weapon capability, knockback, zone gating;
+container props (storage box) with trusted access; hinged doors; planter
+farming prototype (berry seeds, timestamp growth); merchant trades (bottle
+caps); supply-drop crates (hardcoded event v1); day/night clock; guest IP
+identity + hobo.tools SSO ranks; map editor as a mature authoring subsystem
+with live world reconciliation.
 
-- Larger streamed world: server-side region partitioning behind the existing
-  interest-query seam; client chunk streaming; per-region persistence loading
-- Survival stats (hunger/thirst/temperature) as components + status effects
-- Farming: planters, growth via timestamp state transitions (no per-tick sim)
-- Day/night + environment
-- Safe city zone content: shops, storage, social hub (zone rules already exist)
+## Phase 1 — Sandbox depth 🔨 next (Stage 2)
 
-## Phase 3 — Economy & NPCs
+- Player-facing constraint toolset on a clean ConstraintDefinition/Record/
+  Service architecture: weld, rope, hinge, slider, spring, axis, motor
+- Constraint visuals (endpoints, ropes), two-click tool UX, unweld/cut
+- Constraint islands: settled structures sleep as units; island metrics
+- Placement ghost preview + optional surface/grid snapping (free placement
+  stays; modifier for precise unrestricted placement)
+- Physgun precision polish (snap angles, translation snap)
+- Prop health/damage/repair capability (melee + impact; zone-gated
+  destruction; repair materials; destroy loot)
+- Hostile-input tests for every new message
 
-- NPC framework: perception, behavior modules, simulation LOD (nearby = full
-  AI, distant = abstract state)
-- Merchants/dealers, reputation, underground production chains (generic
-  production/market systems — no hardcoded product)
-- Currency + trading, transactional inventory operations
+## Phase 2 — Item, container & survival depth (Stage 3)
 
-## Phase 4 — Extraction & progression
+- Container domain module shared by boxes/machines/vehicles/merchants;
+  quick transfer, split, sort; container-to-container
+- Equipment slots + stack metadata (durability, instances) where gameplay
+  needs it — no speculative fields
+- Temperature (environment/wetness/shelter/clothing/heat sources) with
+  understandable rules; generic timed status-effect framework
+- Server-authoritative environment state: time of day, weather
+  (clear/cloudy/rain/storm/fog), temperature — client renders, gameplay
+  consumes
 
-- Extraction events as reusable world events (window, capacity, contest, risk)
-- Skills: XP from gameplay, levels unlocking recipes/interactions
-- High-value dangerous regions, loot tables
+## Phase 3 — Farming, utilities & production (Stage 4)
 
-## Phase 5 — Scale
+- Data-driven crop definitions (several materially different crops:
+  stages, water/fertility needs, temperature ranges, regrow) — timestamp
+  progression, never per-tick
+- Irrigation/fertilizer/farm props via logical utility connections
+- Generic utility networks: power (producer/consumer/storage), fuel
+  (items), water (tanks/pipes/pumps) — cheap when sleeping
+- Machine production chains: inputs → machine + time (+power/fuel/water/
+  skill) → outputs; crop processing feeds the same crafting economy
 
-- Real auth (replace localStorage token; hobo.tools SSO is a candidate)
-- Workers for pathfinding/persistence batching; multi-region sharding options
-- Vehicles built from components on the constraint system
+## Phase 4 — Combat foundation (Stage 5)
+
+- Generic damage pipeline (source/target/type/amount/position/impulse);
+  blunt/cutting/projectile/explosive/environment/fall types; zone gating
+- Server-authoritative ranged weapons (fire intent → validate equipped/
+  ammo/cadence/direction → server raycast); small test weapon set
+- Armor/clothing damage reduction; bandage/medical consumables
+
+## Phase 5 — Spatial world foundation (Stage 6)
+
+- Uniform spatial hash replacing the linear interest scan and prop
+  proximity scans (workstations, shops); one index, many consumers
+- Region/cell activation concept (players, active NPCs, awake physics per
+  region) — the seam for simulation LOD and later streaming
+
+## Phase 6 — NPCs (Stage 7)
+
+- Server-authoritative NPC domain: composition capabilities (npc, health,
+  inventory, faction, perception, combat, merchant, job) — no subclass
+  towers
+- Archetypes: civilian, city guard, merchant, bandit/scavenger, wildlife
+  (content-defined loadout/behavior/loot/importance)
+- NavigationService boundary (request path/waypoints/repath/invalidation)
+- Modular perception: vision (distance/FOV/LOS), hearing (bounded sound
+  events from gameplay), threat
+- Behavior state modules (idle/wander/patrol/investigate/trade/guard/
+  chase/attack/retreat/return) — deterministic/testable
+- Simulation LOD tiers: full / simplified / abstract (no engine objects
+  far from players); persistence of abstract state
+
+## Phase 7 — Factions, reputation, economy (Stage 8)
+
+- Data-driven factions + relations; persistent player reputation with
+  thresholds (stock, prices, jobs, access)
+- Markets generalizing the fixed trade sheet (stock, restock, pricing,
+  reputation requirements) behind a transactional economy API
+- Production chains as player businesses, legal and underground, on the
+  same machinery; player specialization emerges from skills/machines/
+  geography — never class locks
+
+## Phase 8 — World events & extraction (Stage 9)
+
+- Generic server-owned event engine (scheduled/announced/active/
+  completed/cleanup); supply drops migrated onto it as proof
+- Extraction events: countdown, capacity, in-zone validation, contest
+  rules; explicit at-risk vs secured loot semantics owned by the server
+- High-risk regions via zone/event rules (better loot, hostile NPCs,
+  hazards)
+
+## Phase 9 — Progression & jobs (Stage 10)
+
+- Skills unlock capabilities (constraint tools, machines, crops,
+  components), not just recipes
+- Blueprint/discovery: persistent unlock state fed by skill, merchants,
+  jobs, found blueprints, dangerous regions, extraction, reputation
+- Job/contract foundation (deliver/gather/transport/kill/repair/escort)
+  with data-driven objectives and rewards
+
+## Phase 10 — Vehicles (Stage 11)
+
+- Modular vehicle prototype from the SAME item + physics + constraint
+  architecture: chassis/wheels/suspension/engine/seat/storage/lights
+- Assembly recognition + activation; server-authoritative driving; fuel;
+  cargo containers; damage/repair; persistence + replication
+
+## Phase 11 — Scale (Stage 12)
+
+- Region persistence/streaming when the authored world justifies it
+- Network measurement first (bytes/client, snapshot sizes, entity counts);
+  binary snapshot codec only when measurements demand it
+- Synthetic load tests: hundreds of sessions/props/constraints/NPCs —
+  hunting algorithmic scaling problems, not benchmark vanity
+
+## Phase 12 — Content & hardening (Stage 13)
+
+- Interconnected content web (forest→sawmill→lumber; mine→forge→
+  components; farm→processing→trade), geography with economic meaning
+- Cross-system acceptance scenario (farm → process → haul → job → combat
+  → extraction → sell → blueprint → restart-verified persistence)
+- Hostile-client test sweep across every network action
 
 ## Standing engineering rules
 
 - The slice test must stay green; new systems extend it
 - Content changes never require engine changes
 - No system may read another's internals — protocol/events/repositories only
+- The map editor is load-bearing infrastructure: run `pnpm audit:editor`
+  and `pnpm test:editor` when map/content schemas change
+- Plants, machines and networks progress by timestamp/state transition,
+  never per-tick simulation
+- Every new network action ships with hostile-input tests
