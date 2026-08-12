@@ -298,6 +298,13 @@ genuinely empty.
 - `canonicalizeMapFile` is key-order independent and drops `undefined`, so the
   revision hash is stable.
 
+### The wire format
+
+`/map.json` serves the canonical v2 document with its revision as an ETag.
+`compileMapFileV2()` is the one authoring → runtime boundary, used by the
+server, the game client and client prediction physics. v1 compatibility is
+**one-way**: a legacy file is migrated on the way in and never produced again.
+
 ### Blank world
 
 A new map has no geometry, so a placement ray hits nothing. When the authored
@@ -327,6 +334,14 @@ A poll that finds an unchanged revision does nothing. Rebuilding the world
 every tick was dropping selections and flickering terrain wires.
 
 ---
+
+## Status
+
+This document describes what is implemented. The editor-completion program is
+still in progress — see `docs/EDITOR_COMPLETION_STATUS.md` for the tracked
+checklist of what is NOT yet done (EditorDocument, ViewRegistry, the workspace
+UI, painting beyond terrain, and the `main.ts` decomposition), and
+`pnpm audit:editor` for the machine-checked version.
 
 ## Extending the editor
 
