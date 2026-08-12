@@ -80,7 +80,6 @@ export type UndoOp =
   | { kind: 'lightedit'; light: MapLightV2; before: MapLightV2; after: MapLightV2 }
   | { kind: 'batchdelete'; bodies: StaticObjectV2[] }
   | { kind: 'group'; label: string; ops: UndoOp[] }
-  | { kind: 'mainconvert'; prev: Float32Array; patch: PatchState | null }
   | {
       kind: 'patchedit'
       id: string

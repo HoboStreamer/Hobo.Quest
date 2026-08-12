@@ -38,9 +38,9 @@ describe('editor lock manager', () => {
 
   it('releaseAll on disconnect frees everything owned', () => {
     const lm = new LockManager()
-    lm.acquire(1, ['a', 'terrain:main'], 0)
-    expect(lm.releaseAll(1).sort()).toEqual(['a', 'terrain:main'])
-    expect(lm.ownerOf('terrain:main')).toBeUndefined()
+    lm.acquire(1, ['a', 'terrain:floor'], 0)
+    expect(lm.releaseAll(1).sort()).toEqual(['a', 'terrain:floor'])
+    expect(lm.ownerOf('terrain:floor')).toBeUndefined()
   })
 
   it('leases expire without heartbeats; heartbeats keep them alive', () => {

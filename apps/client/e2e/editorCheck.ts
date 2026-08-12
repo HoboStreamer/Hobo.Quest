@@ -20,7 +20,11 @@ const PORT = 18195
 const dir = mkdtempSync(join(tmpdir(), 'hobo-repro-'))
 const mapPath = join(dir, 'map.json')
 
-// ── Fixture map: a flat terrain plus three boxes standing on it. ─────────
+// ── Fixture map: NATIVE v2 — one ordinary terrain plus three boxes. ─────
+// The acceptance fixture is deliberately v2: this suite is the gate for the
+// FINAL editor, so it must not depend on the migration path. A separate v1
+// smoke below proves old maps still load.
+//
 // The boxes sit to the +x side so their projections clear the editor's
 // ~270px left sidebar, which overlays the canvas and would swallow clicks.
 const SUB = 128
@@ -29,13 +33,22 @@ const flat = new Float32Array((SUB + 1) * (SUB + 1))
 const b64 = Buffer.from(new Uint8Array(flat.buffer, flat.byteOffset, flat.byteLength)).toString(
   'base64',
 )
+/** The one terrain in the fixture. Nothing treats it as special. */
+const FLOOR_ID = 'terrain-floor'
 writeFileSync(
   mapPath,
   JSON.stringify({
-    v: 1,
-    halfExtent: HALF,
-    sub: SUB,
-    heights: b64,
+    v: 2,
+    terrains: [
+      {
+        id: FLOOR_ID,
+        name: 'Floor',
+        pos: [0, 0, 0],
+        halfExtent: HALF,
+        sub: SUB,
+        heights: b64,
+      },
+    ],
     statics: [
       {
         id: 'box-a',
@@ -61,8 +74,8 @@ writeFileSync(
     ],
     nodes: [],
     props: [],
-    terrains: [],
     lights: [],
+    zones: [],
   }),
 )
 
@@ -138,6 +151,8 @@ type Probe = {
   redo: () => void
   setCameraPose: (pos: number[], rot: number[]) => void
   objectCounts: () => Record<string, number>
+  terrainMeshCount: () => number
+  sceneMeshNames: () => string[]
 }
 // The probe lives in the page; pass it into evaluate() as a JSHandle so the
 // scenarios below can be written as plain typed functions.
@@ -295,7 +310,7 @@ const selAfter = await ev(page, (p) => p.selectionIds())
 const camAfter = await ev(page, (p) => p.cameraSnapshot())
 const posAfter = await posOf('box-b')
 ok('selection is still exactly [box-b]', selAfter.length === 1 && selAfter[0] === 'box-b', selAfter)
-ok('terrain was NOT selected by the drag', !selAfter.includes('terrain:main'), selAfter)
+ok('terrain was NOT selected by the drag', !selAfter.includes(`terrain:${FLOOR_ID}`), selAfter)
 ok('box actually moved', Math.abs(posAfter[0]! - posBefore[0]!) > 0.05, { posBefore, posAfter })
 const camDelta = Math.max(
   ...camBefore.pos.map((v, i) => Math.abs(v - camAfter.pos[i]!)),
@@ -609,10 +624,150 @@ section('L. Environment')
 const envOk = (await page.evaluate('window.__editor.hasSky()')) as boolean
 ok('sky dome + clouds exist in the editor scene', envOk)
 
-console.log(
-  `\n${'═'.repeat(64)}\n${checks - failures}/${checks} checks passed, ${failures} FAILED\n`,
-)
 await page.screenshot({ path: 'scratch/visual/editor-final.png' })
 await browser.close()
 server.kill()
+
+// ════════════════════════════════════════════════════════════════════════
+// Scenarios that need a DIFFERENT map artifact get their own server. Each
+// one boots, asserts, and tears down before the next starts.
+// ════════════════════════════════════════════════════════════════════════
+
+/** Boot a server + editor page on `map`, run `body`, then tear both down. */
+async function withMap(
+  port: number,
+  map: unknown,
+  body: (p: Page) => Promise<void>,
+): Promise<void> {
+  const d = mkdtempSync(join(tmpdir(), 'hobo-repro-'))
+  const mp = join(d, 'map.json')
+  writeFileSync(mp, JSON.stringify(map))
+  const srv = spawn(process.execPath, ['--import', 'tsx', 'apps/server/src/main.ts'], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DB_PATH: join(d, 'world.db'),
+      STATIC_DIR: 'apps/client/dist',
+      MAP_PATH: mp,
+      EDITOR_KEY: 'test-admin-key',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  srv.stderr!.on('data', (c) => console.log('[server]', String(c).slice(0, 400)))
+  try {
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('server never reported listening')), 30_000)
+      srv.stdout!.on('data', (c) => {
+        if (String(c).includes('listening')) {
+          clearTimeout(t)
+          res()
+        }
+      })
+    })
+    const br = await chromium.launch({
+      args: ['--use-angle=swiftshader', '--enable-webgl', '--disable-gpu-sandbox'],
+    })
+    try {
+      const pg = await br.newPage({ viewport: { width: 1400, height: 900 } })
+      pg.on('pageerror', (e) =>
+        console.log('[pageerror]', String((e as Error).stack ?? e).slice(0, 500)),
+      )
+      await pg.goto(`http://127.0.0.1:${port}/editor`)
+      await pg.waitForSelector('#save', { timeout: 90_000 })
+      await pg.waitForFunction(
+        () => Boolean((window as never as { __editor?: unknown }).__editor),
+        {
+          timeout: 90_000,
+        },
+      )
+      handles.set(
+        pg,
+        await pg.evaluateHandle(() => (window as never as { __editor: Probe }).__editor),
+      )
+      await body(pg)
+    } finally {
+      await br.close()
+    }
+  } finally {
+    srv.kill()
+  }
+}
+
+/** Per-page probe handles, so scenarios stay plain typed functions. */
+const handles = new Map<Page, JSHandle<Probe>>()
+const probeOf = <T>(pg: Page, fn: (p: Probe) => T): Promise<T> =>
+  pg.evaluate(fn as never, handles.get(pg) as never) as Promise<T>
+
+// ════════════════════════════════════════════════════════════════════════
+section('M. Native v2 blank map — no fabricated ground')
+await withMap(
+  PORT + 1,
+  { v: 2, terrains: [], statics: [], nodes: [], props: [], lights: [], zones: [] },
+  async (pg) => {
+    ok(
+      'the document has zero terrain objects',
+      (await probeOf(pg, (p) => p.terrainIds())).length === 0,
+    )
+    ok(
+      'the viewport has zero terrain meshes',
+      (await probeOf(pg, (p) => p.terrainMeshCount())) === 0,
+    )
+    // The retired main mesh was called exactly 'terrain', and its overlay
+    // 'wire'. Neither may exist: a blank map has no hidden ground.
+    const stray = await probeOf(pg, (p) => p.sceneMeshNames())
+    ok(
+      'no legacy "terrain"/"wire" mesh in the scene',
+      !stray.includes('terrain') && !stray.includes('wire'),
+      stray,
+    )
+    const counts = await probeOf(pg, (p) => p.objectCounts())
+    ok('no statics either — the map really is empty', counts['statics'] === 0, counts)
+  },
+)
+
+// ════════════════════════════════════════════════════════════════════════
+section('N. v1 migration smoke — old maps still load')
+{
+  const v1flat = new Float32Array((SUB + 1) * (SUB + 1)).fill(1.5)
+  const v1b64 = Buffer.from(
+    new Uint8Array(v1flat.buffer, v1flat.byteOffset, v1flat.byteLength),
+  ).toString('base64')
+  await withMap(
+    PORT + 2,
+    {
+      v: 1,
+      halfExtent: HALF,
+      sub: SUB,
+      heights: v1b64,
+      statics: [
+        { shape: { type: 'box', size: [4, 4, 4] }, pos: [6, 2, 0], yaw: 0, color: '#c04040' },
+      ],
+    },
+    async (pg) => {
+      const ids = await probeOf(pg, (p) => p.terrainIds())
+      // The old privileged heightfield is now ONE ordinary terrain object.
+      ok(
+        'the v1 main heightfield became an ordinary terrain',
+        ids.includes('terrain:terrain-v1-main'),
+        ids,
+      )
+      ok('exactly one terrain came across', ids.length === 1, ids)
+      const counts = await probeOf(pg, (p) => p.objectCounts())
+      ok('the v1 static came across', counts['statics'] === 1, counts)
+      // Nothing treats the migrated terrain as special: it selects like any
+      // other object, under its real id.
+      await probeOf(pg, (p) => p.setToolByName('select'))
+      await probeOf(pg, (p) => p.selectByIds(['terrain:terrain-v1-main']))
+      ok(
+        'it selects under its real id, with no "main" special case',
+        (await probeOf(pg, (p) => p.selectionIds())).includes('terrain:terrain-v1-main'),
+        await probeOf(pg, (p) => p.selectionIds()),
+      )
+    },
+  )
+}
+
+console.log(
+  `\n${'═'.repeat(64)}\n${checks - failures}/${checks} checks passed, ${failures} FAILED\n`,
+)
 process.exit(failures > 0 ? 1 : 0)

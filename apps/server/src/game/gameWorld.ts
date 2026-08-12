@@ -144,7 +144,17 @@ export class GameWorld {
     return bodies
   }
 
-  private buildTerrainBody(): BodyId {
+  /**
+   * The BASE WORLD's procedural terrain collider.
+   *
+   * Not built when a map is loaded: the map's own terrain objects ARE the
+   * ground, and this grid resampled them onto a world-sized trimesh — a second
+   * floor at every authored height, and for a map with NO terrain a flat sheet
+   * at y = 0 that nothing rendered but everything stood on. A blank map must
+   * genuinely have nothing to stand on.
+   */
+  private buildTerrainBody(): BodyId | null {
+    if (getMapOverride()) return null
     const grid = buildTerrainGrid(this.content.world)
     return this.physics.addBody({
       shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },

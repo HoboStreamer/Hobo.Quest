@@ -30,6 +30,15 @@ export declare class GameWorld {
   private patchBodies
   /** Trimesh bodies for the map's extra terrain patches (world-space verts). */
   private buildPatchBodies
+  /**
+   * The BASE WORLD's procedural terrain collider.
+   *
+   * Not built when a map is loaded: the map's own terrain objects ARE the
+   * ground, and this grid resampled them onto a world-sized trimesh — a second
+   * floor at every authored height, and for a map with NO terrain a flat sheet
+   * at y = 0 that nothing rendered but everything stood on. A blank map must
+   * genuinely have nothing to stand on.
+   */
   private buildTerrainBody
   /** Live map edit: swap terrain + patch collision for the new map. */
   rebuildTerrain(): void

@@ -30,15 +30,7 @@ export declare function registerMapAssets(
 ): void
 export declare function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mesh[]
 export declare function rebuildTerrainPatchVisuals(scene: Scene, content: ContentRegistry): void
-export declare function buildStaticWorld(
-  scene: Scene,
-  content: ContentRegistry,
-  mapMix?: string,
-): void
+export declare function buildStaticWorld(scene: Scene, content: ContentRegistry): void
 /** Live map edit: replace the rendered terrain with the new grid + paint. */
-export declare function rebuildTerrainVisual(
-  scene: Scene,
-  content: ContentRegistry,
-  mix?: string,
-): void
+export declare function rebuildTerrainVisual(scene: Scene, content: ContentRegistry): void
 //# sourceMappingURL=sceneSetup.d.ts.map

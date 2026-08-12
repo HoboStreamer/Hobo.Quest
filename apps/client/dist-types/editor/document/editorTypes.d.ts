@@ -142,11 +142,6 @@ export type UndoOp =
       ops: UndoOp[]
     }
   | {
-      kind: 'mainconvert'
-      prev: Float32Array
-      patch: PatchState | null
-    }
-  | {
       kind: 'patchedit'
       id: string
       before: {

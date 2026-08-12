@@ -2,8 +2,6 @@ import { Engine } from '@babylonjs/core/Engines/engine.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera.js'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
-import { Texture } from '@babylonjs/core/Materials/Textures/texture.js'
-import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture.js'
 import { Color3, Color4 } from '@babylonjs/core/Maths/math.color.js'
 import { Matrix, Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
@@ -13,12 +11,10 @@ import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import { VertexBuffer } from '@babylonjs/core/Buffers/buffer.js'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { GizmoManager } from '@babylonjs/core/Gizmos/gizmoManager.js'
-import { TerrainMaterial } from '@babylonjs/materials/terrain/terrainMaterial.js'
 import '@babylonjs/core/Culling/ray.js'
 import '@babylonjs/core/Rendering/outlineRenderer.js'
 import {
   buildPatchGrid,
-  buildTerrainGrid,
   createContent,
   decodeHeights,
   encodeHeights,
@@ -87,9 +83,6 @@ import { ACTIONS, bindingMatches, formatBinding, loadBindings, type Binding } fr
 
 const content = createContent()
 const world = content.world
-const HALF = world.groundHalfExtent
-const SUB = 128
-const MIX = 512
 
 import {
   ENTITY_DEFS,
@@ -203,72 +196,24 @@ async function boot(): Promise<void> {
   // has to invent one after the fact.
   let placedStatics: StaticObjectV2[] = bootDoc.statics
   let placedNodes: MapNodeV2[] = bootDoc.nodes
-  // The legacy top-level heightfield is gone: every terrain is an ordinary
-  // object in `patches` below. This buffer only feeds the old main-terrain
-  // mesh, which is retired — it stays flat and disabled.
-  const heights: Float32Array = new Float32Array((SUB + 1) * (SUB + 1)).fill(-6)
-  const savedMix: string | undefined = undefined
 
-  // ── Terrain mesh (game-proven winding) + hover wireframe overlay ────
-  // The runtime override carries TERRAIN OBJECTS only — there is no
-  // top-level heightfield any more. The editor keeps its own `patches` in
-  // sync through refreshGroundSampling() below.
+  // There is no privileged terrain. Every terrain in the editor comes from
+  // the document's `terrains[]` (held as `patches` below) with its real
+  // stable id; a migrated v1 main terrain is just an ordinary object named
+  // `terrain-v1-main`, and nothing recognises it as special.
+  //
+  // A blank map therefore has NO terrain mesh, NO hidden collision grid and
+  // no -6 m sunken plane pretending the ground was deleted.
   setMapOverride({ terrains: [] })
-  const grid = buildTerrainGrid(world)
-  const terrain = new Mesh('terrain', scene)
-  const vd = new VertexData()
-  vd.positions = grid.positions
-  vd.indices = grid.indices
-  vd.uvs = grid.uvs
-  const normals: number[] = []
-  VertexData.ComputeNormals(grid.positions, grid.indices, normals)
-  vd.normals = normals
-  vd.applyToMesh(terrain, true)
-  terrain.isPickable = true
-  const cell = (HALF * 2) / SUB
 
-  const wire = new Mesh('wire', scene)
-  vd.applyToMesh(wire, true)
+  // ── Placed objects (statics + node stand-ins) ───────────────────────
+  /** Shared wireframe material for terrain sculpt overlays. */
   const wireMat = new StandardMaterial('wiremat', scene)
   wireMat.wireframe = true
   wireMat.emissiveColor = new Color3(0.35, 0.75, 1)
   wireMat.alpha = 0.16
   wireMat.disableLighting = true
-  wire.material = wireMat
-  wire.isPickable = false
-  wire.position.y = 0.03
-  wire.parent = terrain
-  wire.setEnabled(false)
 
-  // ── Splat paint ─────────────────────────────────────────────────────
-  const mixTex = new DynamicTexture('mix', MIX, scene, false)
-  const mixCtx = mixTex.getContext() as CanvasRenderingContext2D
-  if (savedMix) {
-    const img = new Image()
-    img.onload = () => {
-      mixCtx.drawImage(img, 0, 0, MIX, MIX)
-      mixTex.update()
-    }
-    img.src = savedMix
-  } else {
-    mixCtx.fillStyle = '#ff0000'
-    mixCtx.fillRect(0, 0, MIX, MIX)
-    mixTex.update()
-  }
-  const mat = new TerrainMaterial('terrain', scene)
-  mat.mixTexture = mixTex
-  const tile = (n: string, s: number) => {
-    const tx = new Texture(`/assets/tex/${n}.jpg`, scene)
-    tx.uScale = tx.vScale = s
-    return tx
-  }
-  mat.diffuseTexture1 = tile('leafy_grass', 70)
-  mat.diffuseTexture2 = tile('gray_rocks', 55)
-  mat.diffuseTexture3 = tile('brown_mud_dry', 60)
-  mat.specularColor = new Color3(0.02, 0.02, 0.02)
-  terrain.material = mat
-
-  // ── Placed objects (statics + node stand-ins) ───────────────────────
   const modelCache = new ModelCache(scene)
   const staticMeshes = new Map<Mesh, StaticObjectV2>()
   const nodeMeshes = new Map<Mesh, MapNodeV2>()
@@ -335,10 +280,13 @@ async function boot(): Promise<void> {
     nodeMeshes.set(mesh, n)
     return mesh
   }
+  /**
+   * Highest authored terrain at (x, z), or 0 where none covers it. 0 is a
+   * placement REFERENCE plane, not ground: nothing collides with it, and a
+   * blank map really is blank.
+   */
   const sampleH = (x: number, z: number): number => {
-    const i = Math.max(0, Math.min(SUB, Math.round((x + HALF) / cell)))
-    const j = Math.max(0, Math.min(SUB, Math.round((z + HALF) / cell)))
-    let h = heights[j * (SUB + 1) + i] ?? 0
+    let h = 0
     for (const pp of patches) {
       if (pp.rot && (Math.abs(pp.rot[0]) > 0.02 || Math.abs(pp.rot[2]) > 0.02)) continue
       const lx = x - pp.origin[0]
@@ -473,10 +421,8 @@ async function boot(): Promise<void> {
   /** Rough retained size, so paint/terrain strokes obey the memory budget. */
   const opBytes = (op: UndoOp): number => {
     if (op.kind === 'terrain') return op.before.byteLength * 2
-    if (op.kind === 'paint') return op.before.data.length * 2
     // Paint deltas are a rectangle, so a small stroke costs a few KB.
     if (op.kind === 'maskpaint') return op.before.data.length + op.after.data.length
-    if (op.kind === 'mainconvert') return op.prev.byteLength
     if (op.kind === 'group') return op.ops.reduce((n, o) => n + opBytes(o), 0)
     return 1024
   }
@@ -570,30 +516,6 @@ async function boot(): Promise<void> {
       const src = dir === 'undo' ? op.before : op.after
       spawnPos = src ? [src[0], src[1], src[2]] : null
       placeSpawnFlag()
-    } else if (op.kind === 'mainconvert') {
-      const main = terrainTargets.find((t) => t.id === 'main')!
-      if (dir === 'undo') {
-        heights.set(op.prev)
-        if (op.patch) {
-          patches = patches.filter((pp) => pp !== op.patch)
-          for (const [m, pp] of patchMeshes) {
-            if (pp === op.patch) {
-              if (selectedPatch?.mesh === m) deselect()
-              patchMeshes.delete(m)
-              m.dispose()
-            }
-          }
-          const ti = terrainTargets.findIndex((t) => t.patch === op.patch)
-          if (ti >= 0) terrainTargets.splice(ti, 1)
-        }
-      } else {
-        heights.fill(-6)
-        if (op.patch) {
-          patches.push(op.patch)
-          buildPatchMesh(op.patch)
-        }
-      }
-      refreshTarget(main)
     } else if (op.kind === 'patchprop') {
       const src = dir === 'undo' ? op.before : op.after
       if (src.tex) op.patch.tex = src.tex
@@ -654,9 +576,6 @@ async function boot(): Promise<void> {
         const patch = patches.find((pp) => pp.id === op.patchId)
         if (patch) surfaceDataOf(patch).paint!.mask = rt.mask.toDataURL()
       }
-    } else if (op.kind === 'paint') {
-      mixCtx.putImageData(dir === 'undo' ? op.before : op.after, 0, 0)
-      mixTex.update()
     } else if (op.kind === 'place' || op.kind === 'delete') {
       const removing = (op.kind === 'place') === (dir === 'undo')
       if (removing) {
@@ -679,7 +598,7 @@ async function boot(): Promise<void> {
           renderNode(op.node)
         }
       }
-    } else {
+    } else if (op.kind === 'edit') {
       const src = dir === 'undo' ? op.before : op.after
       Object.assign(op.body, JSON.parse(JSON.stringify(src)) as StaticObjectV2)
       const m = findMesh(op.body)
@@ -695,7 +614,6 @@ async function boot(): Promise<void> {
    */
   const objectExists = (oid: string): boolean => {
     if (oid === 'spawn') return spawnPos !== null
-    if (oid === 'terrain:main') return true
     if (oid.startsWith('terrain:')) return patches.some((p) => `terrain:${p.id}` === oid)
     return (
       placedStatics.some((b) => b.id === oid) ||
@@ -959,15 +877,7 @@ async function boot(): Promise<void> {
   }
   for (const patch of patches) buildPatchMesh(patch)
 
-  const mainGone = (): boolean => {
-    for (const h of heights) if (h > -4.5) return false
-    return true
-  }
   const refreshTarget = (t: TerrainTarget): void => {
-    if (t.id === 'main') {
-      terrain.setEnabled(!mainGone())
-      terrain.isPickable = !mainGone()
-    }
     const buf = t.mesh.getVerticesData(VertexBuffer.PositionKind) as Float32Array
     const n = t.sub
     for (let j = 0; j <= n; j++) {
@@ -980,17 +890,13 @@ async function boot(): Promise<void> {
     const nn: number[] = []
     VertexData.ComputeNormals(buf, idx, nn)
     t.mesh.updateVerticesData(VertexBuffer.NormalKind, nn, true)
-    if (t.id === 'main') wire.updateVerticesData(VertexBuffer.PositionKind, buf, true)
     patchWires.get(t.mesh)?.updateVerticesData(VertexBuffer.PositionKind, buf, true)
   }
 
   // ── Sculpt core ─────────────────────────────────────────────────────
-  terrainTargets.push({ id: 'main', mesh: terrain, heights, sub: SUB, half: HALF, patch: null })
-  if (mainGone()) terrain.setEnabled(false)
   let shift = false
   let strokeBefore: Float32Array | null = null
   let strokeTarget: TerrainTarget | null = null
-  let paintBefore: ImageData | null = null
   let paintTarget: TerrainTarget | null = null
 
   function sculpt(target: TerrainTarget, px: number, pz: number, sign: number): void {
@@ -1037,30 +943,6 @@ async function boot(): Promise<void> {
       }
     }
     refreshTarget(target)
-  }
-
-  function paint(px: number, pz: number): void {
-    const radius = Number($('radius').value)
-    const strength = Math.min(1, Number($('strength').value))
-    const feather = Number($('feather').value)
-    const u = ((px + HALF) / (HALF * 2)) * MIX
-    const vpix = (1 - (pz + HALF) / (HALF * 2)) * MIX
-    const r = (radius / (HALF * 2)) * MIX
-    // Feathered brush: radial gradient whose inner solid core shrinks as
-    // feather drops, and whose alpha is the strength — low strength gives
-    // faded, buildable washes for paths.
-    const g = mixCtx.createRadialGradient(u, vpix, 0, u, vpix, r)
-    const color = (document.getElementById('paint') as HTMLSelectElement).value
-    const core = Math.max(0.05, Math.min(0.95, 1 - 1 / (0.4 + feather)))
-    const alpha = Math.round(strength * 255)
-      .toString(16)
-      .padStart(2, '0')
-    g.addColorStop(0, `${color}${alpha}`)
-    g.addColorStop(core, `${color}${alpha}`)
-    g.addColorStop(1, `${color}00`)
-    mixCtx.fillStyle = g
-    mixCtx.fillRect(u - r, vpix - r, r * 2, r * 2)
-    mixTex.update()
   }
 
   // ── Placement: ghost preview, wheel rotate, surface align, snapping ─
@@ -1134,7 +1016,7 @@ async function boot(): Promise<void> {
     const pick = scene.pick(
       scene.pointerX,
       scene.pointerY,
-      (m) => m !== ghost && m !== wire && m.isEnabled() && m.isPickable,
+      (m) => m !== ghost && m.isEnabled() && m.isPickable,
     )
     if (!pick?.hit || !pick.pickedPoint) return null
     const def =
@@ -1179,7 +1061,7 @@ async function boot(): Promise<void> {
       const pick = scene.pick(
         scene.pointerX,
         scene.pointerY,
-        (m) => m !== ghost && m !== wire && m.isEnabled() && m.isPickable,
+        (m) => m !== ghost && m.isEnabled() && m.isPickable,
       )
       const target =
         pick?.hit && pick.pickedPoint
@@ -1314,23 +1196,16 @@ async function boot(): Promise<void> {
   /** Recompute every highlight from current local + remote selection. */
   const refreshSelectionVisuals = (): void => {
     hl.removeAllMeshes()
-    let remoteMain: Color3 | null = null
     for (const [, r] of remoteSel) {
       for (const oid of r.ids) {
         if (oid === 'spawn') {
           for (const c of spawnFlag.getChildMeshes()) hl.addMesh(c as Mesh, r.color)
           continue
         }
-        if (oid === 'terrain:main') {
-          remoteMain = r.color
-          continue
-        }
         const m = meshById(oid)
         if (m) hl.addMesh(m, r.color)
       }
     }
-    wireMat.emissiveColor = remoteMain ?? new Color3(0.35, 0.75, 1)
-    if (remoteMain) wire.setEnabled(true)
     for (const it of multiSel)
       hl.addMesh(it.mesh, it.mesh === multiSel[0]?.mesh ? C_PRIMARY : C_SECONDARY)
     for (const it of multiPatches) hl.addMesh(it.mesh, C_SECONDARY)
@@ -1343,10 +1218,7 @@ async function boot(): Promise<void> {
     if (selectedLight) hl.addMesh(selectedLight.mesh, C_PRIMARY)
     if (spawnSelected) for (const c of spawnFlag.getChildMeshes()) hl.addMesh(c as Mesh, C_PRIMARY)
     if (hoverMesh && tool === 'select') hl.addMesh(hoverMesh, C_HOVER)
-    // Starter island: persistent wireframe while selected (not hover-only).
-    wire.setEnabled(mainSelected || wireHover)
   }
-  let wireHover = false
 
   // ── Collaboration locks (server-authoritative, transient) ───────────
   const lockOwners = new Map<string, { name: string; color: string }>()
@@ -1439,7 +1311,6 @@ async function boot(): Promise<void> {
     if (pp) return { objectId: `terrain:${pp.id}`, kind: 'terrain' }
     const l = lightMeshes.get(mesh)
     if (l) return { objectId: l.id, kind: 'light' }
-    if (mesh === terrain) return { objectId: 'terrain:main', kind: 'terrain' }
     if ((mesh as unknown) === (spawnFlag as unknown)) return { objectId: 'spawn', kind: 'spawn' }
     return null
   }
@@ -1489,7 +1360,6 @@ async function boot(): Promise<void> {
     // Every legacy teardown path (undo, tool switch, delete, remote merge)
     // must also empty the authority, or it would keep stale ids alive.
     if (!projectingSelection) selectionMgr.clear()
-    mainSelected = false
     spawnSelected = false
     clearMulti()
     gizmos.attachToMesh(null)
@@ -1841,48 +1711,6 @@ async function boot(): Promise<void> {
     $('s-y').value = '1'
     $('s-z').value = '1'
   }
-  /** The starter island is placeholder — selectable so it can be wiped. */
-  let mainSelected = false
-  /**
-   * The starter island is NOT special: transforming or deleting it
-   * converts the top-level heightfield into a regular terrain patch (the
-   * base grid sinks below the waterline). From then on it moves, tilts,
-   * retextures and deletes like any other patch — and the ground sampler
-   * follows patches, so spawns/nodes/props stay grounded.
-   */
-  const convertMainToPatch = (remove: boolean): PatchState | null => {
-    const prev = heights.slice()
-    let patch: PatchState | null = null
-    if (!remove) {
-      patch = {
-        id: newId('patch'),
-        origin: [0, 0, 0],
-        halfExtent: HALF,
-        sub: SUB,
-        heights: heights.slice(),
-      }
-      patches.push(patch)
-      buildPatchMesh(patch)
-    }
-    heights.fill(-6)
-    const main = terrainTargets.find((t) => t.id === 'main')!
-    refreshTarget(main)
-    pushUndo({ kind: 'mainconvert', prev, patch })
-    return patch
-  }
-  const selectMainTerrain = (): void => {
-    deselect()
-    mainSelected = true
-    props.style.display = 'flex'
-    props.style.left = '274px'
-    props.style.top = '12px'
-    $e('props-title').textContent = 'starter island terrain'
-    for (const id of ['dims-box', 'dims-cyl', 'dims-sph']) $e(id).style.display = 'none'
-    status.textContent =
-      'starter island — a normal terrain: move/tilt converts it to a patch, Del removes it'
-    afterSelect(['terrain:main'], attachGizmoToPivot)
-  }
-
   /** Patches: move + tilt the whole terrain patch. */
   /** Terrain inspector: a full transform — terrain scales like anything else. */
   const fillPatchProps = (patch: PatchState): void => {
@@ -2458,12 +2286,6 @@ async function boot(): Promise<void> {
       pushUndo({ kind: 'lightdelete', light })
       return
     }
-    if (mainSelected) {
-      deselect()
-      convertMainToPatch(true)
-      status.textContent = '🌊 starter island removed — one Ctrl+Z brings it back'
-      return
-    }
     if (multiTotal() > 0) {
       const pitems = [...multiPatches]
       const sitems = [...multiSel]
@@ -2930,7 +2752,6 @@ async function boot(): Promise<void> {
     if (ids.length === 1) {
       const oid = ids[0]!
       if (oid === 'spawn') return selectSpawn()
-      if (oid === 'terrain:main') return selectMainTerrain()
       const found = meshFor(oid)
       if (!found) return
       const { mesh, kind } = found
@@ -3011,7 +2832,7 @@ async function boot(): Promise<void> {
     if (tool === 'terrain') {
       const t = pickTerrainTarget()
       if (!t) return
-      const lockId = t.target.id === 'main' ? 'terrain:main' : `terrain:${t.target.id}`
+      const lockId = `terrain:${t.target.id}`
       if (lockOwners.has(lockId)) {
         status.textContent = `🔒 terrain locked by ${lockOwners.get(lockId)!.name}`
         return
@@ -3035,13 +2856,9 @@ async function boot(): Promise<void> {
       const t = pickTerrainTarget()
       if (!t) return
       paintTarget = t.target
-      if (t.target.id === 'main') {
-        paintBefore = mixCtx.getImageData(0, 0, MIX, MIX)
-      } else if (t.target.patch) {
-        // Allocating the layer BEFORE the stroke means a full surface reports
-        // its budget instead of silently painting nothing.
-        if (!beginPaintStroke(t.target.patch)) return
-      }
+      // Allocating the layer BEFORE the stroke means a full surface reports
+      // its budget instead of silently painting nothing.
+      if (t.target.patch && !beginPaintStroke(t.target.patch)) return
       painting = 1
       applyPaint()
     } else if ((tool === 'mesh' || tool === 'entity') && e.button === 0) {
@@ -3051,8 +2868,7 @@ async function boot(): Promise<void> {
       const pick = scene.pick(
         scene.pointerX,
         scene.pointerY,
-        (m) =>
-          m !== ghost && m !== wire && m.isEnabled() && m.isPickable && !lightMeshes.has(m as Mesh),
+        (m) => m !== ghost && m.isEnabled() && m.isPickable && !lightMeshes.has(m as Mesh),
       )
       if (!pick?.hit || !pick.pickedPoint) return
       if (mapLightsArr.length >= 24) {
@@ -3101,12 +2917,6 @@ async function boot(): Promise<void> {
       strokeTarget = null
     }
     if (painting && paintTarget?.patch) endPaintStroke(paintTarget.patch)
-    if (painting && paintBefore && paintTarget) {
-      if (paintTarget.id === 'main') {
-        pushUndo({ kind: 'paint', before: paintBefore, after: mixCtx.getImageData(0, 0, MIX, MIX) })
-      }
-      paintBefore = null
-    }
     paintTarget = null
     painting = 0
   })
@@ -3115,12 +2925,12 @@ async function boot(): Promise<void> {
     if (tool === 'paint') applyPaint()
     else applySculpt(painting)
   })
-  /** Pick whichever terrain (main or patch) is under the cursor. */
+  /** Pick whichever terrain object is under the cursor. */
   function pickTerrainTarget(): { target: TerrainTarget; local: Vector3 } | null {
     const pick = scene.pick(
       scene.pointerX,
       scene.pointerY,
-      (m) => m.isEnabled() && (m === terrain || patchMeshes.has(m as Mesh)),
+      (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
     )
     if (!pick?.hit || !pick.pickedPoint || !pick.pickedMesh) return null
     const target = terrainTargets.find((t) => t.mesh === pick.pickedMesh)
@@ -3140,10 +2950,6 @@ async function boot(): Promise<void> {
     const t = pickTerrainTarget()
     if (!t) return
     if (paintTarget && t.target !== paintTarget) return // one target per stroke
-    if (t.target.id === 'main') {
-      paint(t.local.x, t.local.z)
-      return
-    }
     const patch = t.target.patch
     if (!patch) return
     const layer = activePaintLayer(patch)
@@ -3454,7 +3260,7 @@ async function boot(): Promise<void> {
     const pick = scene.pick(
       scene.pointerX,
       scene.pointerY,
-      (m) => m.isEnabled() && (m === terrain || patchMeshes.has(m as Mesh)),
+      (m) => m.isEnabled() && patchMeshes.has(m as Mesh),
     )
     const overTerrain = Boolean(pick?.hit && pick.pickedPoint)
     // Hover highlight for the Select tool (cheap: every 6th frame).
@@ -3488,10 +3294,6 @@ async function boot(): Promise<void> {
     // pins the wire to the stroke target (no flicker when the cursor slips
     // off-mesh mid-drag); selected patches keep theirs visible.
     const hoverMeshT = overTerrain ? (pick!.pickedMesh as Mesh) : null
-    wireHover =
-      (tool === 'terrain' && hoverMeshT === terrain) ||
-      (painting !== 0 && strokeTarget?.id === 'main')
-    wire.setEnabled(wireHover || mainSelected)
     // Selection visuals derive from the selection SET, never from mesh
     // identity: undo, a remote merge or a material change all rebuild meshes,
     // and a selected terrain's wire must survive every one of them.
@@ -4124,7 +3926,6 @@ async function boot(): Promise<void> {
   // surface, so the same tests run against the old and new architecture.
   const probeSelectionIds = (): string[] => {
     const ids: string[] = []
-    if (mainSelected) ids.push('terrain:main')
     if (spawnSelected) ids.push('spawn')
     if (selected?.body.id) ids.push(selected.body.id)
     if (selectedNode?.node.id) ids.push(selectedNode.node.id)
@@ -4199,7 +4000,7 @@ async function boot(): Promise<void> {
     return [Math.round(r.x), Math.round(r.y)]
   }
   const probeTerrainWires = (): Record<string, boolean> => {
-    const out: Record<string, boolean> = { 'terrain:main': wire.isEnabled() }
+    const out: Record<string, boolean> = {}
     for (const [pm, pw] of patchWires) {
       const p = patchMeshes.get(pm)
       if (p) out[`terrain:${p.id}`] = pw.isEnabled()
@@ -4322,7 +4123,7 @@ async function boot(): Promise<void> {
     paintSurface: () =>
       paintTarget
         ? {
-            objectId: paintTarget.id === 'main' ? 'terrain:main' : `terrain:${paintTarget.id}`,
+            objectId: `terrain:${paintTarget.id}`,
             base: paintTarget.patch?.tex ?? null,
             layers: ['grass', 'rock', 'mud'],
           }
@@ -4382,15 +4183,6 @@ async function boot(): Promise<void> {
     get dirty() {
       return dirty
     },
-    heightsSum() {
-      let sum = 0
-      for (const h of heights) sum += Math.abs(h)
-      return sum
-    },
-    selectMain() {
-      setTool('select')
-      selectMainTerrain()
-    },
     multiCount() {
       return multiTotal()
     },
@@ -4406,11 +4198,13 @@ async function boot(): Promise<void> {
         lights: mapLightsArr.length,
       }
     },
-    mainVisible() {
-      return terrain.isEnabled()
+    /** Meshes the blank-world checks assert are absent (no fake ground). */
+    terrainMeshCount() {
+      return patchMeshes.size
     },
-    mainPickable() {
-      return terrain.isPickable && terrain.isEnabled()
+    /** Every mesh name in the editor scene (blank-world assertions). */
+    sceneMeshNames() {
+      return scene.meshes.map((m) => m.name)
     },
     staticPositions() {
       return placedStatics.map((b) => [...b.pos])

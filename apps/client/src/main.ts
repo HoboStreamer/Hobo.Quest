@@ -54,7 +54,6 @@ async function start(): Promise<void> {
   const identity = getIdentity()
   const content = createContent()
   // Edited map (must match the server's copy for prediction parity).
-  let mapMix: string | undefined
   let mapLightsBoot: MapLight[] | undefined
   try {
     // /map.json is native v2. parseMapFile still accepts a legacy v1 file
@@ -67,14 +66,14 @@ async function start(): Promise<void> {
       })
       setMapOverride(compileMapFileV2(parsed.map))
       content.world.statics.push(...parsed.map.statics)
-      mapLightsBoot = parsed.map.lights as unknown as MapLight[]
+      mapLightsBoot = parsed.map.lights
     }
   } catch {
     // no edited map — procedural terrain
   }
   const engine = await createEngine(canvas)
   const scene = createScene(engine)
-  buildStaticWorld(scene, content, mapMix)
+  buildStaticWorld(scene, content)
   buildTerrainPatches(scene, content)
   buildMapLights(scene, mapLightsBoot)
 
@@ -248,9 +247,9 @@ async function start(): Promise<void> {
             })
             setMapOverride(compileMapFileV2(parsed.map))
             rebuildTerrainPhysics(physics, content)
-            rebuildTerrainVisual(scene, content, undefined)
+            rebuildTerrainVisual(scene, content)
             rebuildTerrainPatchVisuals(scene, content)
-            buildMapLights(scene, parsed.map.lights as unknown as MapLight[])
+            buildMapLights(scene, parsed.map.lights)
           }
         } catch {
           // keep the old terrain if the fetch fails

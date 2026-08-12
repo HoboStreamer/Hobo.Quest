@@ -12,7 +12,6 @@ import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { Scene } from '@babylonjs/core/scene.js'
-import { TerrainMaterial } from '@babylonjs/materials/terrain/terrainMaterial.js'
 import { LayeredSurfaceMaterial, maskTextureFrom } from './layeredSurface.js'
 import { ParticleSystem } from '@babylonjs/core/Particles/particleSystem.js'
 import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
@@ -218,10 +217,10 @@ export function rebuildTerrainPatchVisuals(scene: Scene, content: ContentRegistr
   buildTerrainPatches(scene, content)
 }
 
-export function buildStaticWorld(scene: Scene, content: ContentRegistry, mapMix?: string): void {
+export function buildStaticWorld(scene: Scene, content: ContentRegistry): void {
   const world = content.world
   const water = new Water(scene)
-  const groundMeshes = buildTerrainMesh(scene, content, mapMix)
+  const groundMeshes = buildTerrainMesh(scene, content)
   for (const m of groundMeshes) water.addToRenderList(m)
 
   for (const [i, s] of world.statics.entries()) {
@@ -386,10 +385,10 @@ function dropletTexture(): string {
 }
 
 /** Live map edit: replace the rendered terrain with the new grid + paint. */
-export function rebuildTerrainVisual(scene: Scene, content: ContentRegistry, mix?: string): void {
+export function rebuildTerrainVisual(scene: Scene, content: ContentRegistry): void {
   scene.getMeshByName('terrain')?.dispose(false, true)
   scene.getMeshByName('terrain-skirt')?.dispose(false, true)
-  const meshes = buildTerrainMesh(scene, content, mix)
+  const meshes = buildTerrainMesh(scene, content)
   // Water reflections keep working on the fresh meshes.
   const waterMat = scene.getMeshByName('water')?.material as
     { addToRenderList?: (m: unknown) => void } | undefined
@@ -397,21 +396,19 @@ export function rebuildTerrainVisual(scene: Scene, content: ContentRegistry, mix
 }
 
 /**
- * Terrain: the SHARED heightfield grid (same one physics collides with)
- * rendered with 3-way texture splatting — grass everywhere, rock in the
- * quarry + trails, mud in the scrapyard and inside the city walls. The mix
- * map is painted procedurally from world-space regions.
+ * The BASE WORLD's procedural terrain — content, not authored map data.
+ *
+ * When a map is loaded it supplies every terrain object itself, so this grid
+ * is not built at all. It used to be built regardless, resampling the map's
+ * own terrains onto a world-sized grid: a second copy of the ground on top of
+ * the per-terrain meshes, and — for a map with no terrain at all — a flat
+ * sheet at y = 0 that looked like nothing and collided like a floor. That is
+ * the invisible ground a blank map is not allowed to have.
  */
-function buildTerrainMesh(scene: Scene, content: ContentRegistry, mapMix?: string): Mesh[] {
+function buildTerrainMesh(scene: Scene, content: ContentRegistry): Mesh[] {
+  if (getMapOverride()) return []
   const world = content.world
   const grid = buildTerrainGrid(world)
-  // A fully-removed starter island (every height sunk below -4.5) renders
-  // nothing — the world is whatever patches the editors built.
-  let maxH = -Infinity
-  for (let i = 1; i < grid.positions.length; i += 3) {
-    if (grid.positions[i]! > maxH) maxH = grid.positions[i]!
-  }
-  if (maxH <= -4.5) return []
   const mesh = new Mesh('terrain', scene)
   const vd = new VertexData()
   vd.positions = grid.positions
@@ -424,15 +421,28 @@ function buildTerrainMesh(scene: Scene, content: ContentRegistry, mapMix?: strin
   mesh.isPickable = false
   mesh.receiveShadows = true
 
-  const mat = new TerrainMaterial('terrain', scene)
-  // Hand-painted splat from the map editor wins over the procedural paint.
-  mat.mixTexture = mapMix ? new Texture(mapMix, scene) : paintMixMap(scene, world.groundHalfExtent)
-  mat.diffuseTexture1 = tiled(scene, 'leafy_grass', 70) // R
-  mat.diffuseTexture2 = tiled(scene, 'gray_rocks', 55) // G
-  mat.diffuseTexture3 = tiled(scene, 'brown_mud_dry', 60) // B
-  mat.specularColor = new Color3(0.02, 0.02, 0.02)
-  mat.maxSimultaneousLights = 8
-  mesh.material = mat
+  // The same layered-surface shader the editor and every authored terrain
+  // use: grass base with rock and mud painted over it by the procedural mix.
+  // (This was TerrainMaterial, whose three diffuse slots were hard-wired to
+  // exactly those textures and which had no notion of a base at all.)
+  const layered = new LayeredSurfaceMaterial(
+    scene,
+    'terrain',
+    {
+      base: { tex: 'leafy_grass' },
+      paint: {
+        layers: [
+          { id: 'world-grass', tex: 'leafy_grass', channel: 'r', scale: 70 },
+          { id: 'world-rock', tex: 'gray_rocks', channel: 'g', scale: 55 },
+          { id: 'world-mud', tex: 'brown_mud_dry', channel: 'b', scale: 60 },
+        ],
+      },
+    },
+    { baseTiling: 70 },
+  )
+  layered.setMaskTexture(paintMixMap(scene, world.groundHalfExtent))
+  layered.material.maxSimultaneousLights = 8
+  mesh.material = layered.material
 
   // Horizon skirt: a huge tinted disc under the world edge so the map
   // border melts into distant fields instead of a hard void band.
@@ -449,13 +459,6 @@ function buildTerrainMesh(scene: Scene, content: ContentRegistry, mapMix?: strin
   skirt.material = skirtMat
   skirt.isPickable = false
   return [mesh, skirt]
-}
-
-function tiled(scene: Scene, name: string, scale: number): Texture {
-  const tex = new Texture(`/assets/tex/${name}.jpg`, scene)
-  tex.uScale = scale
-  tex.vScale = scale
-  return tex
 }
 
 /** World-region painter for the splat mix map (R grass, G rock, B mud). */

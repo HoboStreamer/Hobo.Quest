@@ -3,6 +3,7 @@ import {
   buildTerrainGrid,
   getMapOverride,
   type ContentRegistry,
+  type WorldDef,
   effectiveShape,
   scalePatchPositions,
 } from '@hobo/content'
@@ -48,14 +49,7 @@ export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegist
     collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
   })
   buildPatchPhysics(physics)
-  const grid = buildTerrainGrid(world)
-  lastTerrainBody = physics.addBody({
-    shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
-    motion: 'static',
-    pos: vec3(0, 0, 0),
-    layer: CollisionLayer.Static,
-    collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
-  })
+  lastTerrainBody = buildWorldTerrainBody(physics, world)
   // Invisible boundary walls (must match the server exactly).
   const b = world.groundHalfExtent + 0.5
   const wallLen = b * 2 + 4
@@ -101,8 +95,23 @@ export function rebuildTerrainPhysics(physics: PhysicsWorld, content: ContentReg
   for (const b of patchBodies) physics.removeBody(b)
   patchBodies = []
   buildPatchPhysics(physics)
-  const grid = buildTerrainGrid(content.world)
-  lastTerrainBody = physics.addBody({
+  lastTerrainBody = buildWorldTerrainBody(physics, content.world)
+}
+
+/**
+ * The BASE WORLD's procedural terrain collider — the client-prediction twin of the
+ * server body, and it must appear and disappear on exactly the same rule.
+ *
+ * Not built when a map is loaded: the map's own terrain objects ARE the
+ * ground, and this grid resampled them onto a world-sized trimesh — a second
+ * floor at every authored height, and for a map with NO terrain a flat sheet
+ * at y = 0 that nothing rendered but everything stood on. A blank map must
+ * genuinely have nothing to stand on.
+ */
+function buildWorldTerrainBody(physics: PhysicsWorld, world: WorldDef): BodyId | null {
+  if (getMapOverride()) return null
+  const grid = buildTerrainGrid(world)
+  return physics.addBody({
     shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
     motion: 'static',
     pos: vec3(0, 0, 0),
