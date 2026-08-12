@@ -22,7 +22,7 @@
  * parented to something the document might rebuild.
  */
 import { GizmoManager } from '@babylonjs/core/Gizmos/gizmoManager.js'
-import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js';
+import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import { Quaternion } from '@babylonjs/core/Maths/math.vector.js'
 import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { Scene } from '@babylonjs/core/scene.js'

@@ -18,46 +18,46 @@
  *   remote selected the collaborator's colour
  *   remote locked   the collaborator's colour, plus a lock badge in the UI
  */
-import { Color3 } from '@babylonjs/core/Maths/math.color.js';
-import type { Scene } from '@babylonjs/core/scene.js';
-import type { EditorViewRegistry } from '../viewport/editorViewRegistry.js';
-export declare const C_PRIMARY: Color3;
-export declare const C_SECONDARY: Color3;
-export declare const C_HOVER: Color3;
+import { Color3 } from '@babylonjs/core/Maths/math.color.js'
+import type { Scene } from '@babylonjs/core/scene.js'
+import type { EditorViewRegistry } from '../viewport/editorViewRegistry.js'
+export declare const C_PRIMARY: Color3
+export declare const C_SECONDARY: Color3
+export declare const C_HOVER: Color3
 export interface RemoteSelection {
-    color: Color3;
-    ids: string[];
+  color: Color3
+  ids: string[]
 }
 export interface SelectionVisualState {
-    /** Local selection, primary first. */
-    ids: readonly string[];
-    primary: string | null;
-    hover: string | null;
-    /** peer id → what that collaborator has selected. */
-    remote: ReadonlyMap<number, RemoteSelection>;
-    /** object id → lock owner colour. */
-    locks: ReadonlyMap<string, string>;
-    /** True while the terrain tool wants a hovered terrain's grid shown. */
-    terrainHoverWire: string | null;
-    /** Terrain being sculpted/painted right now — its wire is pinned on. */
-    strokeWire: string | null;
+  /** Local selection, primary first. */
+  ids: readonly string[]
+  primary: string | null
+  hover: string | null
+  /** peer id → what that collaborator has selected. */
+  remote: ReadonlyMap<number, RemoteSelection>
+  /** object id → lock owner colour. */
+  locks: ReadonlyMap<string, string>
+  /** True while the terrain tool wants a hovered terrain's grid shown. */
+  terrainHoverWire: string | null
+  /** Terrain being sculpted/painted right now — its wire is pinned on. */
+  strokeWire: string | null
 }
 export declare class SelectionVisuals {
-    private readonly views;
-    private readonly layer;
-    constructor(scene: Scene, views: EditorViewRegistry);
-    /**
-     * Recompute every highlight from the current state. Cheap enough to call
-     * on any selection or document change; deliberately NOT called per frame.
-     */
-    refresh(state: SelectionVisualState): void;
-    /**
-     * A selected terrain keeps its grid visible until deselected — it is the
-     * only cue that a flat terrain is selected at all, and it must survive
-     * hover, transforms, sculpting, undo and UI interaction.
-     */
-    private refreshTerrainWires;
-    private add;
-    dispose(): void;
+  private readonly views
+  private readonly layer
+  constructor(scene: Scene, views: EditorViewRegistry)
+  /**
+   * Recompute every highlight from the current state. Cheap enough to call
+   * on any selection or document change; deliberately NOT called per frame.
+   */
+  refresh(state: SelectionVisualState): void
+  /**
+   * A selected terrain keeps its grid visible until deselected — it is the
+   * only cue that a flat terrain is selected at all, and it must survive
+   * hover, transforms, sculpting, undo and UI interaction.
+   */
+  private refreshTerrainWires
+  private add
+  dispose(): void
 }
 //# sourceMappingURL=selectionVisuals.d.ts.map
