@@ -5,11 +5,18 @@ import {
   worldSpawn,
   effectiveShape,
 } from '@hobo/content'
-import type { ContentRegistry, StaticBody, WorldShape } from '@hobo/content'
+import type {
+  ContentRegistry,
+  MapNodeSpawn,
+  MapPropSpawn,
+  StaticBody,
+  WorldShape,
+} from '@hobo/content'
 import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
 import type { ConstraintDto, PersistenceStore, WorldEntityDto } from '@hobo/persistence'
 import { MapStaticLayer } from './mapStaticLayer.js'
 import { MapTerrainLayer } from './mapTerrainLayer.js'
+import { planMapProvenance, provenanceState, readProvenance } from './mapProvenance.js'
 import {
   CollisionLayer,
   type BodyId,
@@ -538,29 +545,63 @@ export class GameWorld {
    * placed resource node with no matching live resource nearby spawns.
    * (Removal is by harvesting in game — reconcile never deletes.)
    */
+  /**
+   * Live map save: bring map-authored resource nodes into line, BY IDENTITY.
+   *
+   * The previous rule was "a node of this type within a metre already
+   * exists", which is not identity: two deliberately adjacent authored nodes
+   * collapsed into one, and a moved seed spawned a duplicate instead of
+   * moving. Every entity a map object authored carries that object's id, so
+   * this can only ever touch what the map owns — a player's constructions
+   * have no provenance and are never considered.
+   *
+   * Gameplay state is preserved across an unrelated save: a depleted node
+   * stays depleted, because an admin retexturing a wall must not silently
+   * restock the map.
+   */
   reconcileMapNodes(): void {
     const world = this.content.world
-    for (const node of getMapOverride()?.nodes ?? []) {
-      const y = node.pos[1] + terrainHeight(world, node.pos[0], node.pos[2])
-      let exists = false
-      for (const e of this.entities.ofKind('resource')) {
-        if (e.resource?.nodeTypeId !== node.node) continue
-        const dx = e.transform.pos.x - node.pos[0]
-        const dz = e.transform.pos.z - node.pos[2]
-        if (dx * dx + dz * dz < 1) {
-          exists = true
-          break
-        }
-      }
-      if (exists) continue
+    const plan = planMapProvenance(
+      getMapOverride()?.nodes ?? [],
+      [...this.entities.ofKind('resource')],
+      {
+        spec: (n: MapNodeSpawn) => ({ id: n.id, defId: n.node, pos: n.pos }),
+        entity: (e) => ({
+          mapSourceId: e.mapSourceId,
+          defId: e.resource?.nodeTypeId ?? '',
+          x: e.transform.pos.x,
+          z: e.transform.pos.z,
+        }),
+      },
+    )
+
+    for (const entity of plan.despawn) this.despawn(entity.id)
+    for (const { entity, spec } of plan.move) {
+      // Moving the seed moves the entity and KEEPS what has been mined out of
+      // it — an admin nudging a rock does not restock it.
+      this.placeAt(entity, spec.pos)
+    }
+    for (const node of plan.spawn) {
       const nodeType = this.content.nodeTypeOrThrow(node.node)
-      this.spawnResource({
+      const y = node.pos[1] + terrainHeight(world, node.pos[0], node.pos[2])
+      const entity = this.spawnResource({
         nodeTypeId: node.node,
         pos: vec3(node.pos[0], y, node.pos[2]),
         remaining: nodeType.amount,
       })
-      this.log.info('map node spawned', { node: node.node, x: node.pos[0], z: node.pos[2] })
+      entity.mapSourceId = node.id
+      entity.dirty = true
+      this.log.info('map node spawned', { node: node.node, source: node.id })
     }
+  }
+
+  /** Reposition an authored entity onto the terrain, body and all. */
+  private placeAt(entity: GameEntity, pos: readonly [number, number, number]): void {
+    const y = pos[1] + terrainHeight(this.content.world, pos[0], pos[2])
+    entity.transform.pos = vec3(pos[0], y, pos[2])
+    entity.dirty = true
+    const body = this.bodyOf(entity.id)
+    if (body !== undefined) this.physics.setTransform(body, entity.transform.pos)
   }
 
   /**
@@ -574,21 +615,35 @@ export class GameWorld {
     this.zones.setMapZones(getMapOverride()?.zones ?? [])
   }
 
-  /** Live map save: spawn editor props that have no live counterpart nearby. */
+  /**
+   * Live map save: map-authored props, by identity.
+   *
+   * The old rule was "a prop of this item within two metres", so a player's
+   * crate dropped beside an authored one suppressed the authored one — and a
+   * player's constructions could be mistaken for map seeds. Props with no
+   * provenance are never touched here.
+   */
   reconcileMapProps(): void {
-    for (const prop of getMapOverride()?.props ?? []) {
-      let exists = false
-      for (const e of this.entities.ofKind('prop')) {
-        if (e.prop?.defId !== prop.item) continue
-        const dx = e.transform.pos.x - prop.pos[0]
-        const dz = e.transform.pos.z - prop.pos[2]
-        if (dx * dx + dz * dz < 4) {
-          exists = true
-          break
-        }
-      }
-      if (exists) continue
-      this.spawnProp({
+    const plan = planMapProvenance(
+      getMapOverride()?.props ?? [],
+      [...this.entities.ofKind('prop')],
+      {
+        spec: (p: MapPropSpawn) => ({ id: p.id, defId: p.item, pos: p.pos }),
+        entity: (e) => ({
+          mapSourceId: e.mapSourceId,
+          defId: e.prop?.defId ?? '',
+          x: e.transform.pos.x,
+          z: e.transform.pos.z,
+        }),
+      },
+    )
+
+    for (const entity of plan.despawn) this.despawn(entity.id)
+    for (const { entity, spec } of plan.move) this.placeAt(entity, spec.pos)
+
+    for (const prop of plan.spawn) {
+      const sourceId = prop.id
+      const entity = this.spawnProp({
         defId: prop.item,
         pos: vec3(
           prop.pos[0],
@@ -598,13 +653,17 @@ export class GameWorld {
         rot: qfromYaw(quat(), prop.yaw ?? 0),
         motion: this.content.item(prop.item)?.shop ? 'static' : 'dynamic',
       })
-      this.log.info('map prop spawned', { item: prop.item, x: prop.pos[0], z: prop.pos[2] })
+      entity.mapSourceId = sourceId
+      entity.dirty = true
+      this.log.info('map prop spawned', { item: prop.item, source: sourceId })
     }
   }
 
   private seedResources(_store: PersistenceStore): void {
     const world = this.content.world
-    for (const node of [...world.resourceNodes, ...(getMapOverride()?.nodes ?? [])]) {
+    // World-def nodes have no map provenance; map nodes carry theirs, so a
+    // later save can find exactly the entity it authored.
+    for (const node of world.resourceNodes) {
       const nodeType = this.content.nodeTypeOrThrow(node.node)
       this.spawnResource({
         nodeTypeId: node.node,
@@ -616,6 +675,19 @@ export class GameWorld {
         ),
         remaining: nodeType.amount,
       })
+    }
+    for (const node of getMapOverride()?.nodes ?? []) {
+      const nodeType = this.content.nodeTypeOrThrow(node.node)
+      const entity = this.spawnResource({
+        nodeTypeId: node.node,
+        pos: vec3(
+          node.pos[0],
+          node.pos[1] + terrainHeight(world, node.pos[0], node.pos[2]),
+          node.pos[2],
+        ),
+        remaining: nodeType.amount,
+      })
+      entity.mapSourceId = node.id
     }
   }
 
@@ -637,6 +709,10 @@ export class GameWorld {
         lootCount: Number(row.state?.lootCount ?? 1),
         ...(row.ownerId ? { owner: row.ownerId as PlayerId } : {}),
       })
+      // Provenance survives the restart, so the first save after one does
+      // not treat every authored seed as missing and duplicate the lot.
+      const source = readProvenance(row.state)
+      if (source !== undefined) entity.mapSourceId = source
       if (entity.prop && typeof row.state?.doorOpen === 'boolean') {
         entity.prop.doorOpen = row.state.doorOpen
       }
@@ -667,6 +743,10 @@ export class GameWorld {
         depletedUntil: Number(row.state?.depletedUntil ?? 0),
         id: row.id as EntityId,
       })
+      // Provenance survives the restart, or the first save after one would
+      // treat every authored seed as missing and duplicate the lot.
+      const source = readProvenance(row.state)
+      if (source !== undefined) entity.mapSourceId = source
       entity.dirty = false
       return true
     }
@@ -716,10 +796,17 @@ function entityToDto(entity: GameEntity, now: number): WorldEntityDto {
     rot: [rot.x, rot.y, rot.z, rot.w],
     motion: entity.prop?.motion ?? 'static',
     state: entity.resource
-      ? { remaining: entity.resource.remaining, depletedUntil: entity.resource.depletedUntil }
+      ? {
+          remaining: entity.resource.remaining,
+          depletedUntil: entity.resource.depletedUntil,
+          // Provenance survives a restart, or the first save after one would
+          // treat every authored seed as missing and duplicate the lot.
+          ...provenanceState(entity.mapSourceId),
+        }
       : entity.prop
         ? {
             lootCount: entity.prop.lootCount,
+            ...provenanceState(entity.mapSourceId),
             ...(entity.prop.container ? { container: entity.prop.container } : {}),
             ...(entity.prop.doorOpen !== undefined ? { doorOpen: entity.prop.doorOpen } : {}),
             ...(entity.prop.plant ? { plant: entity.prop.plant } : {}),

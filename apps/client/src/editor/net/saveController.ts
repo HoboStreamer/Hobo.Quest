@@ -184,7 +184,10 @@ export function createSaveController(opts: SaveControllerOptions): SaveControlle
       remoteDoc = parsed.map
       if (served) baseRevision = served
       opts.onAdopt(parsed.map)
-      setMessage('🔄 merged edits from another admin')
+      // NOT a merge: the local copy was clean, so it was REPLACED by the
+      // remote one. Calling that "merged" would tell the user their edits
+      // were combined with someone else's, which nothing here does.
+      setMessage("🔄 loaded another admin's saved map")
       notify()
     } catch {
       // Offline poll; the next one will pick it up.

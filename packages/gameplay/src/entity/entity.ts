@@ -50,6 +50,18 @@ export interface GameEntity {
   resource?: ResourceComponent
   /** Owning player (spawner) — placement/physgun permission checks use this. */
   owner?: PlayerId
+  /**
+   * The MAP object that authored this entity, when one did.
+   *
+   * Map reconciliation used to match by proximity — same type within a metre
+   * — which is not identity: two deliberately close authored nodes collapsed
+   * into one, a player's crate dropped near an authored one suppressed it,
+   * and a moved seed spawned a duplicate rather than moving. Provenance is
+   * explicit, so reconciliation can only ever touch what the map owns.
+   *
+   * Absent means player-created. Those are never removed by a map save.
+   */
+  mapSourceId?: string
   /** Persisted across restarts (player constructions yes, players no — they persist separately). */
   persistent: boolean
   /** Needs a persistence write. Set by mutators, cleared by the save flush. */

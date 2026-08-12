@@ -107,7 +107,23 @@ export declare class GameWorld {
    * placed resource node with no matching live resource nearby spawns.
    * (Removal is by harvesting in game — reconcile never deletes.)
    */
+  /**
+   * Live map save: bring map-authored resource nodes into line, BY IDENTITY.
+   *
+   * The previous rule was "a node of this type within a metre already
+   * exists", which is not identity: two deliberately adjacent authored nodes
+   * collapsed into one, and a moved seed spawned a duplicate instead of
+   * moving. Every entity a map object authored carries that object's id, so
+   * this can only ever touch what the map owns — a player's constructions
+   * have no provenance and are never considered.
+   *
+   * Gameplay state is preserved across an unrelated save: a depleted node
+   * stays depleted, because an admin retexturing a wall must not silently
+   * restock the map.
+   */
   reconcileMapNodes(): void
+  /** Reposition an authored entity onto the terrain, body and all. */
+  private placeAt
   /**
    * Apply the map's authored zones. Idempotent by construction: the map layer
    * is REPLACED, never appended, so saving the same map twice cannot stack
@@ -116,7 +132,14 @@ export declare class GameWorld {
    * never lift one the world def declared.
    */
   reconcileMapZones(): void
-  /** Live map save: spawn editor props that have no live counterpart nearby. */
+  /**
+   * Live map save: map-authored props, by identity.
+   *
+   * The old rule was "a prop of this item within two metres", so a player's
+   * crate dropped beside an authored one suppressed the authored one — and a
+   * player's constructions could be mistaken for map seeds. Props with no
+   * provenance are never touched here.
+   */
   reconcileMapProps(): void
   private seedResources
   private restoreEntity
