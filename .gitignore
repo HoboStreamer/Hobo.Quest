@@ -3,7 +3,10 @@ dist/
 *.tsbuildinfo
 .env
 *.log
+# Runtime SQLite state, at the repo root or in any app (never a fixture).
 data/*.db
 data/*.db-*
+apps/*/data/*.db
+apps/*/data/*.db-*
 .DS_Store
 scratch/
