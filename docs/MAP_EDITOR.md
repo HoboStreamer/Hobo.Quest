@@ -1,373 +1,262 @@
-# Map editor architecture
+# The map editor
 
-The editor at `/editor` authors the world the server runs. **The server is the
-game** — the editor never serializes a Babylon scene as truth. It produces an
-explicit data artifact (`map.json`), and the server validates, versions and
-applies it.
-
-This document describes the architecture after the correctness pass. Where a
-design choice exists to fix a specific historical failure, that failure is
-named: the reason is the useful part.
+`/editor` authors the map artifact the game runs on. This describes what is
+there, not what is planned; anything aspirational belongs in `ROADMAP.md`.
 
 ---
 
-## Authority: document, views, selection
+## The one rule
 
-| Concern            | Owner                                  | Never                  |
-| ------------------ | -------------------------------------- | ---------------------- |
-| What exists        | the map artifact (`MapFileV2`)         | a Babylon mesh         |
-| What is selected   | `SelectionManager`, a set of **ids**   | mesh references        |
-| Where things are   | canonical `EditorTransform` per object | mesh transforms        |
-| What the user sees | Babylon meshes, rebuilt freely         | anything authoritative |
-
-Meshes are **projections**. Undo, a remote merge, a material change and a
-texture rename all dispose and recreate them. Anything holding a mesh
-reference across those events goes stale, which is why selection, face
-selection and selection visuals are all keyed by stable id.
-
-### Stable ids
-
-Every authored object carries one: `s-…` statics, `n-…` nodes, `pr-…` props,
-`terrain:<id>` terrain, `spawn`, light ids. Ids are the vocabulary for
-selection, collaboration locks, history commands and the view registry.
-
----
-
-## Interaction: one gesture, one action
-
-`editor/interaction/interactionController.ts`
-
-A pointer gesture is **claimed** on pointer-down and owned until pointer-up.
-States: `idle`, `selection-click-candidate`, `camera-orbit`, `camera-pan`,
-`camera-freelook`, `gizmo-drag`, `placement`, `terrain-sculpt`,
-`surface-paint`, `face-edit`.
-
-- `canStartGesture()` — only `idle` (or a bare click candidate) may claim.
-- `pickingAllowed()` — false during any exclusive gesture.
-- `cameraMayMove()` / `flightAllowed()` — the camera asks before moving.
-- `end()` returns **true only for a click**: a click candidate whose pointer
-  travel stayed under the slop. A drag is never a selection.
-
-### Why gizmo click-through happened
-
-Babylon's `UtilityLayerRenderer` hooks `originalScene.onPrePointerObservable`
-at top priority and sets `skipOnPointerObservable` when a gizmo is hit. That
-flag only suppresses Babylon's **own** `scene.onPointerObservable` — and the
-editor listened on the raw DOM instead, entirely outside that mechanism. It
-compensated with `gizmoDragging || gizmo.isHovered || setTimeout(…, 50)`:
-three racing signals with no ordering guarantee.
-
-The fix is ordering, not timing. `new Scene(engine)` attaches Babylon's input
-manager during construction, long before any editor listener exists. So a
-gizmo's `onDragStartObservable` has already run — synchronously, inside the
-same DOM `pointerdown` — by the time the editor's handler executes. The
-gesture is claimed, `canStartGesture()` is false, and nothing behind the
-gizmo can be picked. There is no timeout anywhere.
-
-### Camera isolation
-
-MMB orbit/pan claim `camera-orbit` / `camera-pan`. Wheel zoom and WASD flight
-check `flightAllowed()`. During `gizmo-drag` every one of them is refused, so
-a transform can never be polluted by camera motion.
-
----
-
-## Picking
-
-`editor/interaction/editorPicker.ts` — **one** pick per selection gesture,
-returning one front-most eligible hit.
-
-Replaces "pick meshes, then separately multiPick terrain, then prefer the
-smallest patch within 1.5 m", which could resolve one click to several objects
-and made stacked terrain unpredictable.
-
-- `resolveOwner` walks the parent chain, so imported-model child meshes
-  resolve to their owning object. Helpers (sky, clouds, brush, ghosts, wires,
-  face overlays, peer avatars) are owned by nothing and are never returned.
-- `resolveFrontMost` breaks coincident-surface ties **by object id**, so the
-  result does not depend on scene traversal order.
-- The predicate re-tests `isPickable` / `isVisible` / `isEnabled`.
-
-> **Babylon trap.** `scene.pick(x, y, predicate)` SKIPS the built-in
-> pickability checks whenever a predicate is supplied. Forgetting this once
-> left a deleted (disabled) island invisibly selectable. `EditorPicker` bakes
-> the re-test in so no caller can forget it again.
-
----
-
-## Selection semantics
-
-`editor/selection/selectionManager.ts`
-
-| Gesture                         | Result                                             |
-| ------------------------------- | -------------------------------------------------- |
-| click object                    | replace                                            |
-| **Ctrl**+click object           | add (idempotent — already-selected stays selected) |
-| **Alt**+click _selected_ object | remove only that one                               |
-| **Alt**+click unselected object | nothing                                            |
-| **Ctrl**/**Alt**+click empty    | preserve the selection                             |
-| click empty                     | clear                                              |
-
-Shift is **not** an object multi-select. Alt remains snap-bypass in a gizmo
-context and the eyedropper in Face context; contexts do not collide because
-the modifier is interpreted per interaction state.
-
-Selection **freezes** for the duration of a transform. `retain(predicate)`
-drops only ids whose object disappeared, which is what lets undo/redo keep a
-selection alive instead of deselecting everything.
-
----
-
-## Transforms
-
-`editor/viewport/transformMath.ts` — position, **quaternion**, scale. Euler is
-a display format only; accumulating rotations through Euler triples is what
-produced drifting angles.
-
-Group edits are one delta applied to every member's **immutable start**
-snapshot:
+**The document owns map data. Everything else is a projection of it.**
 
 ```
-newWorld = delta × startWorld      delta = pivotNow × pivotStart⁻¹
+                    EditorDocument  (validated MapFileV2 + id index + change feed)
+                          │
+        ┌─────────────────┼──────────────────┬───────────────┐
+        │                 │                  │               │
+  EditorViewRegistry  CommandHistory   SelectionManager   the panels
+   (Babylon meshes)   (before/after     (stable ids)     (Outliner,
+                       document values)                   Inspector, …)
 ```
 
-Two properties are asserted in tests and are the reason the model works:
+Meshes are rebuilt constantly — a material change, an undo, a remote save —
+so nothing durable may point at one. Selection, history, collaboration locks,
+the Outliner and the Issues panel all hold **stable ids**, and
+`EditorViewRegistry` is the only thing that maps between an id and a Babylon
+object. Destroying and rebuilding a mesh therefore cannot invalidate any of
+them.
 
-- **Idempotent** — re-applying the same pivot pair does not compound, so a
-  per-frame drag is safe.
-- **Exactly invertible** — cancel restores the start transforms.
+Before this the editor held the map in six mutable arrays plus a copy of each
+transform on its mesh plus another in every undo entry, and nothing said which
+was true.
 
-### TransformSession
+---
 
-`editor/viewport/transformSession.ts` owns a gesture from grab to commit:
+## Where things live
 
-1. snapshot ids + start transforms, compute the pivot, verify locks for the
-   **whole** set atomically, open a history transaction;
-2. `update(pivotNow)` recomputes every member from its start snapshot;
-3. `commit()` records **one** command, or nothing if nothing changed;
-4. `cancel()` restores exact start snapshots and records nothing.
+| Concern                   | Module                                                                       |
+| ------------------------- | ---------------------------------------------------------------------------- |
+| Map data                  | `document/editorDocument.ts`                                                 |
+| Per-kind pose + labels    | `document/editorObject.ts`                                                   |
+| Babylon projection        | `viewport/editorViewRegistry.ts`, `viewport/views/`                          |
+| Undo/redo                 | `history/commandHistory.ts`, `history/commands.ts`                           |
+| Selection                 | `selection/selectionManager.ts`, `selection/selectionVisuals.ts`             |
+| Faces                     | `selection/faceSelection.ts`                                                 |
+| Transform gesture         | `viewport/transformSession.ts`, `viewport/transformMath.ts`                  |
+| Gizmo                     | `viewport/gizmoController.ts`                                                |
+| Camera                    | `viewport/editorCameraController.ts`                                         |
+| Snap / World-Local / grid | `viewport/editorPreferences.ts`                                              |
+| Tools                     | `tools/toolManager.ts`, `tools/placementTool.ts`, `tools/terrainTool.ts`     |
+| Painting                  | `materials/paintMask.ts`, `materials/paintableSurface.ts`                    |
+| Pointer routing           | `interaction/viewportInteraction.ts`, `interaction/interactionController.ts` |
+| Keyboard                  | `bindings.ts`, `input/actionRouter.ts`                                       |
+| Workspace + panels        | `ui/`                                                                        |
+| Save / conflict / draft   | `net/saveController.ts`, `recovery/draftStore.ts`                            |
+| Collaboration             | `collaboration/`                                                             |
+| Composition               | `editorApp.ts` (`main.ts` is boot only)                                      |
 
-The gizmo always rides a dedicated pivot node — single selection included.
-Nothing is ever reparented. This replaces `bakeMulti()`, which parented
-heterogeneous meshes to a pivot, read the already-transformed mesh pose back
-out as its source, and had a separate bake branch per object kind.
+---
 
-### Scale vs dimensions
+## The wire
 
-They are **separate**, and both are real.
+`MapFile v2` (`packages/content/src/mapFileV2.ts`) is canonical. v1 is
+accepted as **migration input only** — `parseMapFile` migrates it — and there
+is no reverse projection. `compileMapFileV2` is the single boundary between
+authoring and runtime.
 
-- `StaticBody.scale` is canonical. `effectiveShape(body)` is the ONE place
-  dimensions and scale combine, used by client rendering, client prediction
-  physics and server physics — so a scaled object cannot render at one size
-  and collide at another.
-- Primitive dimensions (width/height/depth, radius) are their own Geometry
-  fields.
-- Scale defaults to `1,1,1` and is never displayed as `0`.
+Every editable object has a stable id. `normalizeMapIds` assigns
+deterministic ids to anything that predates the rule, before validation, so
+the schema can require them; the next save persists them and they never
+change again. Array position is not identity.
 
-### Terrain transforms
+`spawn` is stored top-level on the wire and exposed as a synthetic document
+object under the reserved id `spawn`, so it is selectable, undoable, lockable
+and listed like anything else.
 
-Terrain is a local heightfield plus a world transform, and supports position,
-rotation **and scale**:
+---
 
-- render: `mesh.scaling`
-- collision: `scalePatchPositions()` scales the trimesh vertices on both the
-  server and client-prediction sides — Babylon and Havok both apply
-  scale → rotate → translate, so the two agree
-- ground queries: `sampleOverride()` divides by X/Z and multiplies height by Y
+## Document changes
 
-Mixed terrain + static groups transform together through the same session.
+`add` / `update` / `replace` / `remove` emit typed changes carrying the stable
+id and, for updates, **the keys that differ**. A view can then be cheap about
+it: repainting a tint does not rebuild a heightfield. A view that cannot apply
+a change incrementally returns `false` and the registry rebuilds it — identity
+is unaffected, because it is keyed by id.
+
+`transact()` batches one user gesture into one notification, so a multi-object
+drag does not rebuild the Outliner once per object.
 
 ---
 
 ## History
 
-`editor/history/commandHistory.ts`
+Commands capture **stable ids and plain values** — never a mesh, never a live
+reference, never an array index — so undo is an exact inverse by construction.
 
-An `EditorCommand` owns its own `execute`/`undo`, so the history knows nothing
-about what is changing. This replaces a 23-variant `UndoOp` union and one
-giant `applyOp` switch that reached into editor closures — every feature added
-a variant and a branch, and every branch had to remember to rebuild meshes and
-fix up selection.
+One user gesture is one entry: a gizmo drag, a numeric scrub, a multi-delete,
+a duplicate, a terrain stroke, a paint stroke.
 
-- **One interaction = one entry.** `beginTransaction` / `commitTransaction`
-  collapse a 40-frame drag or numeric scrub into a single command;
-  `cancelTransaction` rolls back and records nothing.
-- **Dirty** compares command _identity_, not stack depth: undoing back to the
-  saved point clears it, while "undo, then do something else" stays dirty.
-- Memory and entry budgets are enforced; paint commands report their real
-  retained size.
-- **Undo does not deselect.** It re-derives the view and calls
-  `selection.retain(...)`.
+Terrain and paint strokes store the **changed rectangle**, not the field: a
+512² heightfield is a megabyte of `Float32` per snapshot and a brush dab
+touches a handful of samples.
 
-Legacy `UndoOp`s are bridged in as commands, so old mutations and new sessions
-share one stack, one undo/redo path and one dirty flag.
+Dirty state compares against the saved checkpoint by command identity, so:
+save → edit → dirty → undo → clean → redo → dirty.
 
 ---
 
-## Selection visuals
+## Input
 
-Derived from **state**, never from event side effects.
+Every keyboard behaviour goes through `bindings.ts`, which means all of them
+are remappable and all of them appear in the settings panel with conflict
+detection. There are no shortcuts wired directly to a `keydown` elsewhere.
 
-Terrain wire visibility is computed each frame from the selection **set of
-ids** — `selectedTerrains.has('terrain:' + patch.id)` — not from mesh
-identity. Keying on the mesh meant any rebuild made a selected terrain's wire
-vanish; the regression test samples twelve consecutive frames.
+Typing is not shortcuts: while focus is in a text field, a number field or a
+keybind capture, no action runs and no key registers as held.
 
-Authored materials are never mutated to show selection.
+**Pointer ownership.** Babylon's `UtilityLayerRenderer` only suppresses its
+own `scene.onPointerObservable` when a gizmo is hit, and this editor listens
+on raw DOM events — so a press on a handle also ran scene selection behind it.
+The fix is ordering, not a hover flag: `new Scene(engine)` attaches Babylon's
+input manager during construction, before any editor listener exists, so the
+gizmo's drag-start has already claimed the gesture by the time the canvas
+handler runs.
 
----
+The gizmo is attached only for Select and no-tool. Left attached while
+painting it puts a grabbable handle over the point the brush is aimed at.
 
-## Face selection
+**Coordinates.** The canvas fills the viewport grid cell, not the window, so
+its space starts at the cell's top-left. `worldToScreen` returns **page**
+coordinates and `toCanvasSpace` is its inverse; a projection correct in canvas
+space and used as a page position is silently off by the width of a panel.
 
-`editor/selection/faceSelection.ts`
-
-Identity is `objectId:face` (`face` = box face 0..5, or `all`), which survives
-mesh rebuilds. `parseFaceKey` splits on the **last** colon so terrain ids
-containing colons round-trip.
-
-`FaceOverlayManager` draws one translucent overlay per selected face, built
-from that face's own two triangles (`indices[face*6 … face*6+6)`), parented to
-the source so it tracks moves and scales, `zOffset -2` and
-`renderingGroupId 1` to avoid z-fighting, never pickable. Primary is stronger
-than secondary; hover is separate. Previously "highlighting a face" added the
-whole mesh to the HighlightLayer, lighting up all six sides of a box.
-
-Cylinders, spheres and terrain highlight their whole surface — honest until
-sub-surface semantics exist for them.
-
-**Auto Apply** (opt-in, persisted locally): style edits preview live on every
-selected face, but a continuous scrub opens one transaction on pointer-down
-and commits a single entry on release. Escape rolls it back.
+**Camera.** Babylon's own camera inputs are cleared. MMB uses pointer capture
+so a drag survives leaving the canvas and autoscroll never fires; the wheel
+dollies toward the point under the cursor with a distance-scaled step, unless
+a placement tool has claimed it to rotate the preview.
 
 ---
 
-## Surfaces and painting
+## Tools
 
-`packages/content/surface.ts` (data) + `render/layeredSurface.ts` (renderer) +
-`editor/materials/paintMask.ts` (brush).
-
-A surface is a **base style** plus up to four **paint layers**. The base is
-never touched by painting — it shows wherever no layer covers it. Each layer
-references any registered texture and owns one RGBA channel of a single
-coverage mask, so a surface costs 1 base + 4 layer + 1 mask = 6 samplers no
-matter how many textures the project has.
-
-This replaces Babylon's `TerrainMaterial`, whose three diffuse slots were
-hard-wired to grass/rock/mud: choosing the Paint tool _replaced_ whatever
-texture a surface had with that palette, and nothing else could be painted.
-
-- `allocateLayer()` reuses the layer for a texture, un-hides a hidden one, and
-  returns `null` at the budget so the caller opens the layer manager. A base
-  texture is never swapped out to make room.
-- The renderer is a `CustomMaterial` injecting the blend at
-  `CUSTOM_FRAGMENT_UPDATE_DIFFUSE`, so lighting, shadows, fog and the
-  day/night rig keep working. The **same class runs in the editor and in
-  play**, so painting is WYSIWYG.
-- A 1×1 white texture backs plain-colour bases so `vDiffuseUV` always exists;
-  `hoboEnabled` gates unused samplers to zero.
-- Channels are stamped independently: painting layer B cannot erase layer A or
-  the base. Erase subtracts from the active channel rather than painting a
-  fake base colour.
-- Paint undo stores the changed **rectangle**, not a whole-canvas snapshot.
-
-Legacy maps migrate: `migrateLegacyMix` maps the old R/G/B splat onto layers
-grass/rock/mud on channels r/g/b, leaving alpha free.
+`Tool | null`. Clicking or hotkeying the active tool puts it away. With no
+tool active, selection and navigation still work and nothing places, sculpts
+or paints.
 
 ---
 
-## Map format
+## Painting
 
-`packages/content/mapFileV2.ts`
+A surface is a **base** (never touched by painting) plus up to four paint
+layers blended through the RGBA channels of one mask. A layer is identified by
+its texture _and_ its tint, so red brick and blue brick are two paints. At the
+layer budget the editor says so rather than silently swapping a texture out.
 
-v1 carried a **mandatory** top-level heightfield. That one privileged object
-leaked everywhere: `terrain:main` as a special selection id, `mainSelected`,
-`mainconvert`, a `heights.fill(-6)` that faked deletion, and an invisible
-collider that never went away.
+`materials/paintableSurface.ts` defines stable surface ids (`surface`,
+`face:0`…`face:5`, `mesh:<path>/material:<slot>`) and one projection per
+shape: planar for terrain, per-face for boxes, cylindrical, spherical, UV0
+where a model has one, and box projection where it does not — because Paint
+silently doing nothing is the worst outcome, since the user cannot tell
+whether they missed, the texture failed, or it is unsupported. All-zero UVs
+count as unusable: that is what an un-unwrapped export writes.
 
-v2 has **no main terrain**. `terrains[]` holds ordinary objects, each with a
-stable id, canonical transform, heightfield and surface. `emptyMapV2()` is
-genuinely empty.
-
-- `parseMapFile(raw)` accepts v1 or v2 and always yields v2.
-- `migrateV1ToV2` is deterministic (same input → same ids). The old main
-  heightfield becomes ONE ordinary terrain; a v1 main that was "deleted" by
-  sinking below the waterline is **dropped**, not carried over.
-- `validateMapFile` checks height count vs resolution, duplicate ids across
-  kinds, dangling texture/model/paint refs, non-finite transforms, zero scale
-  and paint-layer budget.
-- `canonicalizeMapFile` is key-order independent and drops `undefined`, so the
-  revision hash is stable.
-
-### The wire format
-
-`/map.json` serves the canonical v2 document with its revision as an ETag.
-`compileMapFileV2()` is the one authoring → runtime boundary, used by the
-server, the game client and client prediction physics. v1 compatibility is
-**one-way**: a legacy file is migrated on the way in and never produced again.
-
-### Blank world
-
-A new map has no geometry, so a placement ray hits nothing. When the authored
-count is **zero**, the first mesh/terrain/model commits at exactly the origin
-wherever the user clicks. Sky, water, grid and helpers do not count.
+**Currently wired to terrain only.** The abstraction and its projections are
+implemented and tested; the brush routes to `TerrainView`. Extending it to
+primitives and imported models is the next painting step.
 
 ---
 
-## Save pipeline and revisions
+## Assets
 
-`apps/server/net/mapStore.ts`
+`POST /api/map-assets` names a file after the **sha256 of the bytes it
+received** and decides the extension by sniffing those bytes (PNG / JPEG /
+WebP / GLB), never from a caller-supplied type. Writes are async and
+temp+rename. Identical content collapses to one file and one URL.
 
-`authenticate → size-limit → parse → migrate → validate → revision check →
-canonicalise → atomic write → apply live → broadcast`.
+That dedupe is what makes paint masks affordable: they stay canvases in
+memory while editing and upload on save, so an unchanged mask hashes the same
+and the second save uploads nothing. Textures and imported models take the
+same path. Legacy embedded `dataUrl` textures and `data:` model glbs still
+load.
 
-- The revision is a SHA-256 of the canonical form, served as an **ETag**. The
-  editor sends it back as **If-Match**; a stale save is a **409** rather than
-  a silent overwrite. The old "revision" was a string of array lengths.
-- Structured errors: 400 invalid JSON, 403 unauthorised, 409 stale, 413 too
-  large, 422 invalid map (with issues).
-- All fs is async; writes are temp + `rename`, so a crash cannot leave a
-  half-written map.
-- An unchanged map is a no-op **only if the artifact already exists** — the
-  first save of an empty map must still create the file.
-
-A poll that finds an unchanged revision does nothing. Rebuilding the world
-every tick was dropping selections and flickering terrain wires.
+Content-addressed names are served `immutable`; legacy `tex-<timestamp>` names
+get five minutes, because such a name never promised anything about its bytes.
 
 ---
 
-## Status
+## Save, conflicts, recovery
 
-This document describes what is implemented. The editor-completion program is
-still in progress — see `docs/EDITOR_COMPLETION_STATUS.md` for the tracked
-checklist of what is NOT yet done (EditorDocument, ViewRegistry, the workspace
-UI, painting beyond terrain, and the `main.ts` decomposition), and
-`pnpm audit:editor` for the machine-checked version.
+Save is: upload masks → serialise → `If-Match` the revision last loaded →
+interpret the status. A stale revision is a 409, never an overwrite.
 
-## Extending the editor
+A remote save is adopted only when the local copy is **clean**. When it is
+dirty the conflict panel opens with a real diff summary (`describeDiff`) and
+three choices: take theirs, keep mine, export mine. **Nothing here merges**,
+and the UI says so — "keep mine" only dismisses the panel.
 
-**A new object kind:** give it a stable id; teach `ownerOf` (picking) and the
-`TransformAccessor` (`get`/`set`) about it; add a branch to
-`rebuildSelectionViews`; add its inspector section. Transforms, group edits,
-history and locks then work for free.
-
-**A new inspector section:** read from the document by id, write through the
-accessor or a command. Never write a mesh directly — the mesh is a projection.
-
-**A new paintable surface:** give it UVs and a `SurfaceMaterialData`, build a
-`LayeredSurfaceMaterial` for it, and point its mask sampler at a `PaintMask`.
+Drafts go to IndexedDB, debounced, and are **never** published: a crash
+recovering itself into everyone else's world would be worse than losing the
+work. They are keyed by origin + map path, and a draft whose base revision no
+longer exists is not offered for restore — its parent is gone, so applying it
+would silently revert whatever happened in between — but it is offered for
+download.
 
 ---
 
-## Tests
+## Collaboration
 
-- Unit (`vitest`): selection, interaction, picker, transform maths, transform
-  session, command history, face identity, surface layers, MapFile v2, save
-  pipeline.
-- Browser (`node --import tsx scratch/editorRepro.mts`): drives the editor
-  only through `window.__editor` and interacts with **real gizmo handle
-  geometry** found by ray-testing the utility layer. Scenarios A (click-
-  through), A2 (rapid click), B (group gizmo), F (Ctrl/Alt semantics),
-  G (terrain wire), H (scale), I (base survives paint), K (face overlays),
-  L (environment).
-- The harness verifies its aim through the editor's own picker rather than
-  trusting render timing.
+The server assigns the peer id and colour and owns the lock table. Hovering
+never acquires a lock. A group edit is all-or-nothing: a transform that could
+only move half its members is worse than one that does not start. Read-only
+selection of a locked object is allowed; mutation is refused. A lease lost
+mid-gesture is detected from the server's own table and rolls the gesture
+back.
+
+---
+
+## Live runtime
+
+Map-authored statics and zones live in their own id-keyed layers on both
+sides, separate from base world content, which is never mutated. Reconciling
+by stable id means an unchanged object keeps its exact body, so an identical
+repeated save touches nothing. `/metrics` publishes `mapStatics`,
+`mapTerrains` and `mapZones` so the "applies live" claim is checkable from
+outside the process.
+
+Terrain still rebuilds wholesale on save (`rebuildTerrain`); lights and spawn
+do not reconcile incrementally yet. `diffMapFileV2` + `affectsCollision`
+exist for that work.
+
+---
+
+## Adding things
+
+**An object kind**: add it to the v2 schema, to `EditorObjectByKind` and
+`KIND_INFO`, to `transformOf`/`setTransform`, write a view and register it in
+`createViewFactory`, and add its fields to `fieldsFor`. Selection, history,
+locks, the Outliner and the Issues panel need no changes — they are generic
+over kinds.
+
+**A tool**: add it to `Tool`, to `TOOLS` in `editorShell.ts`, and to the
+`tool.*` bindings; handle it in `ViewportInteraction.onDown`.
+
+**A surface type**: implement `PaintableSurface` and pick a projection from
+`paintableSurface.ts`.
+
+**A keyboard action**: add it to `ACTIONS` and handle it in `runAction`. It
+appears in the settings panel automatically, and the conflict test will tell
+you if the default chord is taken.
+
+---
+
+## Gates
+
+```
+pnpm typecheck    pnpm test        # 510 tests, includes the architecture audit
+pnpm lint         pnpm build
+pnpm format:check pnpm test:editor # 76 browser checks
+node --import tsx apps/server/scripts/sliceTest.ts
+```
+
+`apps/client/src/editor/architectureAudit.audit.ts` fails if a legacy
+construct returns to active runtime code. It runs as part of `pnpm test`.
