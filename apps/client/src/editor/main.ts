@@ -100,6 +100,7 @@ import type { PatchState, UndoOp } from './document/editorTypes.js'
 import { createSettingsPanel } from './ui/settingsPanel.js'
 import { PeerAvatars } from './collaboration/peerAvatars.js'
 import { createIssuesPanel, type EditorIssue } from './ui/issuesPanel.js'
+import { ModelCache } from './assets/modelCache.js'
 
 async function boot(): Promise<void> {
   const canvas = document.getElementById('game') as HTMLCanvasElement
@@ -273,6 +274,7 @@ async function boot(): Promise<void> {
   terrain.material = mat
 
   // ── Placed objects (statics + node stand-ins) ───────────────────────
+  const modelCache = new ModelCache(scene)
   const staticMeshes = new Map<Mesh, StaticBody>()
   const nodeMeshes = new Map<Mesh, MapNodeSpawn>()
   const applyBodyToMesh = (mesh: Mesh, s: StaticBody): void => {
@@ -289,19 +291,20 @@ async function boot(): Promise<void> {
     if (s.model) {
       const model = mapModels.find((mm) => mm.id === s.model)
       if (model) {
-        void import('@babylonjs/core/Loading/sceneLoader.js')
-          .then(async ({ SceneLoader }) => {
-            await import('@babylonjs/loaders/glTF/2.0/glTFLoader.js')
-            return SceneLoader.ImportMeshAsync('', '', model.glb, scene, undefined, '.glb')
-          })
-          .then((result) => {
-            const root = result.meshes[0]
-            if (!root || !staticMeshes.has(mesh)) return
-            root.parent = mesh
-            mesh.visibility = 0.12 // faint proxy so it stays selectable
-            for (const m of result.meshes) m.isPickable = false
-          })
-          .catch(() => undefined)
+        // Parsed once and instanced per placement (see assets/modelCache.ts).
+        void modelCache.instantiate(model.id, model.glb).then((inst) => {
+          if (!inst) return
+          if (!staticMeshes.has(mesh)) {
+            inst.dispose()
+            return
+          }
+          inst.root.parent = mesh
+          mesh.visibility = 0.12 // faint proxy so it stays selectable
+          // Child meshes never absorb picks; EditorPicker resolves the owner
+          // through the parent chain instead.
+          for (const m of inst.root.getChildMeshes()) m.isPickable = false
+          mesh.onDisposeObservable.addOnce(() => inst.dispose())
+        })
       }
     }
     return mesh
@@ -3874,19 +3877,18 @@ async function boot(): Promise<void> {
       const dataUrl = await fileToDataUrl(file)
       status.textContent = 'loading model…'
       try {
-        const { SceneLoader } = await import('@babylonjs/core/Loading/sceneLoader.js')
-        await import('@babylonjs/loaders/glTF/2.0/glTFLoader.js')
-        const result = await SceneLoader.ImportMeshAsync('', '', dataUrl, scene, undefined, '.glb')
-        const root = result.meshes[0]
-        if (!root) throw new Error('empty glb')
-        const { min, max } = root.getHierarchyBoundingVectors(true)
+        // Measure by instantiating through the cache, so the import also
+        // warms it — placing the model afterwards needs no second parse.
+        const id = `model-${Date.now().toString(36)}`
+        const probe = await modelCache.instantiate(id, dataUrl)
+        if (!probe) throw new Error('empty glb')
+        const { min, max } = probe.root.getHierarchyBoundingVectors(true)
         const bounds: [number, number, number] = [
           Math.max(0.2, max.x - min.x),
           Math.max(0.2, max.y - min.y),
           Math.max(0.2, max.z - min.z),
         ]
-        for (const m of result.meshes) m.dispose()
-        const id = `model-${Date.now().toString(36)}`
+        probe.dispose()
         const name = file.name.replace(/\.(glb|gltf)$/i, '').slice(0, 24)
         mapModels.push({ id, name, glb: dataUrl, bounds })
         refreshImportedPalette()
