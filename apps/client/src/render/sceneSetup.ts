@@ -13,6 +13,7 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { TerrainMaterial } from '@babylonjs/materials/terrain/terrainMaterial.js'
+import { LayeredSurfaceMaterial, maskTextureFrom } from './layeredSurface.js'
 import { ParticleSystem } from '@babylonjs/core/Particles/particleSystem.js'
 import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { Color4 as BColor4 } from '@babylonjs/core/Maths/math.color.js'
@@ -25,6 +26,9 @@ import {
   type MapTextureEntry,
   type WorldShape,
   type StaticBody,
+  effectiveShape,
+  migrateLegacyMix,
+  type SurfaceMaterialData,
 } from '@hobo/content'
 import { Water } from './water.js'
 import {
@@ -140,6 +144,7 @@ function attachModel(scene: Scene, proxy: Mesh, modelId: string): void {
 }
 
 /** Extra terrain patches (mountains, cave shells) from the edited map. */
+let legacyLayer = 0
 export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mesh[] {
   const meshes: Mesh[] = []
   for (const patch of getMapOverride()?.terrains ?? []) {
@@ -155,19 +160,33 @@ export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mes
     vd.applyToMesh(mesh, false)
     mesh.position.set(patch.origin[0], patch.origin[1], patch.origin[2])
     if (patch.rot) mesh.rotation.set(patch.rot[0], patch.rot[1], patch.rot[2])
-    if (patch.mix) {
-      // Painted patch: same splat pipeline as the main terrain.
-      const tmat = new TerrainMaterial(`patchmix:${patch.id}`, scene)
-      const mixTex = new Texture(patch.mix, scene)
-      tmat.mixTexture = mixTex
-      const t1 = tiled(scene, 'leafy_grass', Math.max(4, patch.halfExtent / 2))
-      const t2 = tiled(scene, 'gray_rocks', Math.max(3, patch.halfExtent / 2.5))
-      const t3 = tiled(scene, 'brown_mud_dry', Math.max(3, patch.halfExtent / 2))
-      tmat.diffuseTexture1 = t1
-      tmat.diffuseTexture2 = t2
-      tmat.diffuseTexture3 = t3
-      tmat.specularColor = new Color3(0.02, 0.02, 0.02)
-      mesh.material = tmat
+    // Physics scales the trimesh vertices with scalePatchPositions(); Babylon
+    // applies mesh scaling in the same S→R→T order, so the two agree.
+    if (patch.scale) mesh.scaling.set(patch.scale[0], patch.scale[1], patch.scale[2])
+    // v2 surfaces (base + paint layers) render with the SAME material class
+    // the editor uses, so what was painted is what players see. Legacy `mix`
+    // maps onto the same shader via migrateLegacyMix.
+    const surface: SurfaceMaterialData | null = patch.surface
+      ? patch.surface
+      : patch.mix
+        ? {
+            base: {
+              ...(patch.tex && patch.tex !== 'none' ? { tex: patch.tex } : {}),
+              ...(patch.color ? { color: patch.color } : {}),
+              ...(patch.uv ? { uv: patch.uv } : {}),
+            },
+            paint: migrateLegacyMix(patch.mix, () => `pl-${patch.id}-${legacyLayer++}`)!,
+          }
+        : null
+    if (surface) {
+      const layered = new LayeredSurfaceMaterial(scene, `psurf:${patch.id}`, surface, {
+        baseTiling: Math.max(2, patch.halfExtent / 2),
+        layerTiling: Math.max(2, patch.halfExtent / 2),
+        backFaceCulling: false,
+      })
+      layered.setMaskTexture(maskTextureFrom(scene, surface.paint?.mask))
+      layered.material.maxSimultaneousLights = 8
+      mesh.material = layered.material
       mesh.receiveShadows = true
       meshes.push(mesh)
       continue
@@ -206,7 +225,7 @@ export function buildStaticWorld(scene: Scene, content: ContentRegistry, mapMix?
   for (const m of groundMeshes) water.addToRenderList(m)
 
   for (const [i, s] of world.statics.entries()) {
-    const mesh = meshForShape(scene, `static:${i}`, s.shape, s.color)
+    const mesh = meshForShape(scene, `static:${i}`, effectiveShape(s), s.color)
     applyStaticStyle(scene, mesh, s)
     if (s.model) attachModel(scene, mesh, s.model)
     mesh.position.set(s.pos[0], s.pos[1], s.pos[2])

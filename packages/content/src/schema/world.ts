@@ -41,6 +41,13 @@ export const StaticBodySchema = z.object({
   yaw: z.number().default(0),
   /** Full [pitchX, yawY, rollZ] euler rotation (surf ramps, tilted geometry). */
   rot: vec3.optional(),
+  /**
+   * Canonical scale, applied on top of the shape's authored dimensions.
+   * Absent means [1,1,1]. Scale and dimensions are deliberately SEPARATE:
+   * the inspector edits them independently, and `effectiveShape()` is the one
+   * place that combines them so rendering and physics cannot drift apart.
+   */
+  scale: vec3.optional(),
   color: z.string().regex(/^#[0-9a-f]{6}$/),
   /** Optional tiling texture (client rendering only; by asset basename). */
   tex: z.string().optional(),
@@ -100,3 +107,30 @@ export const WorldDefSchema = z.object({
 export type WorldDef = z.infer<typeof WorldDefSchema>
 export type ZoneDef = z.infer<typeof ZoneDefSchema>
 export type StaticBody = z.infer<typeof StaticBodySchema>
+
+/**
+ * The shape a static ACTUALLY occupies: authored dimensions × canonical
+ * scale. Client meshes, client prediction physics and server physics all go
+ * through this, so a scaled object can never render at one size and collide
+ * at another.
+ */
+export function effectiveShape(body: Pick<StaticBody, 'shape' | 'scale'>): StaticBody['shape'] {
+  const s = body.scale
+  if (!s || (s[0] === 1 && s[1] === 1 && s[2] === 1)) return body.shape
+  const shape = body.shape
+  if (shape.type === 'box')
+    return {
+      ...shape,
+      size: [shape.size[0] * s[0], shape.size[1] * s[1], shape.size[2] * s[2]],
+    }
+  if (shape.type === 'cylinder')
+    return {
+      ...shape,
+      radius: shape.radius * Math.max(Math.abs(s[0]), Math.abs(s[2])),
+      height: shape.height * s[1],
+    }
+  return {
+    ...shape,
+    radius: shape.radius * Math.max(Math.abs(s[0]), Math.abs(s[1]), Math.abs(s[2])),
+  }
+}

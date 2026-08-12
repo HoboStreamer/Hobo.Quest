@@ -517,14 +517,24 @@
           <option value="0.95">🌙 Night</option>
         </select></label
       >
-      <label id="paint-row" style="display: none"
-        >Paint
-        <select id="paint">
-          <option value="#ff0000">Grass</option>
-          <option value="#00ff00">Rock</option>
-          <option value="#0000ff">Dirt / path</option>
-        </select></label
-      >
+      <div id="paint-row" style="display: none; flex-direction: column; gap: 6px">
+        <label
+          >Paint
+          <select id="paint-tex"></select>
+        </label>
+        <label title="tints the painted texture; with Plain Colour it IS the paint"
+          >Colour
+          <input id="paint-color" type="color" value="#ffffff" />
+          <button id="paint-color-reset" class="mini" title="paint untinted">↺</button>
+        </label>
+        <label title="remove this layer's coverage instead of adding it"
+          ><span>Erase</span> <input id="paint-erase" type="checkbox"
+        /></label>
+        <div
+          id="paint-layers"
+          style="display: flex; flex-direction: column; gap: 4px; font-size: 11px"
+        ></div>
+      </div>
       <label id="mesh-row" style="display: none"
         >Mesh
         <select id="mesh-sel"></select
@@ -560,6 +570,10 @@
       >
       <input id="key" type="password" placeholder="hobo.tools admin token / editor key" />
       <button id="save">💾 Save map (applies live)</button>
+      <div style="display: flex; gap: 6px; align-items: center">
+        <button id="issues-btn" class="mini" title="map validation issues">⚠ Issues</button>
+        <span id="issues-badge" style="font-size: 11px; color: #78828e"></span>
+      </div>
       <div id="status"></div>
       <div id="conflict" style="display: none; flex-direction: column; gap: 6px">
         <div style="color: #ffb46e; font-size: 12px">
@@ -722,8 +736,11 @@
     <div id="face">
       <h2>🧱 Face Edit</h2>
       <div id="face-info" style="color: #9aa4b0; font-size: 11px">
-        click a face · Shift adds · RMB applies current
+        click a face · Ctrl adds · RMB applies current
       </div>
+      <label class="row" title="apply style changes to the selected faces as you edit">
+        <input id="f-auto" type="checkbox" /> <span>Auto Apply</span>
+      </label>
       <div class="row">
         <span>texture</span>
         <select id="f-tex"></select>

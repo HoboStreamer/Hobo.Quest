@@ -4,6 +4,8 @@ import {
   getMapOverride,
   terrainHeight,
   worldSpawn,
+  effectiveShape,
+  scalePatchPositions,
 } from '@hobo/content'
 import type { ContentRegistry, WorldShape } from '@hobo/content'
 import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
@@ -105,7 +107,7 @@ export class GameWorld {
     }
     for (const s of world.statics) {
       this.physics.addBody({
-        shape: toShapeDesc(s.shape),
+        shape: toShapeDesc(effectiveShape(s)),
         motion: 'static',
         pos: vec3(s.pos[0], s.pos[1], s.pos[2]),
         rot: s.rot ? qfromEuler(quat(), s.rot[0], s.rot[1], s.rot[2]) : qfromYaw(quat(), s.yaw),
@@ -124,9 +126,12 @@ export class GameWorld {
     for (const patch of getMapOverride()?.terrains ?? []) {
       const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
       const rot = patch.rot ? qfromEuler(quat(), patch.rot[0], patch.rot[1], patch.rot[2]) : quat()
+      // Scale the vertices rather than the body: Babylon/Havok apply
+      // scale→rotate→translate, matching the client mesh's `scaling`.
+      const positions = scalePatchPositions(grid.positions, patch.scale)
       bodies.push(
         this.physics.addBody({
-          shape: { type: 'trimesh', positions: grid.positions, indices: grid.indices },
+          shape: { type: 'trimesh', positions, indices: grid.indices },
           motion: 'static',
           pos: vec3(patch.origin[0], patch.origin[1], patch.origin[2]),
           rot,
