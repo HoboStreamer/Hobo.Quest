@@ -1033,9 +1033,14 @@ await withMap(
       'a referenced texture cannot be deleted',
       (await probeOf(pg, (p) => p.deleteTexture('red_brick'))) === false,
     )
+    const spare = (await probeOf(pg, (p) => p.assetState())).textures
+      .map((t) => t.name)
+      .find((n) => n !== 'red_brick')
     ok(
       'an unreferenced one can',
-      (await probeOf(pg, (p) => p.deleteTexture('red_brick_2'))) === true,
+      spare !== undefined &&
+        (await probeArgs(pg, ([p, n]) => p.deleteTexture(n as unknown as string), spare)) === true,
+      spare,
     )
 
     ok(
