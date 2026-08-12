@@ -699,6 +699,125 @@ const probeOf = <T>(pg: Page, fn: (p: Probe) => T): Promise<T> =>
   pg.evaluate(fn as never, handles.get(pg) as never) as Promise<T>
 
 // ════════════════════════════════════════════════════════════════════════
+section('O. Live static reconciliation reaches the running server')
+{
+  const port = PORT + 3
+  const d = mkdtempSync(join(tmpdir(), 'hobo-repro-'))
+  const mp = join(d, 'map.json')
+  const base = { v: 2, terrains: [], statics: [], nodes: [], props: [], lights: [], zones: [] }
+  writeFileSync(mp, JSON.stringify(base))
+  const srv = spawn(process.execPath, ['--import', 'tsx', 'apps/server/src/main.ts'], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DB_PATH: join(d, 'world.db'),
+      STATIC_DIR: 'apps/client/dist',
+      MAP_PATH: mp,
+      EDITOR_KEY: 'test-admin-key',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  srv.stderr!.on('data', (c) => console.log('[server]', String(c).slice(0, 400)))
+  try {
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('server never reported listening')), 30_000)
+      srv.stdout!.on('data', (c) => {
+        if (String(c).includes('listening')) {
+          clearTimeout(t)
+          res()
+        }
+      })
+    })
+
+    const root = `http://127.0.0.1:${port}`
+    /** Wait for the tick loop to publish, then read the live map counts. */
+    const counts = async (): Promise<Record<string, number>> => {
+      for (let i = 0; i < 40; i++) {
+        const m = (await (await fetch(`${root}/metrics`)).json()) as Record<string, number>
+        if (m['tick']! > 0) return m
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      throw new Error('server never ticked')
+    }
+    /** POST a map through the real save pipeline; returns the new revision. */
+    const save = async (map: unknown, ifMatch?: string): Promise<string> => {
+      const resp = await fetch(`${root}/api/map`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-editor-key': 'test-admin-key',
+          ...(ifMatch ? { 'if-match': ifMatch } : {}),
+        },
+        body: JSON.stringify(map),
+      })
+      if (!resp.ok) throw new Error(`save failed: ${resp.status} ${await resp.text()}`)
+      return resp.headers.get('etag')?.replace(/"/g, '') ?? ''
+    }
+
+    ok('a blank map gives the server no map statics', (await counts())['mapStatics'] === 0)
+
+    const withOne = {
+      ...base,
+      statics: [
+        {
+          id: 'live-a',
+          shape: { type: 'box', size: [2, 2, 2] },
+          pos: [3, 1, 0],
+          yaw: 0,
+          color: '#ff0000',
+        },
+      ],
+    }
+    let rev = await save(withOne)
+    await new Promise((r) => setTimeout(r, 400))
+    ok('saving a static gives it collision immediately', (await counts())['mapStatics'] === 1)
+
+    // The bug this replaces: the second identical save appended a second copy.
+    rev = await save(withOne, rev)
+    await new Promise((r) => setTimeout(r, 400))
+    ok('an identical repeated save creates no duplicate', (await counts())['mapStatics'] === 1)
+
+    rev = await save(
+      {
+        ...base,
+        statics: [{ ...withOne.statics[0], pos: [12, 1, 0] }],
+      },
+      rev,
+    )
+    await new Promise((r) => setTimeout(r, 400))
+    ok('moving it keeps exactly one body', (await counts())['mapStatics'] === 1)
+
+    rev = await save(base, rev)
+    await new Promise((r) => setTimeout(r, 400))
+    ok('deleting it removes the collision', (await counts())['mapStatics'] === 0)
+
+    // Zones apply live too, in their own replaceable layer.
+    rev = await save(
+      {
+        ...base,
+        zones: [
+          {
+            id: 'zone-live',
+            name: 'Live',
+            min: [-5, -5, -5],
+            max: [5, 5, 5],
+            rules: { pvp: false, build: true, physgun: true },
+          },
+        ],
+      },
+      rev,
+    )
+    await new Promise((r) => setTimeout(r, 400))
+    ok('a saved zone reaches the server rule index', (await counts())['mapZones'] === 1)
+    await save(base, rev)
+    await new Promise((r) => setTimeout(r, 400))
+    ok('removing the zone removes the rule', (await counts())['mapZones'] === 0)
+  } finally {
+    srv.kill()
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
 section('M. Native v2 blank map — no fabricated ground')
 await withMap(
   PORT + 1,

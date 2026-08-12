@@ -7,9 +7,10 @@ import {
   effectiveShape,
   scalePatchPositions,
 } from '@hobo/content'
-import type { ContentRegistry, WorldShape } from '@hobo/content'
+import type { ContentRegistry, StaticBody, WorldShape } from '@hobo/content'
 import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
 import type { ConstraintDto, PersistenceStore, WorldEntityDto } from '@hobo/persistence'
+import { MapStaticLayer } from './mapStaticLayer.js'
 import {
   CollisionLayer,
   type BodyId,
@@ -69,6 +70,7 @@ export class GameWorld {
     private readonly log: Logger,
   ) {
     this.zones = new ZoneIndex(content.world.zones)
+    this.mapStatics = new MapStaticLayer(physics)
     this.reconcileMapZones()
     this.buildStaticWorld()
   }
@@ -106,20 +108,29 @@ export class GameWorld {
         collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
       })
     }
-    for (const s of world.statics) {
-      this.physics.addBody({
-        shape: toShapeDesc(effectiveShape(s)),
-        motion: 'static',
-        pos: vec3(s.pos[0], s.pos[1], s.pos[2]),
-        rot: s.rot ? qfromEuler(quat(), s.rot[0], s.rot[1], s.rot[2]) : qfromYaw(quat(), s.yaw),
-        layer: CollisionLayer.Static,
-        collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
-      })
-    }
+    for (const s of world.statics) this.addStaticBody(s)
+    this.reconcileMapStatics()
+  }
+
+  private addStaticBody(s: StaticBody): BodyId {
+    return this.physics.addBody({
+      shape: toShapeDesc(effectiveShape(s)),
+      motion: 'static',
+      pos: vec3(s.pos[0], s.pos[1], s.pos[2]),
+      rot: s.rot ? qfromEuler(quat(), s.rot[0], s.rot[1], s.rot[2]) : qfromYaw(quat(), s.yaw),
+      layer: CollisionLayer.Static,
+      collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+    })
+  }
+
+  /** Live map save: bring map-authored static collision up to date. */
+  reconcileMapStatics(): void {
+    this.mapStatics.reconcile(getMapOverride()?.statics ?? [])
   }
 
   private terrainBody: BodyId | null = null
   private patchBodies: BodyId[] = []
+  private readonly mapStatics: MapStaticLayer
 
   /** Trimesh bodies for the map's extra terrain patches (world-space verts). */
   private buildPatchBodies(): BodyId[] {
@@ -171,6 +182,19 @@ export class GameWorld {
     this.terrainBody = this.buildTerrainBody()
     for (const b of this.patchBodies) this.physics.removeBody(b)
     this.patchBodies = this.buildPatchBodies()
+  }
+
+  /** Live-apply diagnostics and tests: what the map layers currently hold. */
+  mapStaticCount(): number {
+    return this.mapStatics.size
+  }
+
+  mapTerrainCount(): number {
+    return this.patchBodies.length
+  }
+
+  mapZoneCount(): number {
+    return this.zones.all().length - this.content.world.zones.length
   }
 
   bodyOf(id: EntityId): BodyId | undefined {

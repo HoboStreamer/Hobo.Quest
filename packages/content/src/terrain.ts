@@ -1,5 +1,5 @@
 import type { SurfaceMaterialData } from './surface.js'
-import type { FaceStyle, WorldDef, ZoneDef } from './schema/world.js'
+import type { FaceStyle, StaticBody, WorldDef, ZoneDef } from './schema/world.js'
 
 /**
  * Deterministic terrain heightfield shared by server physics, client
@@ -158,6 +158,14 @@ export interface TerrainPatchData {
  * genuinely has none.
  */
 export interface MapOverride {
+  /**
+   * Map-authored static geometry, kept SEPARATE from the world def's own
+   * statics. Both sides used to `content.world.statics.push(...)` at boot,
+   * which merged authored geometry into base content permanently: the map
+   * layer could never be replaced, so a live save added collision and never
+   * moved or removed it, and re-applying a map appended a second copy.
+   */
+  statics?: StaticBody[]
   /** Editor-placed resource nodes (trees, deposits…) merged into seeding. */
   nodes?: MapNodeSpawn[]
   /** Editor-placed initial props merged into fresh-world seeding. */

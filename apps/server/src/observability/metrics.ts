@@ -17,6 +17,14 @@ export class ServerMetrics {
   messagesOut = 0
   snapshotBytes = 0
   dbDirtyQueue = 0
+  /**
+   * Live map layers, by stable id. These make "Save is live" checkable from
+   * outside the process: a static added in the editor must show up here on
+   * the next tick, and an identical repeated save must not change the count.
+   */
+  mapStatics = 0
+  mapTerrains = 0
+  mapZones = 0
 
   private emaAlpha = 0.05
 
@@ -37,6 +45,9 @@ export class ServerMetrics {
       bytesOut: this.bytesOut,
       messagesOut: this.messagesOut,
       dbDirtyQueue: this.dbDirtyQueue,
+      mapStatics: this.mapStatics,
+      mapTerrains: this.mapTerrains,
+      mapZones: this.mapZones,
       memRssMb: round2(process.memoryUsage.rss() / 1024 / 1024),
     }
   }

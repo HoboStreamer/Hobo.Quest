@@ -1104,6 +1104,9 @@ export class GameServer {
 
     this.metrics.tick = this.tick
     this.metrics.entities = this.world.entities.size
+    this.metrics.mapStatics = this.world.mapStaticCount()
+    this.metrics.mapTerrains = this.world.mapTerrainCount()
+    this.metrics.mapZones = this.world.mapZoneCount()
     this.metrics.recordTick(performance.now() - tickStart, physMs)
   }
 

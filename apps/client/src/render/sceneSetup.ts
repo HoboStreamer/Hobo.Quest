@@ -223,19 +223,46 @@ export function buildStaticWorld(scene: Scene, content: ContentRegistry): void {
   const groundMeshes = buildTerrainMesh(scene, content)
   for (const m of groundMeshes) water.addToRenderList(m)
 
-  for (const [i, s] of world.statics.entries()) {
-    const mesh = meshForShape(scene, `static:${i}`, effectiveShape(s), s.color)
-    applyStaticStyle(scene, mesh, s)
-    if (s.model) attachModel(scene, mesh, s.model)
-    mesh.position.set(s.pos[0], s.pos[1], s.pos[2])
-    mesh.rotationQuaternion = s.rot
-      ? Quaternion.FromEulerAngles(s.rot[0], s.rot[1], s.rot[2])
-      : Quaternion.FromEulerAngles(0, s.yaw, 0)
-    water.addToRenderList(mesh)
-    if (s.decor === 'building') decorateBuilding(scene, mesh, s)
-    else if (s.decor === 'fountain') buildFountain(scene, mesh, s, water)
-    else if (s.decor === 'lamp') decorateLamp(scene, mesh, s, i)
-  }
+  for (const [i, s] of world.statics.entries()) renderStaticBody(scene, water, s, `static:${i}`, i)
+  buildMapStaticVisuals(scene, water)
+}
+
+/**
+ * The MAP's statics, rendered under their stable ids in their own layer.
+ * They used to be pushed into `content.world.statics` at boot, which merged
+ * authored geometry into base content permanently — so a live save could add
+ * a mesh but never move or remove one, and re-applying a map drew a second
+ * copy on top of the first.
+ */
+export function buildMapStaticVisuals(scene: Scene, water?: Water): void {
+  for (const s of getMapOverride()?.statics ?? [])
+    renderStaticBody(scene, water, s, `mapstatic:${s.id ?? ''}`)
+}
+
+/** Live map save: replace the map-static layer, leaving base content alone. */
+export function rebuildMapStaticVisuals(scene: Scene): void {
+  for (const m of [...scene.meshes]) if (m.name.startsWith('mapstatic:')) m.dispose(false, true)
+  buildMapStaticVisuals(scene)
+}
+
+function renderStaticBody(
+  scene: Scene,
+  water: Water | undefined,
+  s: StaticBody,
+  name: string,
+  decorSeed?: number,
+): void {
+  const mesh = meshForShape(scene, name, effectiveShape(s), s.color)
+  applyStaticStyle(scene, mesh, s)
+  if (s.model) attachModel(scene, mesh, s.model)
+  mesh.position.set(s.pos[0], s.pos[1], s.pos[2])
+  mesh.rotationQuaternion = s.rot
+    ? Quaternion.FromEulerAngles(s.rot[0], s.rot[1], s.rot[2])
+    : Quaternion.FromEulerAngles(0, s.yaw, 0)
+  water?.addToRenderList(mesh)
+  if (s.decor === 'building') decorateBuilding(scene, mesh, s)
+  else if (s.decor === 'fountain' && water) buildFountain(scene, mesh, s, water)
+  else if (s.decor === 'lamp') decorateLamp(scene, mesh, s, decorSeed ?? 0)
 }
 
 /**

@@ -38,8 +38,11 @@ async function main(): Promise<void> {
       // RUNTIME representation is always v2 compiled straight through.
       const parsed = parseMapFile(JSON.parse(readFileSync(config.mapPath, 'utf8')))
       if (parsed.ok) {
+        // The map's statics live in the override, NOT merged into
+        // content.world.statics: that merge was permanent, so the map layer
+        // could never be replaced and a live save could not move or delete
+        // anything it had already added.
         setMapOverride(compileMapFileV2(parsed.map))
-        content.world.statics.push(...parsed.map.statics)
         log.info('edited map loaded', {
           statics: parsed.map.statics.length,
           terrains: parsed.map.terrains.length,
@@ -86,6 +89,7 @@ async function main(): Promise<void> {
       try {
         setMapOverride(compileMapFileV2(next))
         world.rebuildTerrain()
+        world.reconcileMapStatics()
         world.reconcileMapZones()
         world.reconcileMapNodes()
         world.reconcileMapProps()

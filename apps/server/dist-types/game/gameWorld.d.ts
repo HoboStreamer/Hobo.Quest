@@ -26,8 +26,12 @@ export declare class GameWorld {
   constructor(content: ContentRegistry, physics: PhysicsWorld, log: Logger)
   /** Static level geometry — mirrored by the client from the same world def. */
   private buildStaticWorld
+  private addStaticBody
+  /** Live map save: bring map-authored static collision up to date. */
+  reconcileMapStatics(): void
   private terrainBody
   private patchBodies
+  private readonly mapStatics
   /** Trimesh bodies for the map's extra terrain patches (world-space verts). */
   private buildPatchBodies
   /**
@@ -42,6 +46,10 @@ export declare class GameWorld {
   private buildTerrainBody
   /** Live map edit: swap terrain + patch collision for the new map. */
   rebuildTerrain(): void
+  /** Live-apply diagnostics and tests: what the map layers currently hold. */
+  mapStaticCount(): number
+  mapTerrainCount(): number
+  mapZoneCount(): number
   bodyOf(id: EntityId): BodyId | undefined
   entityOfBody(body: BodyId): GameEntity | undefined
   spawnProp(opts: {

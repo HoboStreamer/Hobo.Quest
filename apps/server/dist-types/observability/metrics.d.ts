@@ -16,6 +16,14 @@ export declare class ServerMetrics {
   messagesOut: number
   snapshotBytes: number
   dbDirtyQueue: number
+  /**
+   * Live map layers, by stable id. These make "Save is live" checkable from
+   * outside the process: a static added in the editor must show up here on
+   * the next tick, and an identical repeated save must not change the count.
+   */
+  mapStatics: number
+  mapTerrains: number
+  mapZones: number
   private emaAlpha
   recordTick(totalMs: number, physicsMs: number): void
   snapshot(): Record<string, number>

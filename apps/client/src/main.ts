@@ -29,6 +29,7 @@ import {
   createScene,
   buildTerrainPatches,
   rebuildTerrainPatchVisuals,
+  rebuildMapStaticVisuals,
   registerMapAssets,
   rebuildTerrainVisual,
 } from './render/sceneSetup.js'
@@ -64,8 +65,9 @@ async function start(): Promise<void> {
         textures: parsed.map.textures as MapTextureEntry[],
         models: parsed.map.models,
       })
+      // The map's statics stay in the override; merging them into
+      // content.world.statics made the map layer permanent and unreplaceable.
       setMapOverride(compileMapFileV2(parsed.map))
-      content.world.statics.push(...parsed.map.statics)
       mapLightsBoot = parsed.map.lights
     }
   } catch {
@@ -249,6 +251,7 @@ async function start(): Promise<void> {
             rebuildTerrainPhysics(physics, content)
             rebuildTerrainVisual(scene, content)
             rebuildTerrainPatchVisuals(scene, content)
+            rebuildMapStaticVisuals(scene)
             buildMapLights(scene, parsed.map.lights)
           }
         } catch {

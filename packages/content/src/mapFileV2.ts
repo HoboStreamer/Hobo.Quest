@@ -503,6 +503,7 @@ export function compileMapFileV2(map: MapFileV2): MapOverride {
       pos: p.pos,
       ...(p.yaw !== undefined ? { yaw: p.yaw } : {}),
     })),
+    statics: map.statics.map((b) => ({ ...b })),
     zones: map.zones.map((z0): ZoneDef => ({ ...z0, min: [...z0.min], max: [...z0.max] })),
     ...(map.spawn ? { spawn: map.spawn } : {}),
     ...(map.spawnYaw !== undefined ? { spawnYaw: map.spawnYaw } : {}),

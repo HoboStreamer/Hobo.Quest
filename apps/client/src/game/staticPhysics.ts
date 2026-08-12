@@ -3,6 +3,7 @@ import {
   buildTerrainGrid,
   getMapOverride,
   type ContentRegistry,
+  type StaticBody,
   type WorldDef,
   effectiveShape,
   scalePatchPositions,
@@ -67,24 +68,39 @@ export function buildStaticPhysics(physics: PhysicsWorld, content: ContentRegist
       collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
     })
   }
-  for (const s of world.statics) {
-    // Same helper the server uses — scaled render and scaled collision or
-    // neither, never one without the other.
-    const shape = effectiveShape(s)
-    physics.addBody({
-      shape:
-        shape.type === 'box'
-          ? { type: 'box', size: shape.size }
-          : shape.type === 'cylinder'
-            ? { type: 'cylinder', radius: shape.radius, height: shape.height }
-            : { type: 'sphere', radius: shape.radius },
-      motion: 'static',
-      pos: vec3(s.pos[0], s.pos[1], s.pos[2]),
-      rot: s.rot ? qfromEuler(quat(), s.rot[0], s.rot[1], s.rot[2]) : qfromYaw(quat(), s.yaw),
-      layer: CollisionLayer.Static,
-      collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
-    })
-  }
+  for (const s of world.statics) addStaticBody(physics, s)
+  rebuildMapStaticPhysics(physics)
+}
+
+function addStaticBody(physics: PhysicsWorld, s: StaticBody): BodyId {
+  // Same helper the server uses — scaled render and scaled collision or
+  // neither, never one without the other.
+  const shape = effectiveShape(s)
+  return physics.addBody({
+    shape:
+      shape.type === 'box'
+        ? { type: 'box', size: shape.size }
+        : shape.type === 'cylinder'
+          ? { type: 'cylinder', radius: shape.radius, height: shape.height }
+          : { type: 'sphere', radius: shape.radius },
+    motion: 'static',
+    pos: vec3(s.pos[0], s.pos[1], s.pos[2]),
+    rot: s.rot ? qfromEuler(quat(), s.rot[0], s.rot[1], s.rot[2]) : qfromYaw(quat(), s.yaw),
+    layer: CollisionLayer.Static,
+    collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
+  })
+}
+
+let mapStaticBodies: BodyId[] = []
+
+/**
+ * Prediction collision for the MAP's statics, kept in its own replaceable
+ * layer exactly like the server's. Merged into base content it could never be
+ * replaced, so a live save added collision the client never removed.
+ */
+export function rebuildMapStaticPhysics(physics: PhysicsWorld): void {
+  for (const b of mapStaticBodies) physics.removeBody(b)
+  mapStaticBodies = (getMapOverride()?.statics ?? []).map((s) => addStaticBody(physics, s))
 }
 
 let lastTerrainBody: BodyId | null = null
@@ -96,6 +112,7 @@ export function rebuildTerrainPhysics(physics: PhysicsWorld, content: ContentReg
   patchBodies = []
   buildPatchPhysics(physics)
   lastTerrainBody = buildWorldTerrainBody(physics, content.world)
+  rebuildMapStaticPhysics(physics)
 }
 
 /**
