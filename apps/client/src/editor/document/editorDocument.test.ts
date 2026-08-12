@@ -90,6 +90,60 @@ describe('EditorDocument: identity', () => {
   })
 })
 
+describe('EditorDocument: the id index tracks the wire arrays', () => {
+  // `get` reads an index rather than scanning; it is only correct if every
+  // write keeps that index and the serialized arrays saying the same thing.
+  it('returns the live object that serialize will write', () => {
+    const d = new EditorDocument()
+    d.add('static', box('s1'))
+    d.update('s1', { pos: [3, 0, 4] })
+    expect(d.get('s1', 'static')!.pos).toEqual([3, 0, 4])
+    expect(d.serialize().statics[0]!.pos).toEqual([3, 0, 4])
+  })
+
+  it('replace swaps what BOTH the index and the array hold', () => {
+    const d = new EditorDocument()
+    d.add('static', box('s1'))
+    d.replace('s1', box('s1', { pos: [7, 0, 7] }))
+    expect((d.get('s1') as { pos: number[] }).pos).toEqual([7, 0, 7])
+    expect(d.serialize().statics[0]!.pos).toEqual([7, 0, 7])
+  })
+
+  it('a removed object is gone from the index, not just the array', () => {
+    const d = new EditorDocument()
+    d.add('static', box('s1'))
+    d.remove('s1')
+    expect(d.get('s1')).toBeNull()
+    expect(d.serialize().statics).toEqual([])
+  })
+
+  it('re-adding a removed id works and yields the NEW object', () => {
+    const d = new EditorDocument()
+    d.add('static', box('s1'))
+    d.remove('s1')
+    d.add('static', box('s1', { pos: [5, 0, 5] }))
+    expect((d.get('s1') as { pos: number[] }).pos).toEqual([5, 0, 5])
+  })
+
+  it('a remote replacement rebuilds the index from the new document', () => {
+    const d = parsed({ statics: [box('s1')] })
+    d.replaceFromRemote(parsed({ statics: [box('s2')] }).serialize())
+    expect(d.get('s1')).toBeNull()
+    expect(d.get('s2', 'static')?.id).toBe('s2')
+  })
+
+  it('every object in list() is reachable by id', () => {
+    const d = parsed({
+      terrains: [terrain('t1')],
+      statics: [box('s1'), box('s2')],
+      lights: [light('l1')],
+      zones: [zone('z1')],
+      spawn: [0, 0, 0],
+    })
+    for (const o of d.list()) expect(d.get(o.id)).toBe(o)
+  })
+})
+
 describe('EditorDocument: CRUD', () => {
   it('adds, updates and removes by id', () => {
     const d = new EditorDocument()

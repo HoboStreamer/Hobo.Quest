@@ -133,6 +133,29 @@ describe('EditorViewRegistry: lifecycle follows the document', () => {
     expect(h.reg.viewOf('a')!.id).toBe('a')
   })
 
+  it('a REPLACE reports only what differs, so a tint edit does not rebuild', () => {
+    // Inspector edits replace the whole object to make one clean undo step.
+    // When that reported "everything changed", altering a colour rebuilt the
+    // mesh — and re-instantiated the glTF for an imported model.
+    const h = harness()
+    h.doc.add('static', box('a'))
+    const view = h.views.get('a')!
+    view.refuseKeys = ['shape']
+    const builtBefore = FakeView.built
+    h.doc.replace('a', box('a', { color: '#123456' }))
+    expect(view.updates.at(-1)!.keys).toEqual(['color'])
+    expect(FakeView.built, 'no rebuild for a colour-only replace').toBe(builtBefore)
+  })
+
+  it('but a replace that DOES change the shape still rebuilds', () => {
+    const h = harness()
+    h.doc.add('static', box('a'))
+    h.views.get('a')!.refuseKeys = ['shape']
+    const builtBefore = FakeView.built
+    h.doc.replace('a', box('a', { shape: { type: 'sphere', radius: 2 } }))
+    expect(FakeView.built).toBe(builtBefore + 1)
+  })
+
   it('rebuilds everything on a remote document replacement', () => {
     const h = harness()
     h.doc.add('static', box('a'))
@@ -205,6 +228,54 @@ describe('EditorViewRegistry: mesh ownership', () => {
     const fresh = h.views.get('a')!.main
     expect(h.reg.ownerOf(stale as unknown as AbstractMesh)).toBeNull()
     expect(h.reg.ownerOf(fresh as unknown as AbstractMesh)).toBe('a')
+  })
+})
+
+describe('EditorViewRegistry: the mesh set stays truthful', () => {
+  it('lists every view mesh', () => {
+    const h = harness()
+    h.doc.add('static', box('a'))
+    h.doc.add('static', box('b'))
+    expect(h.reg.allMeshes()).toHaveLength(2)
+  })
+
+  it('drops a removed object from the cached mesh list', () => {
+    // Cached for picking; a stale entry is a pick on a disposed mesh.
+    const h = harness()
+    h.doc.add('static', box('a'))
+    h.reg.allMeshes()
+    h.doc.remove('a')
+    expect(h.reg.allMeshes()).toEqual([])
+  })
+
+  it('picks up a mesh added by an explicit reindex', () => {
+    const h = harness()
+    h.doc.add('static', box('a'))
+    expect(h.reg.allMeshes()).toHaveLength(1)
+    mesh('loaded-child', h.views.get('a')!.main)
+    h.reg.reindex('a')
+    // The child is owned but not listed as a top-level pickable mesh.
+    expect(h.reg.allMeshes()).toHaveLength(1)
+    expect(h.reg.ownerOf(h.views.get('a')!.main.children[0] as unknown as AbstractMesh)).toBe('a')
+  })
+
+  it('a rebuilt view replaces its meshes rather than accumulating them', () => {
+    const h = harness()
+    h.doc.add('static', box('a'))
+    h.reg.rebuild('a')
+    h.reg.rebuild('a')
+    expect(h.reg.allMeshes()).toHaveLength(1)
+  })
+
+  it('unindexing one object leaves every other owner intact', () => {
+    // The old cleanup scanned the whole owner table per removal; this is the
+    // behaviour that scan provided and the reverse index must preserve.
+    const h = harness()
+    for (const id of ['a', 'b', 'c']) h.doc.add('static', box(id))
+    const keep = h.views.get('c')!.main
+    h.doc.remove('b')
+    expect(h.reg.ownerOf(keep as unknown as AbstractMesh)).toBe('c')
+    expect(h.reg.allMeshes()).toHaveLength(2)
   })
 })
 

@@ -10,9 +10,7 @@ import { SpotLight } from '@babylonjs/core/Lights/spotLight.js'
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight.js'
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight.js'
 import { RectAreaLight } from '@babylonjs/core/Lights/rectAreaLight.js'
-import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator.js'
 import type { Light } from '@babylonjs/core/Lights/light.js'
-import type { IShadowLight } from '@babylonjs/core/Lights/shadowLight.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { FaceStyle, MapLight, MapTextureEntry, WorldShape } from '@hobo/content'
 
@@ -180,7 +178,6 @@ export function applyPatchTexture(
 }
 
 // ── Map lights ────────────────────────────────────────────────────────
-const liveLights = new Map<Scene, { lights: Light[]; gens: ShadowGenerator[] }>()
 
 export const LIGHT_DEFAULTS = {
   color: '#ffffff',
@@ -244,42 +241,3 @@ export function instantiateMapLight(scene: Scene, l: MapLight): Light | null {
   return light
 }
 
-/**
- * (Re)build all editor-placed lights for a scene. Shadow generators are
- * capped (they're expensive) and attach every static/patch as caster.
- */
-export function buildMapLights(scene: Scene, lights: MapLight[] | undefined): void {
-  disposeMapLights(scene)
-  const entry = { lights: [] as Light[], gens: [] as ShadowGenerator[] }
-  liveLights.set(scene, entry)
-  let shadowBudget = 3
-  for (const l of (lights ?? []).slice(0, 24)) {
-    const light = instantiateMapLight(scene, l)
-    if (!light) continue
-    entry.lights.push(light)
-    const shadowable = l.type === 'spot' || l.type === 'directional' || l.type === 'point'
-    if (l.shadows && shadowable && shadowBudget > 0) {
-      shadowBudget--
-      const gen = new ShadowGenerator(1024, light as unknown as IShadowLight)
-      gen.useBlurExponentialShadowMap = true
-      gen.blurKernel = 16
-      for (const m of scene.meshes) {
-        const n = m.name
-        if (n.startsWith('static:') || n.startsWith('s:') || n.startsWith('patch:')) {
-          gen.addShadowCaster(m as Mesh, true)
-          m.receiveShadows = true
-        }
-        if (n === 'terrain') m.receiveShadows = true
-      }
-      entry.gens.push(gen)
-    }
-  }
-}
-
-export function disposeMapLights(scene: Scene): void {
-  const entry = liveLights.get(scene)
-  if (!entry) return
-  for (const g of entry.gens) g.dispose()
-  for (const l of entry.lights) l.dispose()
-  liveLights.delete(scene)
-}

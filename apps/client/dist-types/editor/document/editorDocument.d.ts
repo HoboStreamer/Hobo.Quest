@@ -58,9 +58,12 @@ export declare const EDITOR_OBJECT_KINDS: readonly EditorObjectKind[]
  * What changed, by stable id, with enough detail for a view to update
  * incrementally instead of rebuilding the world.
  *
- * `updated` carries the top-level keys that differ, so a view can skip an
- * expensive rebuild for a change it does not care about — repainting a tint
- * must not rebuild collision.
+ * `updated` and `replaced` both carry the top-level keys that differ, so a
+ * view can skip an expensive rebuild for a change it does not care about —
+ * repainting a tint must not rebuild collision. `replaced` used to carry
+ * none, so every Inspector edit (which replaces the whole object, to make one
+ * clean undo step) looked like "everything changed" and rebuilt the mesh —
+ * re-instantiating an imported model to alter its tint.
  */
 export type DocumentChange =
   | {
@@ -83,6 +86,7 @@ export type DocumentChange =
       type: 'replaced'
       id: string
       kind: EditorObjectKind
+      keys: readonly string[]
     }
   /** Model/texture metadata changed (imported, renamed, removed). */
   | {
@@ -98,6 +102,14 @@ export declare class EditorDocument {
   private map
   /** id → kind. The one place identity is resolved. */
   private index
+  /**
+   * id → the live object. `get` used to scan the wire array, and `get` is the
+   * hottest read in the editor — hover picking, every view update, the
+   * Outliner and the Inspector all go through it — so on a large map every
+   * mouse move walked hundreds of entries. Writes keep this in step; `update`
+   * mutates in place, so only add/replace/remove/reindex touch it.
+   */
+  private byId
   private spawn
   private readonly listeners
   /** Non-null while a transaction is open; changes batch into it. */

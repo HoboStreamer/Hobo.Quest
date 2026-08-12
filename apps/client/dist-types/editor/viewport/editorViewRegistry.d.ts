@@ -45,6 +45,18 @@ export declare class EditorViewRegistry {
   private readonly views
   /** Child mesh (any depth) → owning object id. */
   private readonly owners
+  /**
+   * The reverse index. Without it, removing one view scanned every mesh in
+   * the scene to find its own — so deleting a selection of 50 objects on a
+   * 600-object map walked the whole table 50 times.
+   */
+  private readonly ownedMeshes
+  /**
+   * `allMeshes()` runs on every hover pick. Rebuilding the array from every
+   * view each time allocated a scene-sized array several times a second, so
+   * it is cached and invalidated whenever the mesh set actually changes.
+   */
+  private meshCache
   private unsubscribe
   constructor(doc: EditorDocument, factory: ViewFactory)
   /** Build views for everything currently in the document and follow it. */
@@ -70,6 +82,8 @@ export declare class EditorViewRegistry {
   private rebuildAll
   private create
   private index
+  /** Drop one view's meshes from both indexes — without scanning the rest. */
+  private unindex
   private destroy
   private disposeAll
   /**

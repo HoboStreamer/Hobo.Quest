@@ -19,12 +19,15 @@ import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { MultiMaterial } from '@babylonjs/core/Materials/multiMaterial.js'
 import { SubMesh } from '@babylonjs/core/Meshes/subMesh.js'
 import { VertexBuffer } from '@babylonjs/core/Buffers/buffer.js'
+import { Matrix, Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh.js'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
+import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { Texture } from '@babylonjs/core/Materials/Textures/texture.js'
 import type { StaticObjectV2, SurfaceMaterialData } from '@hobo/content'
 import { LayeredSurfaceMaterial } from './layeredSurface.js'
+import { faceIndexFromNormal, faceUV, hasUsableUV0 } from './surfaceProjection.js'
 
 /** Resolves the live (or loaded) mask texture for one surface. */
 export type MaskResolver = (
@@ -125,8 +128,14 @@ export function createModelPaintOverlay(
   surfaceId: string,
   data: SurfaceMaterialData,
   maskFor: MaskResolver,
+  /**
+   * How to project a mesh that shipped with no usable UVs. Must be the space
+   * the BRUSH used, or the paint would be shown somewhere other than where it
+   * was applied.
+   */
+  fallback?: { root: TransformNode; extent: readonly [number, number, number] },
 ): { mesh: Mesh; dispose: () => void } | null {
-  const clone = (source as Mesh).clone(`paintovl:${ownerId}:${surfaceId}`, source.parent, true)
+  const clone = cloneForOverlay(source, `paintovl:${ownerId}:${surfaceId}`)
   if (!clone) return null
   clone.isPickable = false
   // A hair proud, so it never z-fights the surface it decorates.
@@ -146,9 +155,11 @@ export function createModelPaintOverlay(
   material.material.maxSimultaneousLights = 8
   clone.material = material.material
 
-  // Without UVs there is nothing for the mask to be sampled against; the
-  // caller's box projection writes into a generated channel instead.
-  if (!clone.isVerticesDataPresent(VertexBuffer.UVKind)) {
+  // Without usable UVs there is nothing for the mask to be sampled against.
+  // The brush falls back to a box projection rather than doing nothing, so
+  // the overlay bakes THAT SAME projection into the clone — otherwise a
+  // stroke would be recorded and then displayed nowhere.
+  if (!hasUsableUV0(clone) && !bakeBoxProjectedUVs(clone, fallback)) {
     clone.dispose()
     material.material.dispose()
     return null
@@ -161,4 +172,87 @@ export function createModelPaintOverlay(
       clone.dispose()
     },
   }
+}
+
+/**
+ * An INDEPENDENT mesh to hang the overlay material on.
+ *
+ * `ModelCache` instantiates models as `InstancedMesh`es, which share their
+ * source's material: assigning one a material either does nothing or repaints
+ * the template and with it every other placement of that model. So an
+ * instance is cloned from its SOURCE mesh and given the instance's own local
+ * transform, producing a real `Mesh` that can carry its own material.
+ *
+ * Geometry stays shared — that is not mutation, and it is what makes the
+ * overlay cheap. `bakeBoxProjectedUVs` is the one path that writes vertex
+ * data, and it detaches the geometry first.
+ */
+function cloneForOverlay(source: AbstractMesh, name: string): Mesh | null {
+  const instanced = source as AbstractMesh & { sourceMesh?: Mesh }
+  const template = instanced.sourceMesh ?? (source as Mesh)
+  const clone = template.clone(name, source.parent, true)
+  if (!clone) return null
+  if (instanced.sourceMesh) {
+    // The instance's pose, not the template's.
+    clone.position.copyFrom(source.position)
+    clone.scaling.copyFrom(source.scaling)
+    if (source.rotationQuaternion) clone.rotationQuaternion = source.rotationQuaternion.clone()
+    else {
+      clone.rotationQuaternion = null
+      clone.rotation.copyFrom(source.rotation)
+    }
+  }
+  return clone
+}
+
+/**
+ * Write box-projected UVs onto an overlay clone, in the owning static's local
+ * space — the space `PaintController` projects into when a model has no UV0.
+ *
+ * Per-vertex rather than per-face, so a mesh whose triangles span more than
+ * one dominant axis still gets continuous coverage on each of them. Returns
+ * false when there is nothing to project from, and the caller drops the
+ * overlay rather than showing paint in the wrong place.
+ */
+function bakeBoxProjectedUVs(
+  clone: Mesh,
+  fallback?: { root: TransformNode; extent: readonly [number, number, number] },
+): boolean {
+  if (!fallback) return false
+  const positions = clone.getVerticesData(VertexBuffer.PositionKind)
+  if (!positions || positions.length < 9) return false
+  // The clone shares the cached template's geometry. Writing UVs into that
+  // would alter the template and every other placement of the model, so the
+  // geometry is detached first — the cached AssetContainer is never touched.
+  clone.makeGeometryUnique()
+  const normals = clone.getVerticesData(VertexBuffer.NormalKind)
+  const toRoot = clone
+    .computeWorldMatrix(true)
+    .multiply(Matrix.Invert(fallback.root.computeWorldMatrix(true)))
+  const extent: [number, number, number] = [
+    Math.max(1e-6, fallback.extent[0]),
+    Math.max(1e-6, fallback.extent[1]),
+    Math.max(1e-6, fallback.extent[2]),
+  ]
+
+  const uvs = new Float32Array((positions.length / 3) * 2)
+  const p = new Vector3()
+  const n = new Vector3()
+  for (let i = 0, j = 0; i + 2 < positions.length; i += 3, j += 2) {
+    p.set(positions[i]!, positions[i + 1]!, positions[i + 2]!)
+    Vector3.TransformCoordinatesToRef(p, toRoot, p)
+    if (normals && i + 2 < normals.length) {
+      n.set(normals[i]!, normals[i + 1]!, normals[i + 2]!)
+      Vector3.TransformNormalToRef(n, toRoot, n)
+    } else {
+      // No normals: the direction from the model's centre is the best
+      // available guess at which face a vertex belongs to.
+      n.copyFrom(p)
+    }
+    const uv = faceUV(p, extent, faceIndexFromNormal(n))
+    uvs[j] = uv.u
+    uvs[j + 1] = uv.v
+  }
+  clone.setVerticesData(VertexBuffer.UVKind, uvs)
+  return true
 }

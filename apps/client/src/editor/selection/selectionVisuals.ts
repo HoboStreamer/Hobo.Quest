@@ -20,6 +20,7 @@
  */
 import { Color3 } from '@babylonjs/core/Maths/math.color.js'
 import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer.js'
+import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh.js'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { EditorViewRegistry } from '../viewport/editorViewRegistry.js'
@@ -105,11 +106,25 @@ export class SelectionVisuals {
     for (const mesh of this.views.meshesOf(id)) {
       // A mesh with no geometry (a pure transform root) cannot be
       // highlighted; its children carry the look.
-      if (mesh.getTotalVertices() > 0) this.layer.addMesh(mesh, color)
+      if (this.canHighlight(mesh)) this.layer.addMesh(mesh, color)
       for (const child of mesh.getChildMeshes()) {
-        if (child.getTotalVertices() > 0) this.layer.addMesh(child as Mesh, color)
+        if (this.canHighlight(child)) this.layer.addMesh(child as Mesh, color)
       }
     }
+  }
+
+  /**
+   * `HighlightLayer` hooks a mesh's own bind observables, which an
+   * `InstancedMesh` does not have — imported models instantiate as instances,
+   * so selecting one used to throw and abandon the whole refresh, leaving the
+   * previous selection's highlight on screen. The model's proxy root carries
+   * the geometry that shows selection instead.
+   */
+  private canHighlight(mesh: AbstractMesh): boolean {
+    return (
+      mesh.getTotalVertices() > 0 &&
+      typeof (mesh as { onBeforeBindObservable?: unknown }).onBeforeBindObservable === 'object'
+    )
   }
 
   dispose(): void {

@@ -69,87 +69,16 @@ export declare function parseSurfaceId(id: string):
       slot: number
     }
   | null
-/**
- * Which box face a normal belongs to, in Babylon's face order
- * (0 +z, 1 -z, 2 +x, 3 -x, 4 +y, 5 -y). Painting one wall of a room must
- * not paint the other five.
- */
-export declare function faceIndexFromNormal(n: { x: number; y: number; z: number }): number
-/** Local point on a box face → 0..1 UV across that face. */
-export declare function faceUV(
-  local: {
-    x: number
-    y: number
-    z: number
-  },
-  size: readonly [number, number, number],
-  face: number,
-): {
-  u: number
-  v: number
-}
-/** Cylindrical wrap: angle around Y, height along it. Seam at -X. */
-export declare function cylindricalUV(
-  local: {
-    x: number
-    y: number
-    z: number
-  },
-  height: number,
-): {
-  u: number
-  v: number
-}
-/**
- * Spherical wrap. The poles compress to a point, so a stamp there covers a
- * wide band of u — clamped rather than left to smear, which is the least
- * surprising of the available wrong answers.
- */
-export declare function sphericalUV(local: { x: number; y: number; z: number }): {
-  u: number
-  v: number
-}
-/** Terrain: local metres → 0..1 across the patch. */
-export declare function planarUV(
-  local: {
-    x: number
-    z: number
-  },
-  halfExtent: number,
-): {
-  u: number
-  v: number
-}
-/**
- * Box projection for meshes with no usable UV0.
- *
- * The alternative is for Paint to silently do nothing on an imported model,
- * which is the worst outcome: the user cannot tell whether they missed, the
- * texture failed to load, or the feature does not work. Projecting from the
- * dominant axis is approximate — it stretches on faces oblique to that axis
- * — so the Inspector says so and the Issues panel raises it.
- */
-export declare function boxProjectionUV(
-  local: {
-    x: number
-    y: number
-    z: number
-  },
-  normal: {
-    x: number
-    y: number
-    z: number
-  },
-  extents: readonly [number, number, number],
-): {
-  u: number
-  v: number
-}
-/** True when a mesh can be painted in its own UV space. */
-export declare function hasUsableUV0(mesh: {
-  isVerticesDataPresent: (kind: string) => boolean
-  getVerticesData: (kind: string) => Float32Array | number[] | null
-}): boolean
+export {
+  boxProjectionUV,
+  cylindricalUV,
+  faceIndexFromNormal,
+  faceUV,
+  hasUsableUV0,
+  planarUV,
+  sphericalUV,
+  staticExtent,
+} from '../../render/surfaceProjection.js'
 /** Convert a UV in 0..1 plus a world radius into mask pixels. */
 export declare function toPaintUV(
   uv: {

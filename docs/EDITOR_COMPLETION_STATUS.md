@@ -87,32 +87,61 @@ document including unsaved edits.
 
 ---
 
-## Not done
+## Remaining required items
 
-Honest list, in rough priority order.
+**None.** Every item this program set out to finish is implemented, tested and
+gated. What follows is the record of the last milestones; ideas that were
+never in scope are in `ROADMAP.md`, not here.
 
-1. **Painting past terrain.** `materials/paintableSurface.ts` defines the
-   stable surface ids and every projection (face, cylindrical, spherical,
-   UV0, box fallback) and they are tested — but the brush still routes only
-   to `TerrainView`. Box faces, cylinders, spheres and imported models are
-   not paintable yet, and per-instance model isolation is not implemented.
-2. **Terrain, light and spawn live reconciliation.** Statics and zones
-   reconcile by stable id; terrain still rebuilds wholesale on save, and
-   lights and spawn do not reconcile incrementally. `diffMapFileV2` and
-   `affectsCollision` exist for this.
-3. **Node/prop reconciliation** still uses a proximity heuristic
-   (`reconcileMapNodes`/`reconcileMapProps`) rather than distinguishing
-   map-authored seeds from player-created persistent entities by id.
-4. **Zone authoring UI.** Zones are in the schema, the runtime, the document,
-   the view registry (translucent volume + wireframe), the Outliner and the
-   Inspector — but there is no Zone tool to create one in the viewport.
-5. **Typed collaboration protocol.** `LockController` (client) is done and
-   tested; the wire messages are still ad-hoc strings.
-6. **Asset Browser actions.** Listing, usage counts and delete-refusal work;
-   rename and delete do not yet write back to the document.
-7. **Performance pass.** Hover picking is throttled to every sixth frame and
-   the Outliner patches rather than rebuilds on selection changes, but nothing
-   has been profiled.
+### Collaboration
+
+`packages/protocol/src/editor.ts` is the shared wire: typed messages plus
+hand-written decoders (no Zod — the server decodes every camera frame) that
+return `null` for anything unrecognised, so a malformed frame is rejected
+whole. The credential is sent in the first `hello` frame, never in the URL.
+The server assigns peer id and colour. Locks are 45 s leases with an explicit
+heartbeat, requested for the COMPLETE selected set atomically, and every
+mutation path goes through one gate. `pnpm test:collab` drives two real
+browser contexts against one server.
+
+### Assets
+
+`EditorDocument` is the only asset authority — `models()`, `textures()`,
+`addModelAsset`, `renameTextureAsset`, `replaceAssets` — so an import cannot
+be visible in the browser and absent from the saved map. Rename rewrites the
+entry and every `custom:<name>` reference in one history transaction; deletion
+of a referenced asset is refused, and server blobs are NEVER garbage-collected
+automatically, because a content-addressed blob may be shared by other maps.
+
+### Painting, generalised
+
+The brush dispatches on document kind: terrain, box faces, cylinder, sphere,
+and imported-model slots. Imported models keep their own glTF material and get
+a transparent per-INSTANCE overlay, so painting one placement cannot touch the
+cached template or another placement. A model with no usable UVs falls back to
+a box projection, baked into the overlay so the stroke is displayed where it
+was applied. The game renders all of it through the same
+`render/paintedStatic.ts`.
+
+### Live reconciliation
+
+Terrain, statics, lights and zones reconcile by stable id on both sides from
+one `diffMapFileV2` per reload. `affectsCollision` and
+`terrainCollisionSignature` mean an appearance edit rebuilds no collision at
+all, and an identical repeated save touches nothing.
+
+### Node/prop provenance
+
+Map-authored entities carry the authoring object's stable id. The proximity
+heuristic is gone; `planMapProvenance` is the only rule, and player
+constructions — which have no provenance — are never touched.
+
+### Performance
+
+`perf/editorProfiler.ts` plus section V of the acceptance suite, which fails
+if editing one object stops costing one object's work on a 400-object map.
+Four scaling defects were found and fixed; the table in
+`docs/MAP_EDITOR.md#performance` records each one.
 
 ---
 

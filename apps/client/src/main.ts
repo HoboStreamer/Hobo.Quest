@@ -191,6 +191,12 @@ async function start(): Promise<void> {
     connection,
     player,
     icons,
+    /**
+     * Mesh names only. Enough for the acceptance suite to prove the GAME
+     * renders what the editor authored (paint overlays, map statics) without
+     * handing the page a live scene reference to poke at.
+     */
+    meshNames: (): string[] => scene.meshes.map((m) => m.name),
   }
   const fpBody = new FirstPersonBody(scene, content, appearance, player, state)
   const viewmodel = new Viewmodel(scene, content, player.camera, appearance)

@@ -176,6 +176,15 @@ type Probe = {
   setProperty: (ids: string[], key: string, value: unknown) => void
   dirty: boolean
   groupMove: (dx: number, dy: number, dz: number) => void
+  perf: {
+    start: () => void
+    stop: () => void
+    snapshot: () => Record<string, { count: number; ms: number }>
+  }
+  sceneStats: () => { objects: number; views: number; meshes: number; sceneMeshes: number }
+  deleteSelection: () => void
+  importModelBytes: (name: string, bytes: number[]) => Promise<string | null>
+  armModel: (modelId: string) => void
 }
 // The probe lives in the page; pass it into evaluate() as a JSHandle so the
 // scenarios below can be written as plain typed functions.
@@ -464,11 +473,24 @@ ok(
 // ════════════════════════════════════════════════════════════════════════
 section('G. Terrain wire stays visible while terrain is selected')
 await clickEmpty()
-const terrainScreen = (await page.evaluate(() => {
-  const w = window as never as { __editor: { worldToScreen: (p: number[]) => [number, number] } }
-  // A patch of floor well clear of the three boxes.
-  return w.__editor.worldToScreen([-30, 0, -20])
-})) as [number, number]
+// A patch of floor well clear of the three boxes. `worldToScreen` uses the
+// last RENDERED camera matrix, so after the camera restore in clickEmpty() it
+// can be a frame stale — verify the aim against the editor's own picker and
+// re-project until it actually lands on terrain, exactly as clickObject does.
+let terrainScreen: [number, number] = [0, 0]
+for (let i = 0; i < 25; i++) {
+  terrainScreen = (await page.evaluate(() => {
+    const w = window as never as { __editor: { worldToScreen: (p: number[]) => [number, number] } }
+    return w.__editor.worldToScreen([-30, 0, -20])
+  })) as [number, number]
+  const aimed = await evA(
+    ([p, px, py]) => p.pickIdAt(px as unknown as number, py as unknown as number),
+    terrainScreen[0],
+    terrainScreen[1],
+  )
+  if (aimed !== null) break
+  await page.waitForTimeout(120)
+}
 await page.mouse.move(...terrainScreen)
 await page.mouse.down()
 await page.mouse.up()
@@ -1499,6 +1521,381 @@ await withMap(
     )
   },
 )
+
+// ════════════════════════════════════════════════════════════════════════
+/**
+ * A real .glb, built here rather than checked in, so the suite can vary the
+ * one thing that matters: whether the mesh has usable UVs. A model with no
+ * UV0 is the common case for scanned or CAD-exported assets, and it is the
+ * case where painting silently did nothing.
+ */
+function makeGlb(withUv: boolean): number[] {
+  // A 2×2 quad standing in the XY plane, two triangles.
+  const indices = new Uint16Array([0, 1, 2, 0, 2, 3])
+  const positions = new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0])
+  const uvs = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0])
+
+  const parts: { data: ArrayBufferView; length: number }[] = [
+    { data: indices, length: indices.byteLength },
+    { data: positions, length: positions.byteLength },
+  ]
+  if (withUv) parts.push({ data: uvs, length: uvs.byteLength })
+
+  const bufferViews: Record<string, number>[] = []
+  let offset = 0
+  const bin: number[] = []
+  for (const part of parts) {
+    bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: part.length })
+    const bytes = new Uint8Array(part.data.buffer, part.data.byteOffset, part.length)
+    for (const b of bytes) bin.push(b)
+    offset += part.length
+    while (offset % 4 !== 0) {
+      bin.push(0)
+      offset++
+    }
+  }
+
+  const attributes: Record<string, number> = { POSITION: 1 }
+  if (withUv) attributes['TEXCOORD_0'] = 2
+  const json = {
+    asset: { version: '2.0' },
+    scene: 0,
+    scenes: [{ nodes: [0] }],
+    nodes: [{ mesh: 0, name: 'quad' }],
+    meshes: [{ primitives: [{ attributes, indices: 0, material: 0 }] }],
+    materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.8, 0.8, 0.8, 1] } }],
+    accessors: [
+      { bufferView: 0, componentType: 5123, count: 6, type: 'SCALAR' },
+      {
+        bufferView: 1,
+        componentType: 5126,
+        count: 4,
+        type: 'VEC3',
+        min: [-1, -1, 0],
+        max: [1, 1, 0],
+      },
+      ...(withUv ? [{ bufferView: 2, componentType: 5126, count: 4, type: 'VEC2' }] : []),
+    ],
+    bufferViews,
+    buffers: [{ byteLength: offset }],
+  }
+
+  const jsonBytes = [...Buffer.from(JSON.stringify(json), 'utf8')]
+  while (jsonBytes.length % 4 !== 0) jsonBytes.push(0x20) // pad with spaces
+  const total = 12 + 8 + jsonBytes.length + 8 + bin.length
+  const header = Buffer.alloc(12)
+  header.writeUInt32LE(0x46546c67, 0) // 'glTF'
+  header.writeUInt32LE(2, 4)
+  header.writeUInt32LE(total, 8)
+  const jsonHeader = Buffer.alloc(8)
+  jsonHeader.writeUInt32LE(jsonBytes.length, 0)
+  jsonHeader.writeUInt32LE(0x4e4f534a, 4) // 'JSON'
+  const binHeader = Buffer.alloc(8)
+  binHeader.writeUInt32LE(bin.length, 0)
+  binHeader.writeUInt32LE(0x004e4942, 4) // 'BIN'
+  return [...header, ...jsonHeader, ...jsonBytes, ...binHeader, ...bin]
+}
+
+section('W. Painting imported models')
+{
+  const floorSub = 16
+  const floorHeights = new Float32Array((floorSub + 1) * (floorSub + 1))
+  const floorB64 = Buffer.from(
+    new Uint8Array(floorHeights.buffer, floorHeights.byteOffset, floorHeights.byteLength),
+  ).toString('base64')
+  await withMap(
+    PORT + 9,
+    {
+      v: 2,
+      terrains: [
+        { id: 'w-floor', pos: [0, 0, 0], halfExtent: 40, sub: floorSub, heights: floorB64 },
+      ],
+      statics: [],
+      nodes: [],
+      props: [],
+      lights: [],
+      zones: [],
+    },
+    async (pg) => {
+      /** Arm a model and click the viewport to place one, returning its id. */
+      const place = async (modelId: string, x: number, y: number): Promise<string | null> => {
+        await probeArgs(pg, ([p, id]) => p.armModel(id as unknown as string), modelId)
+        await pg.mouse.move(x, y)
+        await pg.waitForTimeout(200)
+        await pg.mouse.down()
+        await pg.mouse.up()
+        await pg.waitForTimeout(700)
+        return probeOf(pg, (p) => p.primaryId())
+      }
+
+      const uvModel = await probeArgs(
+        pg,
+        ([p, bytes]) => p.importModelBytes('quad.glb', bytes as unknown as number[]),
+        makeGlb(true),
+      )
+      ok('a glb imports and is owned by the document', typeof uvModel === 'string', uvModel)
+      const models = (await probeOf(pg, (p) => p.assetState())).models
+      ok('the Assets panel lists it', models.length === 1, models)
+
+      const first = await place(uvModel!, 820, 520)
+      const second = await place(uvModel!, 940, 560)
+      ok('two placements are two distinct objects', Boolean(first && second && first !== second), {
+        first,
+        second,
+      })
+
+      // Paint the FIRST instance only.
+      await probeOf(pg, (p) => p.setToolByName('paint'))
+      await probeOf(pg, (p) => p.setPaintTexture('wood_planks'))
+      await pg.waitForTimeout(200)
+      const at = (await probeArgs(
+        pg,
+        ([p, id]) => p.worldToScreen(p.transformOf(id as unknown as string)!.position),
+        first,
+      )) as [number, number]
+      await pg.mouse.move(at[0], at[1])
+      await pg.waitForTimeout(150)
+      await pg.mouse.down()
+      for (let i = 1; i <= 4; i++) {
+        await pg.mouse.move(at[0] + i * 2, at[1] + i * 2)
+        await pg.waitForTimeout(60)
+      }
+      await pg.mouse.up()
+      await pg.waitForTimeout(500)
+
+      const painted = await probeArgs(
+        pg,
+        ([p, id]) => p.paintedSurfaces(id as unknown as string),
+        first,
+      )
+      const slots = Object.keys(painted).filter((k) => k.startsWith('mesh:'))
+      ok(
+        'painting a model writes a per-MESH surface, not a whole-object one',
+        slots.length === 1,
+        painted,
+      )
+      ok('and that surface carries a mask', painted[slots[0]!]?.hasMask === true, painted)
+
+      // The other instance of the SAME model must be untouched: the template
+      // is cached and shared, so painting one may not reach through it.
+      const other = await probeArgs(
+        pg,
+        ([p, id]) => p.paintedSurfaces(id as unknown as string),
+        second,
+      )
+      ok(
+        'the second instance of the same model is untouched',
+        Object.keys(other).length === 0,
+        other,
+      )
+
+      // A model with no UVs falls back to a box projection rather than
+      // silently doing nothing.
+      const bareModel = await probeArgs(
+        pg,
+        ([p, bytes]) => p.importModelBytes('bare.glb', bytes as unknown as number[]),
+        makeGlb(false),
+      )
+      ok('a UV-less glb still imports', typeof bareModel === 'string', bareModel)
+      const bare = await place(bareModel!, 700, 480)
+      await probeOf(pg, (p) => p.setToolByName('paint'))
+      await pg.waitForTimeout(150)
+      const bareAt = (await probeArgs(
+        pg,
+        ([p, id]) => p.worldToScreen(p.transformOf(id as unknown as string)!.position),
+        bare,
+      )) as [number, number]
+      await pg.mouse.move(bareAt[0], bareAt[1])
+      await pg.waitForTimeout(150)
+      await pg.mouse.down()
+      await pg.mouse.move(bareAt[0] + 4, bareAt[1] + 4)
+      await pg.waitForTimeout(80)
+      await pg.mouse.up()
+      await pg.waitForTimeout(500)
+      const bareSurfaces = await probeArgs(
+        pg,
+        ([p, id]) => p.paintedSurfaces(id as unknown as string),
+        bare,
+      )
+      ok(
+        'a model with no UVs still records paint (box projection, not silence)',
+        Object.keys(bareSurfaces).some((k) => k.startsWith('mesh:')),
+        bareSurfaces,
+      )
+
+      // Game parity: save, then load the GAME page against the same server
+      // and confirm the paint overlay exists there too.
+      await probeOf(pg, (p) => p.save())
+      await pg.waitForTimeout(1200)
+      const served = (await (await fetch(`http://127.0.0.1:${PORT + 9}/map.json`)).json()) as {
+        statics: { id: string; surfaces?: Record<string, unknown> }[]
+        models: unknown[]
+      }
+      const savedFirst = served.statics.find((s) => s.id === first)
+      ok(
+        'the saved map carries the model surface',
+        Object.keys(savedFirst?.surfaces ?? {}).some((k) => k.startsWith('mesh:')),
+        savedFirst,
+      )
+      ok('and the imported models', served.models.length === 2, served.models.length)
+
+      // The page was made with browser.newPage(), so its context is implicit;
+      // a sibling page has to come from the browser itself.
+      const game = await pg.context().browser()!.newPage()
+      try {
+        game.on('pageerror', (e) => console.log('[game]', String(e).slice(0, 300)))
+        await game.goto(`http://127.0.0.1:${PORT + 9}/`)
+        // The game boots into character select and waits for a person. Take
+        // the first slot and join, which is what a player does.
+        await game.waitForSelector('.char-slot:not(.char-locked)', { timeout: 90_000 })
+        await game.click('.char-slot:not(.char-locked)')
+        await game.waitForSelector('#btn-join', { timeout: 90_000 })
+        await game.click('#btn-join')
+        await game.waitForFunction(
+          () => Boolean((window as never as { __hobo?: unknown }).__hobo),
+          { timeout: 120_000 },
+        )
+        // Statics and their model overlays are built after the world loads.
+        await game.waitForTimeout(6000)
+        const overlays = await game.evaluate(
+          () =>
+            (window as never as { __hobo: { meshNames: () => string[] } }).__hobo
+              .meshNames()
+              .filter((n) => n.startsWith('paintovl:')).length,
+        )
+        ok('the GAME renders the same paint overlay', overlays > 0, overlays)
+      } finally {
+        await game.close()
+      }
+    },
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════
+section('V. Performance profile on a large map')
+// Everything here is about SCALING, not wall-clock: an assertion like "under
+// 16 ms" would only measure this machine's software renderer. What must hold
+// on a 400-object map is that editing one object costs one object's work —
+// no whole-scene rebuild, no per-mesh scan of the scene, no view churn.
+{
+  const BIG = 400
+  const perfSub = 32
+  const perfHeights = new Float32Array((perfSub + 1) * (perfSub + 1))
+  const perfB64 = Buffer.from(
+    new Uint8Array(perfHeights.buffer, perfHeights.byteOffset, perfHeights.byteLength),
+  ).toString('base64')
+  const bigStatics = Array.from({ length: BIG }, (_, i) => ({
+    id: `perf-${i}`,
+    shape: { type: 'box', size: [1, 1, 1] },
+    // A grid well away from the origin so nothing overlaps the panels.
+    pos: [(i % 20) * 3 - 30, 1, Math.floor(i / 20) * 3 - 30],
+    yaw: 0,
+    color: '#808080',
+  }))
+  await withMap(
+    PORT + 8,
+    {
+      v: 2,
+      terrains: [
+        { id: 'perf-floor', pos: [0, 0, 0], halfExtent: 100, sub: perfSub, heights: perfB64 },
+      ],
+      statics: bigStatics,
+      nodes: [],
+      props: [],
+      lights: [],
+      zones: [],
+    },
+    async (pg) => {
+      const stats = await probeOf(pg, (p) => p.sceneStats())
+      ok(
+        'every authored object got exactly one view',
+        stats.views === BIG + 1 && stats.objects === BIG + 1,
+        stats,
+      )
+
+      // ── One property edit costs one view update. ──────────────────────
+      await probeOf(pg, (p) => p.perf.start())
+      await probeArgs(pg, ([p]: [Probe]) => p.setProperty(['perf-7'], 'color', '#ff0000'))
+      await pg.waitForTimeout(200)
+      let snap = await probeOf(pg, (p) => p.perf.snapshot())
+      ok('a colour edit updates exactly ONE view', snap['views.update']?.count === 1, snap)
+      ok(
+        'and rebuilds nothing — not the view, not the scene',
+        !snap['views.rebuildAll'] && !snap['views.create'] && !snap['views.rebuildFromUpdate'],
+        snap,
+      )
+
+      // ── Moving one object is likewise O(1) in the map size. ───────────
+      await probeOf(pg, (p) => p.perf.start())
+      await probeOf(pg, (p) => p.selectByIds(['perf-11']))
+      await probeArgs(pg, ([p]: [Probe]) => p.groupMove(0, 0, 2))
+      await pg.waitForTimeout(200)
+      snap = await probeOf(pg, (p) => p.perf.snapshot())
+      ok(
+        'a move updates one view and rebuilds none',
+        snap['views.update']?.count === 1 && !snap['views.rebuildAll'] && !snap['views.create'],
+        snap,
+      )
+
+      // ── Deleting many objects disposes exactly those, and undo brings
+      //    exactly those back. The old owner-table scan made this
+      //    quadratic; the count is what proves it is not.
+      const victims = Array.from({ length: 40 }, (_, i) => `perf-${100 + i}`)
+      await probeOf(pg, (p) => p.perf.start())
+      await probeArgs(pg, ([p, ids]: [Probe, string[]]) => p.selectByIds(ids), victims)
+      await probeOf(pg, (p) => p.deleteSelection())
+      await pg.waitForTimeout(300)
+      snap = await probeOf(pg, (p) => p.perf.snapshot())
+      ok('deleting 40 objects disposes exactly 40 views', snap['views.dispose']?.count === 40, snap)
+      ok('and creates none', !snap['views.create'], snap)
+      const afterDelete = await probeOf(pg, (p) => p.sceneStats())
+      ok(
+        'the mesh list shrank with them — no stale pickable meshes',
+        afterDelete.views === BIG + 1 - 40 && afterDelete.meshes === afterDelete.views,
+        afterDelete,
+      )
+
+      await probeOf(pg, (p) => p.perf.start())
+      await probeOf(pg, (p) => p.undo())
+      await pg.waitForTimeout(300)
+      snap = await probeOf(pg, (p) => p.perf.snapshot())
+      ok(
+        'undo recreates exactly those 40 and nothing else',
+        snap['views.create']?.count === 40,
+        snap,
+      )
+      const afterUndo = await probeOf(pg, (p) => p.sceneStats())
+      ok('and the scene is back where it started', afterUndo.views === BIG + 1, afterUndo)
+
+      // ── Hover picking: the mesh list is cached, so a run of picks over a
+      //    static scene rebuilds it zero times.
+      await probeOf(pg, (p) => p.perf.start())
+      for (let i = 0; i < 12; i++) {
+        await pg.mouse.move(700 + i * 4, 450 + i * 3)
+        await pg.waitForTimeout(60)
+      }
+      snap = await probeOf(pg, (p) => p.perf.snapshot())
+      const picks = snap['pick.hover']?.count ?? 0
+      ok('hover picking ran during the sweep', picks > 0, snap['pick.hover'])
+      ok(
+        'and the pickable-mesh list was never rebuilt for it',
+        !snap['views.allMeshes.rebuild'],
+        snap,
+      )
+      console.log(
+        `  [info] ${picks} hover picks, ${snap['pick.hover']?.ms ?? 0}ms total on ${afterUndo.meshes} meshes (software GL)`,
+      )
+
+      // Counting must be free when nobody asked for it.
+      await probeOf(pg, (p) => p.perf.stop())
+      const before = JSON.stringify(await probeOf(pg, (p) => p.perf.snapshot()))
+      await probeArgs(pg, ([p]: [Probe]) => p.setProperty(['perf-9'], 'color', '#00ff00'))
+      await pg.waitForTimeout(150)
+      const after = JSON.stringify(await probeOf(pg, (p) => p.perf.snapshot()))
+      ok('the profiler records nothing once switched off', before === after, { before, after })
+    },
+  )
+}
 
 console.log(
   `\n${'═'.repeat(64)}\n${checks - failures}/${checks} checks passed, ${failures} FAILED\n`,

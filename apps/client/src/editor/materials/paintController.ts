@@ -32,9 +32,11 @@ import {
   faceIndexFromNormal,
   faceSurfaceId,
   faceUV,
+  hasUsableUV0,
   modelSurfaceId,
   planarUV,
   sphericalUV,
+  staticExtent,
   toPaintUV,
   type PaintUV,
   type ProjectionMode,
@@ -156,15 +158,31 @@ export class PaintController {
 
     const kind = doc.typeOf(ownerId)
     if (kind === 'terrain') return this.terrainHit(ownerId, pick.pickedPoint, brushRadius)
-    if (kind === 'static')
-      return this.staticHit(
-        ownerId,
-        pick.pickedMesh,
-        pick.pickedPoint,
-        pick.getNormal(true) ?? new Vector3(0, 1, 0),
-        brushRadius,
+    if (kind !== 'static') return null
+
+    let mesh = pick.pickedMesh
+    let point = pick.pickedPoint
+    let normal = pick.getNormal(true) ?? new Vector3(0, 1, 0)
+
+    // An imported model's child meshes are deliberately NOT pickable, so that
+    // clicking one selects the object rather than a nameless sub-mesh. The
+    // brush needs the actual surface, though — painting the proxy box would
+    // record a face of an invisible cube — so it re-picks against this
+    // object's own geometry. A predicate overrides `isPickable`.
+    if (doc.get(ownerId, 'static')?.model) {
+      const root = views.rootOf(ownerId)
+      const deep = scene.pick(
+        scene.pointerX,
+        scene.pointerY,
+        (m: AbstractMesh) => m.isEnabled() && m !== root && views.ownerOf(m) === ownerId,
       )
-    return null
+      if (deep?.hit && deep.pickedPoint && deep.pickedMesh) {
+        mesh = deep.pickedMesh
+        point = deep.pickedPoint
+        normal = deep.getNormal(true) ?? normal
+      }
+    }
+    return this.staticHit(ownerId, mesh, point, normal, brushRadius)
   }
 
   private terrainHit(ownerId: string, world: Vector3, brushRadius: number): PaintHit | null {
@@ -209,7 +227,7 @@ export class PaintController {
     // is the same after every reload.
     if (s.model && mesh !== root) {
       const surfaceId = modelSurfaceId(nodePath(mesh, root), mesh.subMeshes?.length ? 0 : 0)
-      const extent = extentOf(shape, scale)
+      const extent = staticExtent(shape, scale)
       const uv = modelUV(mesh, world, local, localNormal, extent)
       const data = surfaceDataFor(doc, ownerId, surfaceId)
       const state = registry.ensure(ownerId, surfaceId, data)
@@ -331,16 +349,6 @@ function nodePath(mesh: AbstractMesh, root: unknown): string {
   return parts.join('/') || '0'
 }
 
-const extentOf = (
-  shape: StaticObjectV2['shape'],
-  scale: readonly number[],
-): [number, number, number] =>
-  shape.type === 'box'
-    ? [shape.size[0] * scale[0]!, shape.size[1] * scale[1]!, shape.size[2] * scale[2]!]
-    : shape.type === 'cylinder'
-      ? [shape.radius * 2 * scale[0]!, shape.height * scale[1]!, shape.radius * 2 * scale[2]!]
-      : [shape.radius * 2 * scale[0]!, shape.radius * 2 * scale[1]!, shape.radius * 2 * scale[2]!]
-
 /**
  * UVs for an imported model surface.
  *
@@ -357,8 +365,9 @@ function modelUV(
   localNormal: Vector3,
   extent: [number, number, number],
 ): { uv: { u: number; v: number }; projection: ProjectionMode } {
-  const uvs = mesh.isVerticesDataPresent?.('uv') ? mesh.getVerticesData('uv') : null
-  if (uvs && uvs.length >= 4) {
+  // The SAME predicate the overlay uses. An exporter that wrote all-zero UVs
+  // counts as having none: painting into that puts every stamp on one texel.
+  if (hasUsableUV0(mesh)) {
     const sampled = sampleUvAt(mesh, world)
     if (sampled) return { uv: sampled, projection: 'uv0' }
   }

@@ -14,6 +14,7 @@ import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { LayeredSurfaceMaterial, maskTextureFrom } from './layeredSurface.js'
 import { applyPaintedStatic, createModelPaintOverlay } from './paintedStatic.js'
+import { staticExtent } from './surfaceProjection.js'
 import { ModelCache } from './modelCache.js'
 import { ParticleSystem } from '@babylonjs/core/Particles/particleSystem.js'
 import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
@@ -158,8 +159,16 @@ function attachModel(scene: Scene, proxy: Mesh, modelId: string, body?: StaticOb
         const path = /^mesh:([^/]+)\/material:\d+$/.exec(surfaceId)?.[1]
         const target = path ? childAtIndexPath(inst.root, path) : inst.root.getChildMeshes()[0]
         if (target)
-          createModelPaintOverlay(scene, target, body!.id, surfaceId, data, (_o, _s, d) =>
-            maskTextureFrom(scene, d.paint?.mask),
+          createModelPaintOverlay(
+            scene,
+            target,
+            body!.id,
+            surfaceId,
+            data,
+            (_o, _s, d) => maskTextureFrom(scene, d.paint?.mask),
+            // The editor's fallback projection, reproduced exactly: paint on
+            // a UV-less model must land in the same place for players.
+            { root: proxy, extent: staticExtent(body!.shape, body!.scale ?? [1, 1, 1]) },
           )
       }
     })

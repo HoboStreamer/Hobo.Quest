@@ -19,6 +19,7 @@ import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { EditorDocument, EditorObject, EditorObjectKind } from '../document/editorDocument.js'
 import type { DocumentChange } from '../document/editorDocument.js'
+import { editorPerf } from '../perf/editorProfiler.js'
 
 /**
  * One object's Babylon projection.
@@ -47,6 +48,18 @@ export class EditorViewRegistry {
   private readonly views = new Map<string, EditorView>()
   /** Child mesh (any depth) → owning object id. */
   private readonly owners = new Map<AbstractMesh, string>()
+  /**
+   * The reverse index. Without it, removing one view scanned every mesh in
+   * the scene to find its own — so deleting a selection of 50 objects on a
+   * 600-object map walked the whole table 50 times.
+   */
+  private readonly ownedMeshes = new Map<string, AbstractMesh[]>()
+  /**
+   * `allMeshes()` runs on every hover pick. Rebuilding the array from every
+   * view each time allocated a scene-sized array several times a second, so
+   * it is cached and invalidated whenever the mesh set actually changes.
+   */
+  private meshCache: Mesh[] | null = null
   private unsubscribe: (() => void) | null = null
 
   constructor(
@@ -98,7 +111,10 @@ export class EditorViewRegistry {
 
   /** Every renderable mesh, for scene-wide passes (hover picking filters). */
   allMeshes(): Mesh[] {
-    return [...this.views.values()].flatMap((v) => v.meshes())
+    if (this.meshCache) return this.meshCache
+    editorPerf.count('views.allMeshes.rebuild')
+    this.meshCache = [...this.views.values()].flatMap((v) => v.meshes())
+    return this.meshCache
   }
 
   /**
@@ -139,14 +155,24 @@ export class EditorViewRegistry {
         this.create(change.id, change.kind, object)
         continue
       }
-      const keys = change.type === 'updated' ? change.keys : Object.keys(object)
+      // A replace reports what actually differs, so restoring an object
+      // through undo costs what the difference costs, not a full rebuild.
+      const keys =
+        change.type === 'updated' || change.type === 'replaced' ? change.keys : Object.keys(object)
       // A view that cannot apply a change incrementally says so, and gets
       // rebuilt — identity is unaffected because it is keyed by id.
-      if (!view.update(object, keys)) this.rebuild(change.id)
+      editorPerf.count('views.update')
+      if (!view.update(object, keys)) {
+        // Worth watching: a view that rebuilds for a change it could have
+        // applied turns a drag into a stream of full geometry rebuilds.
+        editorPerf.count('views.rebuildFromUpdate')
+        this.rebuild(change.id)
+      }
     }
   }
 
   private rebuildAll(): void {
+    editorPerf.count('views.rebuildAll')
     this.disposeAll()
     for (const object of this.doc.list()) {
       const kind = this.doc.typeOf(object.id)
@@ -155,26 +181,40 @@ export class EditorViewRegistry {
   }
 
   private create(id: string, kind: EditorObjectKind, object: EditorObject): void {
-    const view = this.factory(id, kind, object)
+    const view = editorPerf.time('views.create', () => this.factory(id, kind, object))
     this.views.set(id, view)
     this.index(view)
   }
 
   private index(view: EditorView): void {
+    const owned: AbstractMesh[] = []
     for (const m of view.meshes()) {
       this.owners.set(m, view.id)
+      owned.push(m)
       // Child meshes of an imported model resolve to the same owner without
       // being listed individually: `ownerOf` walks up. Registering the ones
       // we know about keeps that walk short.
-      for (const child of m.getChildMeshes()) this.owners.set(child, view.id)
+      for (const child of m.getChildMeshes()) {
+        this.owners.set(child, view.id)
+        owned.push(child)
+      }
     }
+    this.ownedMeshes.set(view.id, owned)
+    this.meshCache = null
+  }
+
+  /** Drop one view's meshes from both indexes — without scanning the rest. */
+  private unindex(id: string): void {
+    for (const mesh of this.ownedMeshes.get(id) ?? []) this.owners.delete(mesh)
+    this.ownedMeshes.delete(id)
+    this.meshCache = null
   }
 
   private destroy(id: string): void {
     const view = this.views.get(id)
     if (!view) return
-    for (const [mesh, owner] of this.owners) if (owner === id) this.owners.delete(mesh)
-    view.dispose()
+    this.unindex(id)
+    editorPerf.time('views.dispose', () => view.dispose())
     this.views.delete(id)
   }
 
@@ -182,6 +222,8 @@ export class EditorViewRegistry {
     for (const view of this.views.values()) view.dispose()
     this.views.clear()
     this.owners.clear()
+    this.ownedMeshes.clear()
+    this.meshCache = null
   }
 
   /**
@@ -191,7 +233,7 @@ export class EditorViewRegistry {
   reindex(id: string): void {
     const view = this.views.get(id)
     if (!view) return
-    for (const [mesh, owner] of this.owners) if (owner === id) this.owners.delete(mesh)
+    this.unindex(id)
     this.index(view)
   }
 }

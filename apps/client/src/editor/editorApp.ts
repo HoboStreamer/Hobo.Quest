@@ -73,6 +73,7 @@ import { createEditorUi } from './ui/editorUi.js'
 import { createSaveController } from './net/saveController.js'
 import { ActionRouter } from './input/actionRouter.js'
 import { ACTIONS, loadBindings, type Binding } from './bindings.js'
+import { editorPerf } from './perf/editorProfiler.js'
 
 const content = createContent()
 
@@ -970,7 +971,7 @@ export async function bootEditor(): Promise<void> {
     if (interaction.pickingAllowed() && ++frameTick % 6 === 0) {
       const next =
         tool === null || tool === 'select' || tool === 'terrain'
-          ? viewport.pickIdAt(scene.pointerX, scene.pointerY)
+          ? editorPerf.time('pick.hover', () => viewport.pickIdAt(scene.pointerX, scene.pointerY))
           : null
       if (next !== hoverId) {
         hoverId = next
@@ -1163,6 +1164,12 @@ export async function bootEditor(): Promise<void> {
       const file = new File([new Uint8Array(bytes)], name, { type: 'image/png' })
       return assets.importTexture(file)
     },
+    importModelBytes: async (name: string, bytes: number[]) => {
+      const file = new File([new Uint8Array(bytes)], name, { type: 'model/gltf-binary' })
+      return assets.importModel(file)
+    },
+    /** Arm an imported model for placement, exactly as the Assets panel does. */
+    armModel: (modelId: string) => placeModel(modelId),
     renameTexture: (from: string, to: string) => assets.renameTexture(from, to),
     deleteTexture: (name: string) => assets.deleteTexture(name),
     textureRefsOf: (id: string) => JSON.stringify(doc.get(id) ?? null),
@@ -1200,6 +1207,25 @@ export async function bootEditor(): Promise<void> {
         hasAngle: l.angle !== undefined,
       })),
     save: () => saveController.save(),
+    /**
+     * Performance counters. Off unless something turns them on, so the
+     * measurement never costs anything in normal use.
+     */
+    perf: {
+      start: () => {
+        editorPerf.reset()
+        editorPerf.setEnabled(true)
+      },
+      stop: () => editorPerf.setEnabled(false),
+      snapshot: () => editorPerf.snapshot(),
+    },
+    /** Object/mesh counts, for scaling assertions against map size. */
+    sceneStats: () => ({
+      objects: doc.list().length,
+      views: views.size,
+      meshes: views.allMeshes().length,
+      sceneMeshes: scene.meshes.length,
+    }),
   }
 }
 

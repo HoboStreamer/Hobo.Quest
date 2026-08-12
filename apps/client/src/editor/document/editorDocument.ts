@@ -73,19 +73,25 @@ export const EDITOR_OBJECT_KINDS: readonly EditorObjectKind[] = [
   'spawn',
 ]
 
+/** kind → wire array name, so resolving one is not a scan. */
+const ARRAY_OF_KIND = new Map<EditorObjectKind, keyof MapFileV2>(ARRAY_KINDS)
+
 /**
  * What changed, by stable id, with enough detail for a view to update
  * incrementally instead of rebuilding the world.
  *
- * `updated` carries the top-level keys that differ, so a view can skip an
- * expensive rebuild for a change it does not care about — repainting a tint
- * must not rebuild collision.
+ * `updated` and `replaced` both carry the top-level keys that differ, so a
+ * view can skip an expensive rebuild for a change it does not care about —
+ * repainting a tint must not rebuild collision. `replaced` used to carry
+ * none, so every Inspector edit (which replaces the whole object, to make one
+ * clean undo step) looked like "everything changed" and rebuilt the mesh —
+ * re-instantiating an imported model to alter its tint.
  */
 export type DocumentChange =
   | { type: 'added'; id: string; kind: EditorObjectKind }
   | { type: 'removed'; id: string; kind: EditorObjectKind }
   | { type: 'updated'; id: string; kind: EditorObjectKind; keys: readonly string[] }
-  | { type: 'replaced'; id: string; kind: EditorObjectKind }
+  | { type: 'replaced'; id: string; kind: EditorObjectKind; keys: readonly string[] }
   /** Model/texture metadata changed (imported, renamed, removed). */
   | { type: 'assetsChanged' }
   | { type: 'documentReplaced' }
@@ -113,6 +119,14 @@ export class EditorDocument {
   private map: MapFileV2
   /** id → kind. The one place identity is resolved. */
   private index = new Map<string, EditorObjectKind>()
+  /**
+   * id → the live object. `get` used to scan the wire array, and `get` is the
+   * hottest read in the editor — hover picking, every view update, the
+   * Outliner and the Inspector all go through it — so on a large map every
+   * mouse move walked hundreds of entries. Writes keep this in step; `update`
+   * mutates in place, so only add/replace/remove/reindex touch it.
+   */
+  private byId = new Map<string, EditorObject>()
   private spawn: SpawnObjectV2 | null = null
   private readonly listeners = new Set<DocumentListener>()
   /** Non-null while a transaction is open; changes batch into it. */
@@ -148,8 +162,7 @@ export class EditorDocument {
   get(id: string, kind?: EditorObjectKind): EditorObject | null {
     const actual = this.index.get(id)
     if (actual === undefined || (kind !== undefined && actual !== kind)) return null
-    if (actual === 'spawn') return this.spawn
-    return this.arrayFor(actual).find((o) => o.id === id) ?? null
+    return this.byId.get(id) ?? null
   }
 
   /** Every object, in Outliner order (terrain, static, node, prop, light, zone, spawn). */
@@ -195,12 +208,14 @@ export class EditorDocument {
   add<K extends EditorObjectKind>(kind: K, object: EditorObjectByKind[K]): void {
     if (this.index.has(object.id))
       throw new Error(`EditorDocument.add: id "${object.id}" already exists`)
+    const copy = clone(object) as EditorObject
     if (kind === 'spawn') {
-      this.spawn = clone(object as SpawnObjectV2)
+      this.spawn = copy as SpawnObjectV2
     } else {
-      ;(this.arrayFor(kind) as EditorObject[]).push(clone(object))
+      ;(this.arrayFor(kind) as EditorObject[]).push(copy)
     }
     this.index.set(object.id, kind)
+    this.byId.set(object.id, copy)
     this.emit({ type: 'added', id: object.id, kind })
   }
 
@@ -228,13 +243,21 @@ export class EditorDocument {
     if (kind === undefined) throw new Error(`EditorDocument.replace: no object "${id}"`)
     if (value.id !== id)
       throw new Error(`EditorDocument.replace: value id "${value.id}" is not "${id}"`)
+    const copy = clone(value) as EditorObject
+    const before = this.byId.get(id)
     if (kind === 'spawn') {
-      this.spawn = clone(value as SpawnObjectV2)
+      this.spawn = copy as SpawnObjectV2
     } else {
       const arr = this.arrayFor(kind) as EditorObject[]
-      arr[arr.findIndex((o) => o.id === id)] = clone(value)
+      arr[arr.findIndex((o) => o.id === id)] = copy
     }
-    this.emit({ type: 'replaced', id, kind })
+    this.byId.set(id, copy)
+    this.emit({
+      type: 'replaced',
+      id,
+      kind,
+      keys: before ? changedKeys(before, copy) : Object.keys(copy),
+    })
   }
 
   remove(id: string): void {
@@ -250,6 +273,7 @@ export class EditorDocument {
       )
     }
     this.index.delete(id)
+    this.byId.delete(id)
     this.emit({ type: 'removed', id, kind })
   }
 
@@ -388,9 +412,9 @@ export class EditorDocument {
   // ── Internals ───────────────────────────────────────────────────────
 
   private arrayFor(kind: EditorObjectKind): EditorObject[] {
-    const entry = ARRAY_KINDS.find(([k]) => k === kind)
-    if (!entry) return []
-    return this.map[entry[1]] as unknown as EditorObject[]
+    const key = ARRAY_OF_KIND.get(kind)
+    if (!key) return []
+    return this.map[key] as unknown as EditorObject[]
   }
 
   private mutableFor(id: string, kind: EditorObjectKind): EditorObject {
@@ -398,19 +422,26 @@ export class EditorDocument {
       if (!this.spawn) throw new Error('EditorDocument: spawn is not set')
       return this.spawn
     }
-    const found = this.arrayFor(kind).find((o) => o.id === id)
+    const found = this.byId.get(id)
     if (!found) throw new Error(`EditorDocument: "${id}" indexed as ${kind} but not in that array`)
     return found
   }
 
   private reindex(): void {
     this.index = new Map()
+    this.byId = new Map()
     for (const [kind] of ARRAY_KINDS)
-      for (const o of this.arrayFor(kind)) this.index.set(o.id, kind)
+      for (const o of this.arrayFor(kind)) {
+        this.index.set(o.id, kind)
+        this.byId.set(o.id, o)
+      }
     this.spawn = this.map.spawn
       ? { id: SPAWN_OBJECT_ID, pos: [...this.map.spawn], yaw: this.map.spawnYaw ?? 0 }
       : null
-    if (this.spawn) this.index.set(SPAWN_OBJECT_ID, 'spawn')
+    if (this.spawn) {
+      this.index.set(SPAWN_OBJECT_ID, 'spawn')
+      this.byId.set(SPAWN_OBJECT_ID, this.spawn)
+    }
   }
 
   private emit(change: DocumentChange): void {

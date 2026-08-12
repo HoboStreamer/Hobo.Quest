@@ -1,5 +1,6 @@
 import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh.js'
 import type { Mesh } from '@babylonjs/core/Meshes/mesh.js'
+import type { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { Texture } from '@babylonjs/core/Materials/Textures/texture.js'
 import type { StaticObjectV2, SurfaceMaterialData } from '@hobo/content'
@@ -42,6 +43,15 @@ export declare function createModelPaintOverlay(
   surfaceId: string,
   data: SurfaceMaterialData,
   maskFor: MaskResolver,
+  /**
+   * How to project a mesh that shipped with no usable UVs. Must be the space
+   * the BRUSH used, or the paint would be shown somewhere other than where it
+   * was applied.
+   */
+  fallback?: {
+    root: TransformNode
+    extent: readonly [number, number, number]
+  },
 ): {
   mesh: Mesh
   dispose: () => void

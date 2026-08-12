@@ -40,6 +40,7 @@ import { applyStaticStyle, instantiateMapLight } from '../../../render/mapStyle.
 import { LayeredSurfaceMaterial } from '../../../render/layeredSurface.js'
 import type { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture.js'
 import { WHOLE_SURFACE } from '../../materials/paintableSurface.js'
+import { staticExtent } from '../../../render/surfaceProjection.js'
 import { applyPaintedStatic, createModelPaintOverlay } from '../../../render/paintedStatic.js'
 import type { ModelCache } from '../../../render/modelCache.js'
 import type { EditorObject, EditorObjectKind } from '../../document/editorDocument.js'
@@ -148,6 +149,9 @@ class StaticView implements EditorView {
         surfaceId,
         surfaces[surfaceId]!,
         (owner, surface, data) => this.ctx.maskFor(owner, surface, data),
+        // Same projection the brush used, so a UV-less model shows its paint
+        // where it was applied.
+        { root: this.root, extent: staticExtent(this.body.shape, this.body.scale ?? [1, 1, 1]) },
       )
       if (overlay) this.overlays.set(surfaceId, overlay)
     }
