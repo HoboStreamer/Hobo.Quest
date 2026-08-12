@@ -26,6 +26,7 @@
     "@eslint/js": "^9.23.0",
     "@types/node": "^22.13.0",
     "eslint": "^9.23.0",
+    "jsdom": "^30.0.1",
     "playwright": "^1.62.1",
     "prettier": "^3.5.3",
     "tsx": "^4.23.11",
