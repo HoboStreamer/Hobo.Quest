@@ -244,6 +244,103 @@ describe('validateMapFile', () => {
   })
 })
 
+describe('paint layer tint survives the canonical wire', () => {
+  // Regression: PaintLayerSchemaV2 once omitted `color`, so Zod stripped the
+  // tint on parse. Painting "red brick tinted blue" saved as untinted brick,
+  // and a plain-colour layer lost the only property that made it visible.
+  const mapWithLayers = (layers: unknown[]): unknown => ({
+    ...emptyMapV2(),
+    terrains: [
+      {
+        id: 't1',
+        pos: [0, 0, 0],
+        halfExtent: 8,
+        sub: SUB,
+        heights: blankHeights(SUB),
+        surface: { base: { tex: 'red_brick' }, paint: { mask: 'data:x', layers } },
+      },
+    ],
+  })
+
+  const parsedLayers = (layers: unknown[]): { tex: string; color?: string }[] => {
+    const r = parseMapFile(mapWithLayers(layers))
+    expect(r.ok, r.ok ? '' : r.issues.join(', ')).toBe(true)
+    if (!r.ok) throw new Error('unreachable')
+    return r.map.terrains[0]!.surface!.paint!.layers
+  }
+
+  it('keeps the tint on a textured layer', () => {
+    const [l] = parsedLayers([{ id: 'l1', tex: 'red_brick', color: '#3366cc', channel: 'r' }])
+    expect(l!.tex).toBe('red_brick')
+    expect(l!.color).toBe('#3366cc')
+  })
+
+  it('keeps the colour of a plain-colour (tex: none) layer', () => {
+    const [l] = parsedLayers([{ id: 'l1', tex: 'none', color: '#00ff00', channel: 'g' }])
+    expect(l!.color).toBe('#00ff00')
+  })
+
+  it('survives canonicalisation and a second parse', () => {
+    const first = parseMapFile(
+      mapWithLayers([
+        { id: 'l1', tex: 'red_brick', color: '#3366cc', channel: 'r' },
+        { id: 'l2', tex: 'none', color: '#00ff00', channel: 'g' },
+      ]),
+    )
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const wire = canonicalizeMapFile(first.map)
+    expect(wire).toContain('#3366cc')
+    const second = parseMapFile(JSON.parse(wire))
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.map.terrains[0]!.surface!.paint!.layers.map((l) => l.color)).toEqual([
+      '#3366cc',
+      '#00ff00',
+    ])
+  })
+
+  it('leaves an untinted layer untinted rather than inventing white', () => {
+    const [l] = parsedLayers([{ id: 'l1', tex: 'red_brick', channel: 'r' }])
+    expect(l!.color).toBeUndefined()
+  })
+
+  it('rejects a malformed colour instead of dropping it', () => {
+    for (const bad of ['#FFF', '#GGGGGG', 'red', '#3366CC', '#3366cc7f', '']) {
+      const r = parseMapFile(
+        mapWithLayers([{ id: 'l1', tex: 'red_brick', color: bad, channel: 'r' }]),
+      )
+      expect(r.ok, `expected "${bad}" to be rejected`).toBe(false)
+    }
+  })
+
+  it('carries the tint through a v1 migration parse too', () => {
+    const v1 = v1Map({
+      terrains: [
+        {
+          id: 'p1',
+          origin: [0, 0, 0],
+          halfExtent: 8,
+          sub: SUB,
+          heights: blankHeights(SUB),
+          surface: {
+            base: { tex: 'red_brick' },
+            paint: {
+              mask: 'data:x',
+              layers: [{ id: 'l1', tex: 'none', color: '#123456', channel: 'a' }],
+            },
+          },
+        },
+      ],
+    } as Partial<MapFile>)
+    const r = parseMapFile(v1)
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    const t = r.map.terrains.find((x) => x.id === 'p1')!
+    expect(t.surface!.paint!.layers[0]!.color).toBe('#123456')
+  })
+})
+
 describe('canonicalisation', () => {
   it('is key-order independent, so the revision hash is stable', () => {
     const a = { ...emptyMapV2(), spawn: [1, 2, 3] as [number, number, number] }

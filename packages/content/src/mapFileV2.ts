@@ -36,18 +36,30 @@ const scaleVec3 = vec3.refine(
   'scale components must be finite and non-zero',
 )
 
+/**
+ * Canonical authored colour: lower-case six-digit hex. One definition, used by
+ * every schema that carries a tint, so a colour cannot be valid in one layer of
+ * the stack and silently dropped by another.
+ */
+export const HexColorSchema = z.string().regex(/^#[0-9a-f]{6}$/, 'must be #rrggbb lower-case hex')
+
 export const SurfaceStyleSchemaV2 = z.object({
   tex: z.string().max(120).optional(),
-  color: z
-    .string()
-    .regex(/^#[0-9a-f]{6}$/)
-    .optional(),
+  color: HexColorSchema.optional(),
   uv: FaceStyleSchema.optional(),
 })
 
 export const PaintLayerSchemaV2 = z.object({
   id: z.string().min(1).max(64),
+  /** Texture ref, or the sentinel 'none' for a plain-colour layer. */
   tex: z.string().min(1).max(120),
+  /**
+   * Tint multiplied into the layer; with `tex: 'none'` it IS the paint.
+   * Absent means untinted (white) — see `surface.ts`. This MUST be validated
+   * here: the v2 schema is the canonical wire, and a property the schema does
+   * not know about is stripped on parse, silently discarding authored tint.
+   */
+  color: HexColorSchema.optional(),
   scale: z.number().positive().max(4096).optional(),
   channel: z.enum(PAINT_CHANNELS),
   hidden: z.boolean().optional(),
