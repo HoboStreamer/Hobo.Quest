@@ -94,7 +94,7 @@ async function main(): Promise<void> {
         world.reconcileMapNodes()
         world.reconcileMapProps()
         game.broadcastMapReload()
-        editors.broadcastSaved()
+        editors.broadcastSaved(revision)
         log.info('map applied live', { terrains: next.terrains.length, revision })
       } catch (err) {
         log.warn('live map apply failed', { error: String(err) })

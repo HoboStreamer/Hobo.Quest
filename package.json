@@ -16,6 +16,7 @@
     "test": "vitest run",
     "audit:editor": "vitest run --config vitest.audit.config.ts",
     "test:editor": "node --import tsx apps/client/e2e/editorCheck.ts",
+    "test:collab": "node --import tsx apps/client/e2e/editorCollabCheck.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --build tsconfig.solution.json",
     "lint": "eslint .",

@@ -31,7 +31,8 @@ export interface EditorConnectionView {
   remoteSelectionColors: () => ReadonlyMap<string, string>
   lockOwners: () => ReadonlyMap<string, string>
   lockOwner: (id: string) => string | null
-  canEdit: (id: string) => boolean
+  owns: (id: string) => boolean
+  connected: () => boolean
 }
 
 export interface EditorUiOptions {
@@ -69,6 +70,7 @@ export interface EditorUi {
   openSettings: () => void
   duplicate: () => void
   remove: () => void
+  setProperty: (ids: readonly string[], key: string, value: unknown) => void
 }
 
 export function createEditorUi(opts: EditorUiOptions): EditorUi {
@@ -333,6 +335,7 @@ export function createEditorUi(opts: EditorUiOptions): EditorUi {
     openSettings,
     duplicate: () => opts.duplicateSelection(),
     remove: () => opts.deleteSelection(),
+    setProperty: (ids, key, value) => opts.setProperty(ids, key, value),
   }
 }
 

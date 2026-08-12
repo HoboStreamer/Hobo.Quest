@@ -72,14 +72,26 @@ export class LockController {
     return out
   }
 
-  /** May this client mutate `id` right now? */
-  canEdit(id: string): boolean {
-    return this.ownerOf(id) === null
+  /**
+   * Do WE hold this lock?
+   *
+   * Deliberately not the same question as "is it free". Treating "nobody
+   * else has it" as permission to mutate is how a server-authoritative lock
+   * system ends up never being acquired at all: both editors decide they may
+   * proceed and the arbitration never runs.
+   */
+  owns(id: string): boolean {
+    return this.state === 'owned' && this.held.includes(id)
   }
 
   /** All of them, or none: a partial group transform is not offered. */
-  canEditAll(ids: readonly string[]): boolean {
-    return ids.every((id) => this.canEdit(id))
+  ownsAll(ids: readonly string[]): boolean {
+    return ids.length === 0 || (this.state === 'owned' && ids.every((id) => this.held.includes(id)))
+  }
+
+  /** Free as far as the server's last broadcast says. NOT authorization. */
+  isFree(id: string): boolean {
+    return this.ownerOf(id) === null
   }
 
   /**
@@ -89,15 +101,14 @@ export class LockController {
    */
   acquire(ids: readonly string[], then?: () => void): boolean {
     if (ids.length === 0) return true
-    const blocked = ids.find((id) => !this.canEdit(id))
+    if (this.ownsAll(ids)) return true
+    const blocked = ids.find((id) => !this.isFree(id))
     if (blocked !== undefined) {
       this.state = 'denied'
       this.events.onDenied?.(this.ownerOf(blocked)!.name)
       this.events.onChange?.()
       return false
     }
-    if (this.state === 'owned' && ids.every((id) => this.held.includes(id))) return true
-
     this.state = 'pending'
     this.pending = { ids: [...ids], ...(then ? { then } : {}) }
     this.transport.request(ids)
@@ -142,8 +153,21 @@ export class LockController {
     this.events.onChange?.()
   }
 
-  /** Deselect, cancel, switch target: give them back. */
-  release(): void {
+  /**
+   * Give back just these. Used when a selection shrinks: keeping a lock on
+   * something you deselected blocks a collaborator for no reason.
+   */
+  release(ids: readonly string[]): void {
+    const mine = ids.filter((id) => this.held.includes(id))
+    if (mine.length === 0) return
+    this.transport.release(mine)
+    this.held = this.held.filter((id) => !mine.includes(id))
+    if (this.held.length === 0) this.state = 'unlocked'
+    this.events.onChange?.()
+  }
+
+  /** Deselect everything, cancel, reload: give them all back. */
+  releaseAll(): void {
     if (this.held.length > 0) this.transport.release(this.held)
     this.held = []
     this.pending = null

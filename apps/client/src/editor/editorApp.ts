@@ -70,6 +70,23 @@ import { ACTIONS, loadBindings, type Binding } from './bindings.js'
 
 const content = createContent()
 
+/**
+ * A readable name for other editors, remembered across sessions. Anonymous
+ * "editor / editor / editor" in a lock badge tells nobody which tab to go
+ * and ask.
+ */
+function defaultEditorName(): string {
+  const stored = localStorage.getItem('hobo.editor.name')
+  if (stored) return stored
+  const minted = `editor-${Math.random().toString(36).slice(2, 6)}`
+  try {
+    localStorage.setItem('hobo.editor.name', minted)
+  } catch {
+    // Private mode: a per-session name is still better than none.
+  }
+  return minted
+}
+
 export async function bootEditor(): Promise<void> {
   const canvas = document.getElementById('game') as HTMLCanvasElement
   const mount = document.getElementById('shell') as HTMLElement
@@ -191,16 +208,16 @@ export async function bootEditor(): Promise<void> {
     scene,
     interaction,
     onDragStart: (mode) => {
-      selection.freeze()
-      const started = xform.begin(selection.ids(), mode, {
-        label: `${mode} ${selection.size > 1 ? `${selection.size} objects` : ''}`.trim(),
+      const ids = selection.ids().filter((id) => transformOf(doc, id) !== null)
+      // A transform cannot begin unless the server has granted every member.
+      // If the request is still in flight, the drag simply does not start —
+      // mutating optimistically is what a lock is meant to prevent.
+      let allowed = false
+      withLock(ids, () => {
+        allowed = true
       })
-      if (!started) {
-        selection.unfreeze()
-        ui.setMessage('nothing here can be transformed')
-        return false
-      }
-      return true
+      if (!allowed) ui.setMessage('🔒 waiting for the edit lock — try again in a moment')
+      return allowed && startTransform(mode)
     },
     onDrag: (pivot) => {
       if (xform.active) xform.update(pivot)
@@ -220,6 +237,19 @@ export async function bootEditor(): Promise<void> {
    * first stroke on a selected object silently did nothing.
    */
   const gizmoAllowed = (): boolean => tools.active === null || tools.active === 'select'
+
+  const startTransform = (mode: GizmoMode): boolean => {
+    selection.freeze()
+    const started = xform.begin(selection.ids(), mode, {
+      label: `${mode} ${selection.size > 1 ? `${selection.size} objects` : ''}`.trim(),
+    })
+    if (!started) {
+      selection.unfreeze()
+      ui.setMessage('nothing here can be transformed')
+      return false
+    }
+    return true
+  }
 
   const refreshPivot = (): void => {
     const ids = selection.ids()
@@ -278,12 +308,77 @@ export async function bootEditor(): Promise<void> {
     else selection.replace(id)
   }
 
+  /**
+   * The gate every mutation goes through.
+   *
+   * "Nobody else holds it" is NOT permission — that is exactly how a
+   * server-authoritative lock system ends up never being acquired, with both
+   * editors deciding they may proceed and the arbitration never running. A
+   * mutation happens only once the server has actually granted the lock.
+   *
+   * Returns true when the caller may proceed NOW. Otherwise it has either
+   * requested the lock (and `then` will run on the grant) or reported why
+   * not.
+   */
+  const withLock = (ids: readonly string[], then: () => void): boolean => {
+    const wanted = ids.filter((id) => doc.has(id))
+    if (wanted.length === 0) return false
+    // No session means nobody to arbitrate with. Refusing to edit offline
+    // would make the editor unusable without a collaboration token, and
+    // there is no one whose work could be trampled.
+    if (!connection.connected() || connection.ownsAll(wanted)) {
+      then()
+      return true
+    }
+    const blocked = wanted.find((id) => connection.isLockedByOther(id))
+    if (blocked !== undefined) {
+      ui.setMessage(
+        `🔒 ${blocked} is being edited by ${connection.lockOwner(blocked) ?? 'someone'}`,
+      )
+      return false
+    }
+    // All-or-nothing: a group edit that could only move half its members is
+    // worse than one that does not start.
+    connection.acquire(wanted, then)
+    return false
+  }
+
+  /**
+   * Locks follow the selection, and are given back when it shrinks.
+   *
+   * The COMPLETE selected edit set is requested atomically rather than
+   * "whatever happens to be free": a group whose members are half locked
+   * cannot be transformed anyway, and granting the free half would leave a
+   * collaborator blocked on objects this editor can do nothing with.
+   */
+  let lockedForSelection: string[] = []
+  const syncSelectionLocks = (): void => {
+    const wanted = selection.ids().filter((id) => doc.has(id))
+    const dropped = lockedForSelection.filter((id) => !wanted.includes(id))
+    if (dropped.length > 0) connection.release(dropped)
+    lockedForSelection = wanted
+    // Selecting is intent to edit; hovering is not, and never acquires.
+    if (wanted.length > 0) connection.acquire(wanted)
+  }
+
   selection.onChange(() => {
     refreshPivot()
     refreshVisuals()
     ui.refreshSelection()
     connection.sendSelection(selection.ids())
+    syncSelectionLocks()
   })
+
+  /** Remote selections grouped by peer, for the highlight layer. */
+  const remoteSelectionGroups = (): Map<number, { color: Color3; ids: string[] }> => {
+    const out = new Map<number, { color: Color3; ids: string[] }>()
+    for (const peer of connection.peers())
+      out.set(peer.peerId, {
+        color: Color3.FromHexString(peer.color),
+        ids: peer.selection,
+      })
+    return out
+  }
 
   let hoverId: string | null = null
   const refreshVisuals = (): void => {
@@ -291,7 +386,7 @@ export async function bootEditor(): Promise<void> {
       ids: selection.ids(),
       primary: selection.primaryId,
       hover: hoverId,
-      remote: connection.remoteSelections(),
+      remote: remoteSelectionGroups(),
       locks: connection.lockColors(),
       terrainHoverWire:
         tools.is('terrain') && hoverId && doc.typeOf(hoverId) === 'terrain' ? hoverId : null,
@@ -326,10 +421,13 @@ export async function bootEditor(): Promise<void> {
     if (!target) return
     if (strokeTargetId && target.id !== strokeTargetId) return // one target per stroke
     if (!strokeTargetId) {
-      if (!connection.canEdit(target.id)) {
-        ui.setMessage(`🔒 terrain locked by ${connection.lockOwner(target.id)}`)
-        return
-      }
+      // The press is edit intent: acquire BEFORE the first height changes,
+      // and drop the dab if the lock is not ours yet.
+      let allowed = false
+      withLock([target.id], () => {
+        allowed = true
+      })
+      if (!allowed) return
       strokeTargetId = target.id
       strokeBefore = target.view.heights.slice()
       refreshVisuals()
@@ -343,6 +441,11 @@ export async function bootEditor(): Promise<void> {
     const target = terrainUnderCursor()
     if (!target) return
     if (strokeTargetId && target.id !== strokeTargetId) return
+    let allowed = false
+    withLock([target.id], () => {
+      allowed = true
+    })
+    if (!allowed) return
     const surface = ensurePaintLayer(target.id)
     if (!surface) return
     if (!strokeTargetId) {
@@ -546,14 +649,20 @@ export async function bootEditor(): Promise<void> {
     peersEl: document.getElementById('peers') as HTMLElement,
     camera,
     keyOf: () => (document.getElementById('key') as HTMLInputElement).value.trim(),
+    nameOf: defaultEditorName,
     onRemoteSaved: () => void saveController.pollRemote(),
+    onLockDenied: (owner) => ui.setMessage(`🔒 held by ${owner} — you have read-only access`),
     onChange: () => {
       refreshVisuals()
       ui.refreshAll()
     },
     onLockLost: () => {
+      // The lease went away mid-gesture: restore the exact starting state
+      // rather than leaving half-applied local edits the server disagrees
+      // with.
       if (xform.active) xform.cancel()
       selection.unfreeze()
+      lockedForSelection = []
       ui.setMessage('⚠ edit lock lost — reselect to reacquire')
     },
   })
@@ -585,12 +694,14 @@ export async function bootEditor(): Promise<void> {
       if (t) cameraController.frame(new Vector3(...t.position), 6)
     },
     deleteSelection: () => {
-      const ids = selection.ids().filter((id) => connection.canEdit(id))
-      const cmd = removeObjects(doc, ids)
-      if (!cmd) return
-      history.apply(cmd)
-      selection.clear()
-      ui.refreshAll()
+      const ids = selection.ids()
+      withLock(ids, () => {
+        const cmd = removeObjects(doc, ids)
+        if (!cmd) return
+        history.apply(cmd)
+        selection.clear()
+        ui.refreshAll()
+      })
     },
     duplicateSelection: () => {
       const made = selection
@@ -615,10 +726,10 @@ export async function bootEditor(): Promise<void> {
       ui.refreshAll()
     },
     setProperty: (ids, key, value) => {
-      const editable = ids.filter((id) => connection.canEdit(id))
-      if (editable.length === 0) return
-      history.apply({ label: `edit ${key}`, ...buildPropertyCommand(doc, editable, key, value) })
-      ui.refreshAll()
+      withLock(ids, () => {
+        history.apply({ label: `edit ${key}`, ...buildPropertyCommand(doc, [...ids], key, value) })
+        ui.refreshAll()
+      })
     },
   })
 
@@ -757,6 +868,17 @@ export async function bootEditor(): Promise<void> {
   new ResizeObserver(() => engine.resize()).observe(shell.viewport)
 
   ui.refreshAll()
+
+  // Seed the credential from the last session so collaboration connects on
+  // boot rather than only after someone retypes the token. Changing it
+  // reconnects deliberately — the socket must not stay authenticated as
+  // whoever was there before.
+  const keyInput = document.getElementById('key') as HTMLInputElement
+  keyInput.value = localStorage.getItem('hobo.editorkey') ?? ''
+  keyInput.addEventListener('change', () => {
+    localStorage.setItem('hobo.editorkey', keyInput.value.trim())
+    connection.connect()
+  })
   connection.connect()
   // Offer any unsaved work from a previous session. Never automatic: a
   // crash recovering itself into everyone else's world would be worse than
@@ -876,6 +998,15 @@ export async function bootEditor(): Promise<void> {
       return tools.active
     },
     groupMove: (dx: number, dy: number, dz: number) => {
+      // Goes through the SAME gate the gizmo does. A probe that could move
+      // an object the server has not granted would make the collaboration
+      // suite prove nothing.
+      const ids = selection.ids().filter((id) => transformOf(doc, id) !== null)
+      let allowed = false
+      withLock(ids, () => {
+        allowed = true
+      })
+      if (!allowed) return
       const started = xform.begin(selection.ids(), 'move', { label: 'group move' })
       if (!started) return
       const p = started.pivotStart
@@ -888,6 +1019,20 @@ export async function bootEditor(): Promise<void> {
       ui.refreshAll()
     },
     hasSky: () => scene.meshes.some((m) => m.name.includes('sky') || m.name.includes('cloud')),
+    /** Collaboration state, for the two-editor acceptance suite. */
+    collab: () => ({
+      connected: connection.connected(),
+      peerId: connection.myPeerId(),
+      peers: connection.peers().map((p) => ({ ...p, selection: [...p.selection] })),
+      peerCount: connection.peerCount(),
+      lockOwners: Object.fromEntries(connection.lockOwners()),
+      owns: selection.ids().filter((id) => connection.owns(id)),
+    }),
+    inspectorLockedBy: () =>
+      selection.primaryId ? connection.lockOwner(selection.primaryId) : null,
+    setProperty: (ids: string[], key: string, value: unknown) => ui.setProperty(ids, key, value),
+    deleteSelection: () => ui.remove(),
+    colorOf: (id: string) => (doc.get(id) as { color?: string } | null)?.color ?? null,
   }
 }
 

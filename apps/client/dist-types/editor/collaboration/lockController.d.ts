@@ -47,10 +47,19 @@ export declare class LockController {
   ownerOf(id: string): LockOwner | null
   /** Every object someone else is editing, for the Outliner and visuals. */
   remoteLocks(): Map<string, LockOwner>
-  /** May this client mutate `id` right now? */
-  canEdit(id: string): boolean
+  /**
+   * Do WE hold this lock?
+   *
+   * Deliberately not the same question as "is it free". Treating "nobody
+   * else has it" as permission to mutate is how a server-authoritative lock
+   * system ends up never being acquired at all: both editors decide they may
+   * proceed and the arbitration never runs.
+   */
+  owns(id: string): boolean
   /** All of them, or none: a partial group transform is not offered. */
-  canEditAll(ids: readonly string[]): boolean
+  ownsAll(ids: readonly string[]): boolean
+  /** Free as far as the server's last broadcast says. NOT authorization. */
+  isFree(id: string): boolean
   /**
    * Ask to edit `ids`. Returns true when the locks are already held, in
    * which case the caller may proceed immediately; otherwise `then` runs on
@@ -67,8 +76,13 @@ export declare class LockController {
    * us (expiry, a reconnect race), so whatever is mid-gesture must roll back.
    */
   setOwners(owners: ReadonlyMap<string, LockOwner>): void
-  /** Deselect, cancel, switch target: give them back. */
-  release(): void
+  /**
+   * Give back just these. Used when a selection shrinks: keeping a lock on
+   * something you deselected blocks a collaborator for no reason.
+   */
+  release(ids: readonly string[]): void
+  /** Deselect everything, cancel, reload: give them all back. */
+  releaseAll(): void
   /** Connection dropped: the server will expire the leases; forget locally. */
   disconnected(): void
 }

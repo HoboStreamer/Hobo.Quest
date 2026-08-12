@@ -23,7 +23,8 @@ export interface EditorConnectionView {
   remoteSelectionColors: () => ReadonlyMap<string, string>
   lockOwners: () => ReadonlyMap<string, string>
   lockOwner: (id: string) => string | null
-  canEdit: (id: string) => boolean
+  owns: (id: string) => boolean
+  connected: () => boolean
 }
 export interface EditorUiOptions {
   shell: ShellElements
@@ -61,6 +62,7 @@ export interface EditorUi {
   openSettings: () => void
   duplicate: () => void
   remove: () => void
+  setProperty: (ids: readonly string[], key: string, value: unknown) => void
 }
 export declare function createEditorUi(opts: EditorUiOptions): EditorUi
 //# sourceMappingURL=editorUi.d.ts.map

@@ -72,8 +72,10 @@ describe('LockController: denial', () => {
     lc.setOwners(owners(['b', them]))
     expect(lc.acquire(['a', 'b', 'c'])).toBe(false)
     expect(request).not.toHaveBeenCalled()
-    expect(lc.canEditAll(['a', 'c'])).toBe(true)
-    expect(lc.canEditAll(['a', 'b'])).toBe(false)
+    // Owning is not the same question as being free: we hold nothing yet.
+    expect(lc.ownsAll(['a', 'c'])).toBe(false)
+    expect(lc.isFree('a')).toBe(true)
+    expect(lc.isFree('b')).toBe(false)
   })
 
   it('handles a server denial after the request went out', () => {
@@ -89,14 +91,14 @@ describe('LockController: denial', () => {
     // Read-only inspection is always allowed; only mutation is refused.
     const { lc } = setup()
     lc.setOwners(owners(['a', them]))
-    expect(lc.canEdit('a')).toBe(false)
+    expect(lc.isFree('a')).toBe(false)
     expect(lc.ownerOf('a')?.name).toBe('Ada')
   })
 
   it('does not treat our OWN lock as someone else holding it', () => {
     const { lc } = setup()
     lc.setOwners(owners(['a', me]))
-    expect(lc.canEdit('a')).toBe(true)
+    expect(lc.isFree('a')).toBe(true)
     expect(lc.ownerOf('a')).toBeNull()
     expect(lc.remoteLocks().size).toBe(0)
   })
@@ -138,14 +140,46 @@ describe('LockController: releasing', () => {
     const { lc, release } = setup()
     lc.acquire(['a', 'b'])
     lc.granted(['a', 'b'])
-    lc.release()
+    lc.releaseAll()
     expect(release).toHaveBeenCalledWith(['a', 'b'])
     expect(lc.current).toBe('unlocked')
   })
 
+  it('releases only what a shrinking selection dropped', () => {
+    // Keeping a lock on something you deselected blocks a collaborator for
+    // no reason at all.
+    const { lc, release } = setup()
+    lc.acquire(['a', 'b'])
+    lc.granted(['a', 'b'])
+    lc.release(['b'])
+    expect(release).toHaveBeenCalledWith(['b'])
+    expect(lc.owns('a')).toBe(true)
+    expect(lc.owns('b')).toBe(false)
+    expect(lc.current).toBe('owned')
+  })
+
+  it('ignores a release of something we never held', () => {
+    const { lc, release } = setup()
+    lc.acquire(['a'])
+    lc.granted(['a'])
+    release.mockClear()
+    lc.release(['someone-elses'])
+    expect(release).not.toHaveBeenCalled()
+    expect(lc.owns('a')).toBe(true)
+  })
+
+  it('owns() is false until the server actually grants', () => {
+    const { lc } = setup()
+    lc.acquire(['a'])
+    expect(lc.isFree('a')).toBe(true)
+    expect(lc.owns('a')).toBe(false)
+    lc.granted(['a'])
+    expect(lc.owns('a')).toBe(true)
+  })
+
   it('releasing nothing sends nothing', () => {
     const { lc, release } = setup()
-    lc.release()
+    lc.releaseAll()
     expect(release).not.toHaveBeenCalled()
   })
 
@@ -166,7 +200,7 @@ describe('LockController: releasing', () => {
     lc.setOwners(owners(['a', them]))
     expect(lc.acquire(['a'])).toBe(false)
     lc.setOwners(new Map())
-    expect(lc.canEdit('a')).toBe(true)
+    expect(lc.isFree('a')).toBe(true)
     expect(lc.acquire(['a'])).toBe(false) // now pending, not denied
     expect(lc.current).toBe('pending')
   })
