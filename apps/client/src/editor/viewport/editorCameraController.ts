@@ -201,16 +201,33 @@ export class EditorCameraController {
     camera.position.y += up * speed
   }
 
-  /** Project a world point to screen pixels (probe + Outliner helpers). */
+  /**
+   * Project a world point to PAGE pixels.
+   *
+   * The canvas fills the viewport grid cell, not the window, so its own
+   * coordinate space starts at the cell's top-left. Anything that wants to
+   * put a cursor or a DOM element at a world position needs page
+   * coordinates, so the offset is added here rather than at each call site
+   * (which is how it went wrong: a projection that is right in canvas space
+   * and used as a page position is silently off by the width of a panel).
+   */
   worldToScreen(p: Vector3): [number, number] {
-    const { scene, engine } = { scene: this.opts.scene, engine: this.opts.scene.getEngine() }
+    const { scene } = this.opts
+    const engine = scene.getEngine()
     const r = Vector3.Project(
       p,
       Matrix.Identity(),
       scene.getTransformMatrix(),
       this.opts.camera.viewport.toGlobal(engine.getRenderWidth(), engine.getRenderHeight()),
     )
-    return [Math.round(r.x), Math.round(r.y)]
+    const rect = this.opts.canvas.getBoundingClientRect()
+    return [Math.round(r.x + rect.left), Math.round(r.y + rect.top)]
+  }
+
+  /** Page pixels → canvas pixels, the inverse of `worldToScreen`. */
+  toCanvasSpace(pageX: number, pageY: number): [number, number] {
+    const rect = this.opts.canvas.getBoundingClientRect()
+    return [pageX - rect.left, pageY - rect.top]
   }
 }
 

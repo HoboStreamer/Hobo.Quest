@@ -423,6 +423,10 @@ export class Inspector {
     }
     el.dataset['field'] = field.key
     if (component !== undefined) el.dataset['component'] = String(component)
+    // Stable ids for the transform vectors: they are the fields people (and
+    // the harness) reach for by name.
+    const prefix = { pos: 'p', rot: 'r', scale: 's' }[field.key]
+    if (prefix && component !== undefined) el.id = `${prefix}-${'xyz'[component]}`
     if (disabled) el.setAttribute('disabled', '')
     return el
   }

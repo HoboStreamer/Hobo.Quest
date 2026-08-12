@@ -488,3 +488,464 @@ body.scrubbing * {
   padding: 3px;
   font-size: 11px;
 }
+
+/* ── Workspace grid ───────────────────────────────────────────────────
+ * A grid, not overlays. A collapsed column is genuinely zero-width, so
+ * collapsing can never produce body overflow or hide the control that
+ * would expand it again — that control lives in the panel head, which is
+ * outside the collapsing area.
+ */
+:root {
+  --outliner-w: 260px;
+  --inspector-w: 300px;
+  --dock-h: 200px;
+  --bg: #14171b;
+  --panel-bg: #1b1f25;
+  --line: #2b3138;
+  --ink: #d5dbe2;
+  --dim: #78828e;
+  --accent: #e8b54a;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    12px/1.4 system-ui,
+    sans-serif;
+}
+
+#game {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  outline: none;
+  touch-action: none;
+}
+
+.workspace {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: var(--outliner-w) 4px 1fr 4px var(--inspector-w);
+  grid-template-rows: 36px 1fr 4px var(--dock-h) 22px;
+  grid-template-areas:
+    'toolbar toolbar toolbar toolbar toolbar'
+    'outliner rz1 viewport rz2 inspector'
+    'dockrz dockrz dockrz dockrz dockrz'
+    'dock dock dock dock dock'
+    'status status status status status';
+  pointer-events: none;
+}
+.workspace > * {
+  pointer-events: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.toolbar {
+  grid-area: toolbar;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--line);
+}
+.toolbar-right {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.tools,
+.gizmo-modes {
+  display: flex;
+  gap: 2px;
+}
+.tool,
+.gm {
+  background: #232830;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.tool.active,
+.gm.active {
+  background: var(--accent);
+  color: #1a1a1a;
+  border-color: var(--accent);
+}
+
+.panel {
+  background: var(--panel-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.outliner-panel {
+  grid-area: outliner;
+}
+.inspector-panel {
+  grid-area: inspector;
+}
+.dock-panel {
+  grid-area: dock;
+}
+/* Collapsed panels leave the layout entirely: no sliver, no scrollbar. */
+.panel.collapsed {
+  display: none;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--dim);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+.panel-collapse {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+}
+.panel-filter {
+  margin: 4px;
+  background: #12151a;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 3px;
+  padding: 3px 6px;
+}
+.panel-body {
+  flex: 1;
+  overflow: auto;
+}
+
+.viewport {
+  grid-area: viewport;
+  position: relative;
+  /* The grid cell is a layout placeholder: the canvas sits behind the whole
+   * window, so this must not swallow the pointer before it gets there. */
+  pointer-events: none;
+}
+/* …but the canvas itself, and anything floating over it, still takes input. */
+#game,
+.viewport .strip {
+  pointer-events: auto;
+}
+.resizer {
+  background: transparent;
+  cursor: col-resize;
+}
+.resizer:hover,
+.resizer:focus {
+  background: var(--accent);
+  outline: none;
+}
+.workspace > .resizer:nth-of-type(1) {
+  grid-area: rz1;
+}
+.workspace > .resizer:nth-of-type(2) {
+  grid-area: rz2;
+}
+.resizer-y {
+  grid-area: dockrz;
+  cursor: row-resize;
+}
+
+/* Tool strips float over the viewport's bottom edge: they belong to the
+ * active tool, not to a dock tab, and must not push the viewport around. */
+.strip {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: none;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 8px;
+  background: rgba(20, 23, 27, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  pointer-events: auto;
+}
+.strip.on {
+  display: flex;
+}
+.ctl {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--dim);
+}
+
+.outliner-group {
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 6px 6px 2px;
+}
+.outliner-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+.outliner-row:hover {
+  background: #232830;
+}
+.outliner-row.selected {
+  background: #2c3038;
+}
+.outliner-row.primary {
+  border-left-color: #ff9d2e;
+}
+.outliner-row.remote {
+  border-left-color: var(--remote);
+}
+.outliner-row.hidden-object .outliner-label {
+  opacity: 0.4;
+}
+.outliner-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.outliner-eye {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+}
+.outliner-eye::before {
+  content: '👁';
+}
+.outliner-empty,
+.inspector-empty,
+.asset-empty,
+.history-empty {
+  padding: 10px;
+  color: var(--dim);
+}
+
+.inspector-title {
+  padding: 6px;
+  color: var(--accent);
+}
+.inspector-lock {
+  padding: 4px 6px;
+  background: #3a2f1c;
+  color: #ffd28f;
+}
+.inspector-section {
+  padding: 6px 6px 2px;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.inspector-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 6px;
+}
+.inspector-label {
+  width: 92px;
+  color: var(--dim);
+}
+.inspector-inputs {
+  display: flex;
+  gap: 3px;
+  flex: 1;
+}
+.inspector-inputs input,
+.inspector-inputs select {
+  min-width: 0;
+  flex: 1;
+  background: #12151a;
+  border: 1px solid var(--line);
+  color: var(--ink);
+  border-radius: 3px;
+  padding: 2px 4px;
+}
+input.scrub {
+  cursor: ew-resize;
+}
+input:disabled,
+select:disabled {
+  opacity: 0.5;
+}
+
+.dock-tabs {
+  display: flex;
+  gap: 2px;
+}
+.dock-tab {
+  background: none;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 2px 8px;
+}
+.dock-tab.active {
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent);
+}
+.dock-body {
+  display: none;
+  padding: 4px;
+}
+.dock-body.on {
+  display: block;
+}
+.asset-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.asset-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 4px;
+  cursor: pointer;
+}
+.asset-item:hover {
+  background: #232830;
+}
+.asset-thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 3px;
+  background: #12151a;
+}
+.asset-meta {
+  color: var(--dim);
+  margin-left: auto;
+}
+.asset-actions {
+  display: flex;
+  gap: 3px;
+}
+.history-row {
+  padding: 1px 6px;
+  cursor: pointer;
+}
+.history-row.undone {
+  opacity: 0.45;
+}
+.history-row.saved-point {
+  border-left: 2px solid var(--accent);
+}
+.panel-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+}
+.panel-label {
+  width: 120px;
+  color: var(--dim);
+}
+.panel-number {
+  width: 60px;
+}
+
+.statusbar {
+  grid-area: status;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--panel-bg);
+  border-top: 1px solid var(--line);
+  color: var(--dim);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.status-message {
+  color: var(--ink);
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 20;
+}
+.overlay-card {
+  background: var(--panel-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 14px;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow: auto;
+}
+.overlay-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+button.mini,
+label.mini {
+  background: #232830;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+button.primary {
+  background: var(--accent);
+  color: #1a1a1a;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.hint {
+  color: var(--dim);
+  margin: 6px 0;
+}
+#peers {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Small desktops: the dock and side panels shrink before the viewport. */
+@media (max-width: 1100px) {
+  :root {
+    --outliner-w: 200px;
+    --inspector-w: 230px;
+  }
+}

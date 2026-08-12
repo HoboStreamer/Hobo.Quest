@@ -60,7 +60,18 @@ export declare class EditorCameraController {
   frame(centre: Vector3, radius: number): void
   /** Fly step for the movement actions, in world units for this frame. */
   fly(forward: number, right: number, up: number, speed: number): void
-  /** Project a world point to screen pixels (probe + Outliner helpers). */
+  /**
+   * Project a world point to PAGE pixels.
+   *
+   * The canvas fills the viewport grid cell, not the window, so its own
+   * coordinate space starts at the cell's top-left. Anything that wants to
+   * put a cursor or a DOM element at a world position needs page
+   * coordinates, so the offset is added here rather than at each call site
+   * (which is how it went wrong: a projection that is right in canvas space
+   * and used as a page position is silently off by the width of a panel).
+   */
   worldToScreen(p: Vector3): [number, number]
+  /** Page pixels → canvas pixels, the inverse of `worldToScreen`. */
+  toCanvasSpace(pageX: number, pageY: number): [number, number]
 }
 //# sourceMappingURL=editorCameraController.d.ts.map

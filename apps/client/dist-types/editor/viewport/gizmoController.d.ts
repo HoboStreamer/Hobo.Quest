@@ -1,5 +1,4 @@
-import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
-import { TransformNode } from '@babylonjs/core/Meshes/transformNode.js'
+import type { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
 import type { Scene } from '@babylonjs/core/scene.js'
 import type { InteractionController } from '../interaction/interactionController.js'
 import type { EditorTransform } from './transformMath.js'
@@ -44,8 +43,21 @@ export declare class GizmoController {
   /** Snap increments; 0 disables. Applied to Babylon's own drag steps. */
   setSnap(translate: number, rotate: number, scale: number): void
   private applySnap
-  /** Screen position of a handle, for the browser test harness. */
-  handleScreenPosition(axis: 'x' | 'y' | 'z'): TransformNode | null
+  /**
+   * A point on the given axis's handle, in screen pixels — what the browser
+   * harness aims a real mouse at.
+   *
+   * All three axis gizmos share the pivot's position, so projecting their
+   * roots gives the same point for X, Y and Z and a "drag the X handle" test
+   * would grab whichever one happened to be on top. Instead this spirals out
+   * from the origin picking the UTILITY LAYER until it lands on geometry
+   * owned by this axis, which works for arrows, planes and rotation rings
+   * alike without assuming where the handle art sits.
+   */
+  handleScreenPoint(
+    axis: 'x' | 'y' | 'z',
+    project: (p: Vector3) => [number, number],
+  ): [number, number] | null
   get utilityScene(): Scene | null
   private wire
   /** Frame helper: the pivot's world position as a Vector3. */

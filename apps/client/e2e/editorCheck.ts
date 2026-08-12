@@ -312,7 +312,7 @@ const selAfter = await ev(page, (p) => p.selectionIds())
 const camAfter = await ev(page, (p) => p.cameraSnapshot())
 const posAfter = await posOf('box-b')
 ok('selection is still exactly [box-b]', selAfter.length === 1 && selAfter[0] === 'box-b', selAfter)
-ok('terrain was NOT selected by the drag', !selAfter.includes(`terrain:${FLOOR_ID}`), selAfter)
+ok('terrain was NOT selected by the drag', !selAfter.includes(FLOOR_ID), selAfter)
 ok('box actually moved', Math.abs(posAfter[0]! - posBefore[0]!) > 0.05, { posBefore, posAfter })
 const camDelta = Math.max(
   ...camBefore.pos.map((v, i) => Math.abs(v - camAfter.pos[i]!)),
@@ -443,13 +443,18 @@ ok(
 // ════════════════════════════════════════════════════════════════════════
 section('G. Terrain wire stays visible while terrain is selected')
 await clickEmpty()
-const terrainScreen: [number, number] = [700, 700]
+const terrainScreen = (await page.evaluate(() => {
+  const w = window as never as { __editor: { worldToScreen: (p: number[]) => [number, number] } }
+  // A patch of floor well clear of the three boxes.
+  return w.__editor.worldToScreen([-30, 0, -20])
+})) as [number, number]
 await page.mouse.move(...terrainScreen)
 await page.mouse.down()
 await page.mouse.up()
 await page.waitForTimeout(250)
 s = await ev(page, (p) => p.selectionIds())
-const terrainId = s.find((x) => x.startsWith('terrain:')) ?? null
+const knownTerrains = await ev(page, (p) => p.terrainIds())
+const terrainId = s.find((x) => knownTerrains.includes(x)) ?? null
 ok('clicking terrain selects exactly one terrain', s.length === 1 && terrainId !== null, s)
 if (terrainId) {
   // The wire turns on in the render loop, and under swiftshader a frame can
@@ -924,21 +929,17 @@ section('N. v1 migration smoke — old maps still load')
     async (pg) => {
       const ids = await probeOf(pg, (p) => p.terrainIds())
       // The old privileged heightfield is now ONE ordinary terrain object.
-      ok(
-        'the v1 main heightfield became an ordinary terrain',
-        ids.includes('terrain:terrain-v1-main'),
-        ids,
-      )
+      ok('the v1 main heightfield became an ordinary terrain', ids.includes('terrain-v1-main'), ids)
       ok('exactly one terrain came across', ids.length === 1, ids)
       const counts = await probeOf(pg, (p) => p.objectCounts())
       ok('the v1 static came across', counts['statics'] === 1, counts)
       // Nothing treats the migrated terrain as special: it selects like any
       // other object, under its real id.
       await probeOf(pg, (p) => p.setToolByName('select'))
-      await probeOf(pg, (p) => p.selectByIds(['terrain:terrain-v1-main']))
+      await probeOf(pg, (p) => p.selectByIds(['terrain-v1-main']))
       ok(
         'it selects under its real id, with no "main" special case',
-        (await probeOf(pg, (p) => p.selectionIds())).includes('terrain:terrain-v1-main'),
+        (await probeOf(pg, (p) => p.selectionIds())).includes('terrain-v1-main'),
         await probeOf(pg, (p) => p.selectionIds()),
       )
     },

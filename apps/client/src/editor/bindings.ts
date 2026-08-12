@@ -145,6 +145,34 @@ export const ACTIONS: ActionDef[] = [
   // UI
   { id: 'ui.sidebar', label: 'Toggle sidebar', group: 'ui', default: { code: 'Backquote' } },
   { id: 'ui.settings', label: 'Settings', group: 'ui', default: { code: 'F2' } },
+  {
+    id: 'transform.worldLocal',
+    label: 'World / Local space',
+    group: 'transform',
+    default: { code: 'KeyX' },
+  },
+  {
+    id: 'transform.toggleSnap',
+    label: 'Toggle move snap',
+    group: 'transform',
+    default: { code: 'KeyV' },
+  },
+  {
+    id: 'workspace.outliner',
+    label: 'Toggle Outliner',
+    group: 'ui',
+    default: { code: 'Digit8' },
+  },
+  {
+    id: 'workspace.inspector',
+    label: 'Toggle Inspector',
+    group: 'ui',
+    default: { code: 'Digit9' },
+  },
+  { id: 'workspace.assets', label: 'Assets tab', group: 'ui', default: { code: 'KeyB' } },
+  { id: 'workspace.issues', label: 'Issues tab', group: 'ui', default: { code: 'KeyI' } },
+  { id: 'workspace.history', label: 'History tab', group: 'ui', default: { code: 'KeyH' } },
+  { id: 'workspace.scene', label: 'Scene tab', group: 'ui', default: { code: 'KeyN' } },
 ]
 
 /** Both Shift keys count as the fast/nosnap modifier; normalize codes. */

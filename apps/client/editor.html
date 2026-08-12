@@ -6,324 +6,49 @@
     <title>Hobo.Quest Map Editor</title>
   </head>
   <body>
-    <canvas id="game" tabindex="0"></canvas>
-    <div id="panel">
-      <div
-        class="keep-collapsed"
-        style="display: flex; justify-content: space-between; align-items: center"
-      >
-        <h1>MAP EDITOR</h1>
-        <div>
-          <button id="settings-btn" class="mini" title="settings / hotkeys">⚙</button>
-          <button id="collapse" class="mini" title="collapse panel">«</button>
-        </div>
-      </div>
-      <div id="peers"></div>
-      <div class="tools" id="tools"></div>
-      <label id="snap-row"
-        >Snap <input id="snap" type="number" min="0" max="8" step="0.25" value="0.5" /> m</label
-      >
-      <label id="sky-row"
-        >Sky
-        <select id="sky-time">
-          <option value="0.35" selected>🌅 Morning</option>
-          <option value="0.5">☀ Noon</option>
-          <option value="0.72">🌇 Sunset</option>
-          <option value="0.95">🌙 Night</option>
-        </select></label
-      >
-      <div id="paint-row" style="display: none; flex-direction: column; gap: 6px">
-        <label
-          >Paint
-          <select id="paint-tex"></select>
-        </label>
-        <label title="tints the painted texture; with Plain Colour it IS the paint"
-          >Colour
-          <input id="paint-color" type="color" value="#ffffff" />
-          <button id="paint-color-reset" class="mini" title="paint untinted">↺</button>
-        </label>
-        <label title="remove this layer's coverage instead of adding it"
-          ><span>Erase</span> <input id="paint-erase" type="checkbox"
-        /></label>
-        <div
-          id="paint-layers"
-          style="display: flex; flex-direction: column; gap: 4px; font-size: 11px"
-        ></div>
-      </div>
-      <label id="mesh-row" style="display: none"
-        >Mesh
-        <select id="mesh-sel"></select
-      ></label>
-      <label id="entity-row" style="display: none"
-        >Entity
-        <select id="entity-sel"></select
-      ></label>
-      <label class="import-row"
-        >📥 Import model (.glb)<input
-          id="model-file"
-          type="file"
-          accept=".glb,.gltf"
-          style="display: none"
-      /></label>
-      <label class="import-row"
-        >🖼 Import texture (jpg/png/webp, any size)<input
-          id="texture-file"
-          type="file"
-          accept="image/*"
-          style="display: none"
-      /></label>
-      <button id="texman-btn" class="import-row" style="text-align: left">🗂 Manage textures</button>
-      <label id="light-row" style="display: none"
-        >Light
-        <select id="light-sel">
-          <option value="point">💡 Point light</option>
-          <option value="spot">🔦 Spot light</option>
-          <option value="directional">🌞 Directional (sun)</option>
-          <option value="hemi">🌐 Hemispheric (ambient)</option>
-          <option value="rect">🟨 Rect area (panel)</option>
-        </select></label
-      >
-      <input id="key" type="password" placeholder="hobo.tools admin token / editor key" />
-      <button id="save">💾 Save map (applies live)</button>
-      <div style="display: flex; gap: 6px; align-items: center">
-        <button id="issues-btn" class="mini" title="map validation issues">⚠ Issues</button>
-        <span id="issues-badge" style="font-size: 11px; color: #78828e"></span>
-      </div>
-      <div id="status"></div>
-      <div id="conflict" style="display: none; flex-direction: column; gap: 6px">
-        <div style="color: #ffb46e; font-size: 12px">
-          ⚠ Newer map saved by another admin while you have unsaved changes.
-        </div>
+    <!--
+      A shell, not a UI. The workspace is built by ui/editorShell.ts next to
+      the code that drives it: this file used to carry ~100 ids that boot()
+      reached into by hand, so the shape of the editor lived in two places
+      and every control meant editing both.
+
+      What stays here is what must exist before any script runs (the canvas)
+      and the overlays that are not part of the workspace grid.
+    -->
+    <canvas id="game"></canvas>
+    <div id="shell"></div>
+
+    <!-- Revision conflict. Nothing here merges, and it says so. -->
+    <div id="conflict" class="overlay" style="display: none">
+      <div class="overlay-card">
+        <h2>⚠ Newer map saved by another admin</h2>
         <div id="conflict-summary" class="hint"></div>
-        <button id="conflict-load" class="mini">Discard mine · load theirs</button>
-        <button id="conflict-keep" class="mini">Keep mine · dismiss</button>
-        <button id="conflict-export" class="mini">💾 Download my local copy</button>
+        <div class="overlay-actions">
+          <button id="conflict-load" class="mini" type="button">Discard mine · load theirs</button>
+          <button id="conflict-keep" class="mini" type="button">Keep mine · dismiss</button>
+          <button id="conflict-export" class="mini" type="button">💾 Download my local copy</button>
+        </div>
         <div class="hint">
-          Nothing here merges. "Keep mine" only dismisses this panel — Save stays refused until you
-          reload.
+          "Keep mine" only dismisses this panel — Save stays refused until you reload.
         </div>
-      </div>
-      <div style="display: flex; gap: 6px; flex-wrap: wrap">
-        <button
-          id="map-export"
-          class="mini"
-          title="Download the source map, including unsaved edits"
-        >
-          ⬇ Export map
-        </button>
-        <label class="mini" style="cursor: pointer">
-          ⬆ Import map
-          <input id="map-import" type="file" accept="application/json,.json" hidden />
-        </label>
-      </div>
-      <div class="hint">
-        <b>1-4/Q</b> tools · <b>Z</b> free-look · WASD+QE fly (<b>Shift</b> = fast) ·
-        <b>LMB</b> raise / <b>RMB</b> lower · <b>[ ]</b> radius · <b>Shift+[ ]</b> strength · wheel
-        rotates placement · <b>Shift</b> = no snap · <b>Ctrl+Z/Ctrl+Shift+Z</b> undo/redo ·
-        <b>Ctrl+D</b> duplicate · <b>Select</b> works on objects, resource nodes AND terrain patches
-        (gizmos + properties) · <b>Del</b> removes selection · patches sculpt with the terrain tools
-        and tilt into caves/overhangs
       </div>
     </div>
-    <div id="brush">
-      <label id="mode-row"
-        >Mode
-        <select id="terrain-mode">
-          <option value="sculpt">⛰ Raise/Lower</option>
-          <option value="smooth">〰 Smooth</option>
-          <option value="flatten">▭ Flatten</option>
-        </select></label
-      >
-      <label
-        >Radius <input id="radius" type="range" min="1" max="30" step="0.5" value="6" /><span
-          class="val"
-          id="radius-val"
-          >6</span
-        ></label
-      >
-      <label
-        >Strength
-        <input id="strength" type="range" min="0.01" max="1.5" step="0.01" value="0.35" /><span
-          class="val"
-          id="strength-val"
-          >.35</span
-        ></label
-      >
-      <label
-        >Feather <input id="feather" type="range" min="0.2" max="4" step="0.1" value="1" /><span
-          class="val"
-          id="feather-val"
-          >1</span
-        ></label
-      >
-    </div>
-    <div id="settings">
-      <h2 style="margin: 0; font-size: 13px; color: #e8b54a">Hotkeys</h2>
-      <div id="keys-list"></div>
-      <div class="krow">
-        <button id="keys-reset" class="mini">Reset defaults</button>
-        <button id="settings-close" class="mini">Close</button>
+
+    <!-- Keyboard shortcuts. Every action is here; none are hardcoded. -->
+    <div id="settings" class="overlay" style="display: none">
+      <div class="overlay-card">
+        <h2>⌨ Keyboard shortcuts</h2>
+        <div id="keys-list" class="keys-list"></div>
+        <div class="overlay-actions">
+          <button id="keys-reset" class="mini" type="button">Reset to defaults</button>
+          <button id="settings-close" class="mini" type="button">Close</button>
+        </div>
       </div>
     </div>
-    <div id="props">
-      <h2 id="props-title">Object</h2>
-      <div class="row">
-        <span>pos</span><input id="p-x" type="number" step="0.25" /><input
-          id="p-y"
-          type="number"
-          step="0.25"
-        /><input id="p-z" type="number" step="0.25" />
-      </div>
-      <div class="row">
-        <span>rot°</span><input id="r-x" type="number" step="5" /><input
-          id="r-y"
-          type="number"
-          step="5"
-        /><input id="r-z" type="number" step="5" />
-      </div>
-      <div class="row" id="scale-row">
-        <span>scale</span><input id="s-x" type="number" step="0.1" value="1" /><input
-          id="s-y"
-          type="number"
-          step="0.1"
-          value="1"
-        /><input id="s-z" type="number" step="0.1" value="1" />
-      </div>
-      <div class="row" id="gizmo-row">
-        <span>mode</span><button id="gm-move">G move</button><button id="gm-rot">R rot</button
-        ><button id="gm-scale">S scale</button>
-      </div>
-      <div class="row" id="dims-box">
-        <span>size</span><input id="d-x" type="number" step="0.25" min="0.1" /><input
-          id="d-y"
-          type="number"
-          step="0.25"
-          min="0.1"
-        /><input id="d-z" type="number" step="0.25" min="0.1" />
-      </div>
-      <div class="row" id="dims-cyl">
-        <span>r/h</span><input id="d-r" type="number" step="0.1" min="0.1" /><input
-          id="d-h"
-          type="number"
-          step="0.25"
-          min="0.1"
-        />
-      </div>
-      <div class="row" id="dims-sph">
-        <span>r</span><input id="d-sr" type="number" step="0.1" min="0.1" />
-      </div>
-      <div class="row">
-        <span>color</span><input id="p-color" type="color" /><button
-          id="p-color-reset"
-          class="mini-square"
-          title="reset color to default"
-        >
-          ↺
-        </button>
-      </div>
-      <div id="light-rows" style="display: none; flex-direction: column; gap: 6px">
-        <div class="row">
-          <span>int.</span><input id="l-int" type="number" step="0.05" min="0" />
-        </div>
-        <div class="row" id="l-range-row">
-          <span>range</span><input id="l-range" type="number" step="1" min="1" />
-        </div>
-        <div class="row" id="l-angle-row">
-          <span>angle°</span><input id="l-angle" type="number" step="2" min="2" max="178" /><input
-            id="l-exp"
-            type="number"
-            step="0.5"
-            min="0"
-            title="decay exponent"
-          />
-        </div>
-        <div class="row" id="l-ground-row">
-          <span>ground</span><input id="l-ground" type="color" />
-        </div>
-        <div class="row" id="l-size-row">
-          <span>w×h</span><input id="l-w" type="number" step="0.5" min="0.1" /><input
-            id="l-h"
-            type="number"
-            step="0.5"
-            min="0.1"
-          />
-        </div>
-        <div class="row"><span>spec</span><input id="l-spec" type="color" /></div>
-        <div class="row" id="l-shadow-row">
-          <span>☂</span
-          ><label style="flex: 1"><input id="l-shadows" type="checkbox" /> cast shadows</label>
-        </div>
-      </div>
-      <div class="row">
-        <span>💡</span
-        ><label style="flex: 1"><input id="p-lamp" type="checkbox" /> lamplight after dark</label>
-      </div>
-      <div class="row">
-        <span>tex</span
-        ><select id="p-tex"></select>
-      </div>
-      <div class="row">
-        <button id="p-dup">⧉ Duplicate</button><button id="p-del">🗑 Delete</button>
-      </div>
-    </div>
-    <div id="face">
-      <h2>🧱 Face Edit</h2>
-      <div id="face-info" style="color: #9aa4b0; font-size: 11px">
-        click a face · Ctrl adds · RMB applies current
-      </div>
-      <label class="row" title="apply style changes to the selected faces as you edit">
-        <input id="f-auto" type="checkbox" /> <span>Auto Apply</span>
-      </label>
-      <div class="row">
-        <span>texture</span>
-        <select id="f-tex"></select>
-      </div>
-      <div class="row">
-        <span>color</span><input id="f-color" type="color" value="#8a8d90" /><button
-          id="f-color-clear"
-          class="mini-square"
-          style="flex: 0 0 auto; width: 26px"
-          title="no tint"
-        >
-          ↺
-        </button>
-      </div>
-      <div class="row">
-        <span>scale</span><input id="f-sx" type="number" step="0.25" min="0" /><input
-          id="f-sy"
-          type="number"
-          step="0.25"
-          min="0"
-        />
-      </div>
-      <div class="row">
-        <span>shift</span><input id="f-ox" type="number" step="0.05" /><input
-          id="f-oy"
-          type="number"
-          step="0.05"
-        />
-      </div>
-      <div class="row"><span>rot°</span><input id="f-rot" type="number" step="5" /></div>
-      <div class="row">
-        <span>justify</span><button id="f-fit">Fit</button><button id="f-jl">L</button
-        ><button id="f-jr">R</button><button id="f-jt">T</button><button id="f-jb">B</button
-        ><button id="f-jc">C</button>
-      </div>
-      <div class="row">
-        <button id="f-apply">✔ Apply</button><button id="f-apply-all">Apply to object</button>
-      </div>
-      <div class="row">
-        <button id="f-lift">💧 Lift from face</button><button id="f-clear">✕ Reset face</button>
-      </div>
-    </div>
-    <div id="texman">
-      <h2>🗂 Custom textures</h2>
-      <div id="texman-list" style="display: flex; flex-direction: column; gap: 6px"></div>
-      <div style="color: #78828e; font-size: 11px">
-        rename updates every object using it · scale = meters per tile
-      </div>
-      <div class="row"><button id="texman-close">Close</button></div>
-    </div>
+
+    <!-- Co-editor name tags, positioned over the viewport. -->
+    <div id="peers"></div>
+
     <script type="module" src="/src/editor/main.ts"></script>
   </body>
 </html>

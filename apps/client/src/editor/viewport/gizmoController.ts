@@ -140,17 +140,55 @@ export class GizmoController {
     if (s) s.snapDistance = this.snap.scale
   }
 
-  /** Screen position of a handle, for the browser test harness. */
-  handleScreenPosition(axis: 'x' | 'y' | 'z'): TransformNode | null {
+  /**
+   * A point on the given axis's handle, in screen pixels — what the browser
+   * harness aims a real mouse at.
+   *
+   * All three axis gizmos share the pivot's position, so projecting their
+   * roots gives the same point for X, Y and Z and a "drag the X handle" test
+   * would grab whichever one happened to be on top. Instead this spirals out
+   * from the origin picking the UTILITY LAYER until it lands on geometry
+   * owned by this axis, which works for arrows, planes and rotation rings
+   * alike without assuming where the handle art sits.
+   */
+  handleScreenPoint(
+    axis: 'x' | 'y' | 'z',
+    project: (p: Vector3) => [number, number],
+  ): [number, number] | null {
     const g =
       this.mode === 'move'
         ? this.manager.gizmos.positionGizmo
         : this.mode === 'rotate'
           ? this.manager.gizmos.rotationGizmo
           : this.manager.gizmos.scaleGizmo
-    if (!g) return null
+    const utility = this.manager.utilityLayer?.utilityLayerScene
+    if (!g || !utility) return null
     const per = axis === 'x' ? g.xGizmo : axis === 'y' ? g.yGizmo : g.zGizmo
-    return (per as unknown as { _rootMesh?: TransformNode })._rootMesh ?? null
+    const root = (per as unknown as { _rootMesh?: TransformNode })._rootMesh
+    if (!root) return null
+
+    const belongsToAxis = (m: { parent: unknown } | null): boolean => {
+      let n = m as { parent: unknown } | null
+      for (let depth = 0; n && depth < 12; depth++) {
+        if (n === (root as unknown)) return true
+        n = n.parent as { parent: unknown } | null
+      }
+      return false
+    }
+    const engine = this.opts.scene.getEngine()
+    const [ox, oy] = project(root.getAbsolutePosition())
+    for (let radius = 6; radius <= 220; radius += 4) {
+      for (let step = 0; step < 24; step++) {
+        const angle = (step / 24) * Math.PI * 2
+        const x = ox + Math.cos(angle) * radius
+        const y = oy + Math.sin(angle) * radius
+        if (x < 0 || y < 0 || x > engine.getRenderWidth() || y > engine.getRenderHeight()) continue
+        const hit = utility.pick(x, y)
+        if (hit?.hit && hit.pickedMesh && belongsToAxis(hit.pickedMesh))
+          return [Math.round(x), Math.round(y)]
+      }
+    }
+    return null
   }
 
   get utilityScene(): Scene | null {
