@@ -1,6 +1,6 @@
 import type { EditorDocument } from '../document/editorDocument.js'
 import type { CommandHistory } from '../history/commandHistory.js'
-import type { ModelCache } from './modelCache.js'
+import type { ModelCache } from '../../render/modelCache.js'
 export interface UploadedAsset {
   url: string
   hash: string

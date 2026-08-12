@@ -9,13 +9,19 @@ import {
   type TerrainObjectV2,
 } from '@hobo/content'
 import { LayeredSurfaceMaterial } from '../../../render/layeredSurface.js'
-import { PaintMask } from '../../materials/paintMask.js'
-import type { ModelCache } from '../../assets/modelCache.js'
+import type { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture.js'
+import type { ModelCache } from '../../../render/modelCache.js'
 import type { EditorObject, EditorObjectKind } from '../../document/editorDocument.js'
 import type { EditorView } from '../editorViewRegistry.js'
 /** Everything a view needs that is not the object itself. */
 export interface ViewContext {
   scene: Scene
+  /**
+   * The live mask for a surface, created on demand. Views ask for one
+   * rather than owning it: a box has six independently paintable faces and
+   * a model has one per slot, so a mask belongs to a SURFACE.
+   */
+  maskFor: (ownerId: string, surfaceId: string, data: SurfaceMaterialData) => DynamicTexture
   content: ContentRegistry
   modelCache: ModelCache
   /** Shared wireframe material for terrain sculpt overlays. */
@@ -46,7 +52,7 @@ export declare class TerrainView implements EditorView {
   sub: number
   halfExtent: number
   surface: LayeredSurfaceMaterial
-  mask: PaintMask
+  private maskTexture
   private terrain
   constructor(id: string, terrain: TerrainObjectV2, ctx: ViewContext)
   /** The document surface, defaulted so a plain terrain still paints. */

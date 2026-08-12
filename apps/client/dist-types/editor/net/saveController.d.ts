@@ -10,19 +10,20 @@
 import { canonicalizeMapFile, type MapFileV2 } from '@hobo/content'
 import type { EditorDocument } from '../document/editorDocument.js'
 import type { CommandHistory } from '../history/commandHistory.js'
-import type { PaintMask } from '../materials/paintMask.js'
+import type { PaintSurfaceRegistry } from '../materials/paintSurfaceRegistry.js'
 export interface SaveControllerOptions {
   doc: EditorDocument
   history: CommandHistory<EditorDocument>
   bootRevision: string
   /** Adopt a whole remote/imported/restored document. */
   onAdopt: (map: MapFileV2) => void
-  /** The live paint mask for a terrain, if it has one. */
-  maskOf: (id: string) => PaintMask | null
+  /** Every live painted surface, keyed by (object, surface). */
+  paintSurfaces: PaintSurfaceRegistry
   setMessage: (m: string) => void
 }
 export interface SaveController {
   save: () => Promise<void>
+  maskUploadCount: () => number
   pollRemote: () => Promise<void>
   isDirty: () => boolean
   revision: () => string

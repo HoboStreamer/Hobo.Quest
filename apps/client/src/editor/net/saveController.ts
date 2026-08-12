@@ -17,7 +17,8 @@ import {
 } from '@hobo/content'
 import type { EditorDocument } from '../document/editorDocument.js'
 import type { CommandHistory } from '../history/commandHistory.js'
-import type { PaintMask } from '../materials/paintMask.js'
+import type { PaintSurfaceRegistry } from '../materials/paintSurfaceRegistry.js'
+import { surfaceDataFor, writeSurfaceData } from '../materials/paintController.js'
 import { DraftStore, indexedDbDraftStorage } from '../recovery/draftStore.js'
 
 export interface SaveControllerOptions {
@@ -26,13 +27,14 @@ export interface SaveControllerOptions {
   bootRevision: string
   /** Adopt a whole remote/imported/restored document. */
   onAdopt: (map: MapFileV2) => void
-  /** The live paint mask for a terrain, if it has one. */
-  maskOf: (id: string) => PaintMask | null
+  /** Every live painted surface, keyed by (object, surface). */
+  paintSurfaces: PaintSurfaceRegistry
   setMessage: (m: string) => void
 }
 
 export interface SaveController {
   save: () => Promise<void>
+  maskUploadCount: () => number
   pollRemote: () => Promise<void>
   isDirty: () => boolean
   revision: () => string
@@ -73,15 +75,18 @@ export function createSaveController(opts: SaveControllerOptions): SaveControlle
 
   /**
    * Masks stay canvases while editing and become content-addressed assets on
-   * save. An unchanged mask hashes the same, so the second save uploads
-   * nothing — which is the whole reason not to embed them as data URLs.
+   * save — but only the ones that actually CHANGED.
+   *
+   * Uploading every mask each time and letting the server deduplicate still
+   * costs a PNG encode and a round trip per painted surface, so a map with
+   * thirty painted faces paid thirty of each to save a moved box. The
+   * registry knows which masks a stroke has touched since their persisted
+   * reference was written; the rest are skipped entirely.
    */
-  const uploadMasks = async (): Promise<void> => {
-    for (const terrain of doc.listByKind('terrain')) {
-      const mask = opts.maskOf(terrain.id)
-      const surface = terrain.surface
-      if (!mask || !surface?.paint) continue
-      const blob = await mask.toBlob()
+  let maskUploads = 0
+  const uploadDirtyMasks = async (): Promise<void> => {
+    for (const surface of opts.paintSurfaces.dirtySurfaces()) {
+      const blob = await surface.mask.toBlob()
       if (!blob) continue
       try {
         const resp = await fetch('/api/map-assets', {
@@ -90,10 +95,14 @@ export function createSaveController(opts: SaveControllerOptions): SaveControlle
           body: blob,
         })
         if (!resp.ok) continue
+        maskUploads++
         const asset = (await resp.json()) as { url: string }
-        doc.update(terrain.id, {
-          surface: { ...surface, paint: { ...surface.paint, mask: asset.url } },
+        const data = surfaceDataFor(doc, surface.ownerId, surface.surfaceId)
+        writeSurfaceData(doc, surface.ownerId, surface.surfaceId, {
+          ...data,
+          paint: { ...(data.paint ?? { layers: [] }), mask: asset.url },
         })
+        opts.paintSurfaces.markPersisted(surface.ownerId, surface.surfaceId, asset.url)
       } catch {
         // Offline: keep whatever the mask already had rather than losing it.
       }
@@ -104,7 +113,7 @@ export function createSaveController(opts: SaveControllerOptions): SaveControlle
     const key = editorKey()
     localStorage.setItem('hobo.editorkey', key)
     setMessage('saving…')
-    await uploadMasks()
+    await uploadDirtyMasks()
     const file = serialize()
     let resp: Response
     try {
@@ -231,6 +240,8 @@ export function createSaveController(opts: SaveControllerOptions): SaveControlle
 
   return {
     save,
+    /** How many mask uploads this session has performed (tests). */
+    maskUploadCount: () => maskUploads,
     pollRemote,
     isDirty,
     revision: () => baseRevision,

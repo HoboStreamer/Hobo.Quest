@@ -20,19 +20,16 @@ import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder.js'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial.js'
 import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh.js'
 import {
-  MAX_PAINT_LAYERS,
-  allocateLayer,
   createContent,
   emptyMapV2,
   parseMapFile,
   setMapOverride,
   type MapFileV2,
   type MapTextureEntry,
-  type SurfaceMaterialData,
 } from '@hobo/content'
 import { Environment } from '../render/environment.js'
 import { registerCustomTextures } from '../render/mapStyle.js'
-import { ModelCache } from './assets/modelCache.js'
+import { ModelCache } from '../render/modelCache.js'
 import { AssetController } from './assets/assetController.js'
 import { ENTITY_DEFS, PLACEABLES, newId, type Placeable, type Tool } from './catalog.js'
 import { EditorDocument } from './document/editorDocument.js'
@@ -62,7 +59,13 @@ import { TransformSession, type TransformAccessor } from './viewport/transformSe
 import { centroidOf, type EditorTransform } from './viewport/transformMath.js'
 import { TerrainView, createViewFactory } from './viewport/views/index.js'
 import { readPreferences, savePreferences } from './viewport/editorPreferences.js'
-import { planarUV, toPaintUV } from './materials/paintableSurface.js'
+import {
+  PaintController,
+  surfaceDataFor,
+  writeSurfaceData,
+  type PaintHit,
+} from './materials/paintController.js'
+import { PaintSurfaceRegistry } from './materials/paintSurfaceRegistry.js'
 import { buildShell } from './ui/editorShell.js'
 import { createEditorUi } from './ui/editorUi.js'
 import { createSaveController } from './net/saveController.js'
@@ -142,6 +145,8 @@ export async function bootEditor(): Promise<void> {
     return h
   }
 
+  const paintSurfaces = new PaintSurfaceRegistry(scene)
+
   const views: EditorViewRegistry = new EditorViewRegistry(
     doc,
     createViewFactory({
@@ -151,6 +156,8 @@ export async function bootEditor(): Promise<void> {
       wireMat,
       sampleGround,
       modelSource: (id) => doc.modelById(id)?.glb ?? null,
+      maskFor: (ownerId, surfaceId, data) =>
+        paintSurfaces.ensure(ownerId, surfaceId, data).mask.texture,
       reindex: (id) => views.reindex(id),
       newId,
     }),
@@ -168,6 +175,8 @@ export async function bootEditor(): Promise<void> {
   }
 
   // ── Selection, history, transforms ──────────────────────────────────
+  const paint = new PaintController({ scene, doc, views, registry: paintSurfaces, newId })
+
   const selection = new SelectionManager()
   const visuals = new SelectionVisuals(scene, views)
   const history = new CommandHistory<EditorDocument>(doc)
@@ -395,7 +404,9 @@ export async function bootEditor(): Promise<void> {
   // ── Terrain + paint strokes ─────────────────────────────────────────
   let strokeTargetId: string | null = null
   let strokeBefore: Float32Array | null = null
-  let paintLayerChannel: string | null = null
+  /** The (object, surface) a paint stroke is committed to, for its duration. */
+  let paintStrokeKey: string | null = null
+  let paintStrokeHit: PaintHit | null = null
 
   const terrainUnderCursor = (): { id: string; view: TerrainView; local: Vector3 } | null => {
     const hit = viewport.pickPoint()
@@ -435,62 +446,56 @@ export async function bootEditor(): Promise<void> {
     target.view.refreshHeights()
   }
 
+  /**
+   * One brush dab, on whatever is under the cursor. The controller resolves
+   * the pick to (object, surface) and the UV in that surface's mask, so this
+   * is the same code for terrain, a box face, a cylinder and a model slot.
+   */
   const paintAt = (): void => {
-    const target = terrainUnderCursor()
-    if (!target) return
-    if (strokeTargetId && target.id !== strokeTargetId) return
+    const brush = brushSettings()
+    const hit = paint.hitTest(brush.radius)
+    if (!hit) return
+    const key = `${hit.ownerId} ${hit.surfaceId}`
+    if (paintStrokeKey && key !== paintStrokeKey) return // one surface per stroke
     let allowed = false
-    withLock([target.id], () => {
+    withLock([hit.ownerId], () => {
       allowed = true
     })
     if (!allowed) return
-    const surface = ensurePaintLayer(target.id)
-    if (!surface) return
-    if (!strokeTargetId) {
-      strokeTargetId = target.id
-      target.view.mask.beginStroke()
+
+    const tex = (document.getElementById('paint-tex') as HTMLSelectElement).value || 'none'
+    const color = (document.getElementById('paint-color') as HTMLInputElement).value.toLowerCase()
+    const tint = tex === 'none' || color !== '#ffffff' ? color : undefined
+    const layer = paint.ensureLayer(hit, tex, tint)
+    if (!layer) {
+      ui.setMessage(`⛔ all ${paint.layerBudget} paint layers are in use — remove one first`)
+      return
+    }
+    if (!paintStrokeKey) {
+      paintStrokeKey = key
+      paintStrokeHit = hit
+      strokeTargetId = hit.ownerId
+      hit.state.mask.beginStroke()
       refreshVisuals()
     }
-    const t = doc.get(target.id, 'terrain')!
-    const uv = planarUV({ x: target.local.x, z: target.local.z }, t.halfExtent)
-    const brush = brushSettings()
-    const p = toPaintUV(uv, target.view.mask.size, brush.radius, t.halfExtent * 2)
-    target.view.mask.stamp(surface.channel as never, {
-      u: p.u,
-      v: p.v,
-      radius: p.radiusPixels,
+    hit.state.mask.stamp(layer.channel as never, {
+      u: hit.uv.u,
+      v: hit.uv.v,
+      radius: hit.uv.radiusPixels,
       strength: Math.min(1, brush.strength),
       feather: brush.feather,
       erase: (document.getElementById('paint-erase') as HTMLInputElement).checked,
     })
-  }
-
-  /** Allocate (or reuse) the layer the brush is painting into. */
-  const ensurePaintLayer = (id: string): { channel: string } | null => {
-    const tex = (document.getElementById('paint-tex') as HTMLSelectElement).value || 'none'
-    const colorInput = document.getElementById('paint-color') as HTMLInputElement
-    const color = colorInput.value.toLowerCase()
-    const tint = tex === 'none' || color !== '#ffffff' ? color : undefined
-    const view = views.viewOf(id)
-    if (!(view instanceof TerrainView)) return null
-    const data: SurfaceMaterialData = structuredClone(view.surfaceData())
-    const alloc = allocateLayer(data.paint, tex, () => newId('pl'), tint)
-    if (!alloc) {
-      ui.setMessage(`⛔ all ${MAX_PAINT_LAYERS} paint layers are in use — remove one first`)
-      return null
-    }
-    data.paint = alloc.paint
-    if (alloc.created) {
-      // A new layer is a document change in its own right; the mask stroke
-      // that follows is the separate, undoable part.
-      doc.update(id, { surface: data })
-      view.refreshSurface(view.surfaceData())
-    }
-    paintLayerChannel = alloc.layer.channel
-    return { channel: alloc.layer.channel }
+    // The surface may have just gained its first layer; re-read the material.
+    views.viewOf(hit.ownerId)?.update(doc.get(hit.ownerId)!, ['surface'])
   }
 
   const endStroke = (): void => {
+    if (tools.is('paint')) {
+      strokeTargetId = null
+      endPaintStroke()
+      return
+    }
     const id = strokeTargetId
     strokeTargetId = null
     if (!id) return
@@ -515,25 +520,48 @@ export async function bootEditor(): Promise<void> {
         )
       }
     }
-    if (tools.is('paint') && paintLayerChannel) {
-      const patch = view.mask.endStroke()
-      if (patch) {
-        const data = structuredClone(view.surfaceData())
-        data.paint = { ...(data.paint ?? { layers: [] }), mask: view.mask.toDataURL() }
-        doc.update(id, { surface: data })
-        history.record(
-          paintStroke(id, 'surface', patch.before, patch.after, (tid, _sid, p) => {
-            const v = views.viewOf(tid)
-            if (!(v instanceof TerrainView)) return
-            v.mask.applyPatch(p)
-            const d = structuredClone(v.surfaceData())
-            d.paint = { ...(d.paint ?? { layers: [] }), mask: v.mask.toDataURL() }
-            doc.update(tid, { surface: d })
-          }),
-        )
-      }
-      paintLayerChannel = null
-    }
+    refreshVisuals()
+    ui.refreshAll()
+  }
+
+  /** Finish a paint stroke: one history entry holding the mask delta. */
+  const endPaintStroke = (): void => {
+    const hit = paintStrokeHit
+    paintStrokeKey = null
+    paintStrokeHit = null
+    if (!hit) return
+    const patch = hit.state.mask.endStroke()
+    if (!patch) return
+    // The document keeps a self-contained mask at all times — an export, a
+    // draft or a validation run must never see "paint layers without a
+    // mask". Save replaces it with the hosted URL, and only for surfaces
+    // that actually changed.
+    const data = surfaceDataFor(doc, hit.ownerId, hit.surfaceId)
+    writeSurfaceData(doc, hit.ownerId, hit.surfaceId, {
+      ...data,
+      paint: { ...(data.paint ?? { layers: [] }), mask: hit.state.mask.toDataURL() },
+    })
+    paintSurfaces.markDirty(hit.ownerId, hit.surfaceId)
+    history.record(
+      paintStroke(
+        hit.ownerId,
+        hit.surfaceId,
+        patch.before,
+        patch.after,
+        (ownerId, surfaceId, p) => {
+          const state = paintSurfaces.peek(ownerId, surfaceId)
+          if (!state) return
+          state.mask.applyPatch(p)
+          const d = surfaceDataFor(doc, ownerId, surfaceId)
+          writeSurfaceData(doc, ownerId, surfaceId, {
+            ...d,
+            paint: { ...(d.paint ?? { layers: [] }), mask: state.mask.toDataURL() },
+          })
+          paintSurfaces.markDirty(ownerId, surfaceId)
+          views.viewOf(ownerId)?.update(doc.get(ownerId)!, ['surface'])
+        },
+      ),
+    )
     refreshVisuals()
     ui.refreshAll()
   }
@@ -638,10 +666,7 @@ export async function bootEditor(): Promise<void> {
       selection.retain((id) => doc.has(id))
       ui.refreshAll()
     },
-    maskOf: (id) => {
-      const v = views.viewOf(id)
-      return v instanceof TerrainView ? v.mask : null
-    },
+    paintSurfaces,
     setMessage: (m) => ui.setMessage(m),
   })
 
@@ -1083,6 +1108,26 @@ export async function bootEditor(): Promise<void> {
     renameTexture: (from: string, to: string) => assets.renameTexture(from, to),
     deleteTexture: (name: string) => assets.deleteTexture(name),
     textureRefsOf: (id: string) => JSON.stringify(doc.get(id) ?? null),
+    /** Painted surfaces of an object, keyed by surface id (paint E2E). */
+    paintedSurfaces: (id: string) => {
+      const o = doc.get(id) as {
+        surface?: { paint?: { layers: unknown[]; mask?: string } }
+        surfaces?: Record<string, { paint?: { layers: unknown[]; mask?: string } }>
+      } | null
+      const out: Record<string, { layers: number; hasMask: boolean }> = {}
+      if (o?.surface?.paint)
+        out['surface'] = {
+          layers: o.surface.paint.layers.length,
+          hasMask: Boolean(o.surface.paint.mask),
+        }
+      for (const [sid, data] of Object.entries(o?.surfaces ?? {}))
+        if (data.paint)
+          out[sid] = { layers: data.paint.layers.length, hasMask: Boolean(data.paint.mask) }
+      return out
+    },
+    /** Paint at a screen point with the current brush, as a user drag does. */
+    maskUploadCount: () => saveController.maskUploadCount(),
+    save: () => saveController.save(),
   }
 }
 

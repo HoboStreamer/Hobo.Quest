@@ -13,6 +13,8 @@ import { Mesh } from '@babylonjs/core/Meshes/mesh.js'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData.js'
 import { Scene } from '@babylonjs/core/scene.js'
 import { LayeredSurfaceMaterial, maskTextureFrom } from './layeredSurface.js'
+import { applyPaintedStatic, createModelPaintOverlay } from './paintedStatic.js'
+import { ModelCache } from './modelCache.js'
 import { ParticleSystem } from '@babylonjs/core/Particles/particleSystem.js'
 import { PointLight } from '@babylonjs/core/Lights/pointLight.js'
 import { Color4 as BColor4 } from '@babylonjs/core/Maths/math.color.js'
@@ -28,6 +30,7 @@ import {
   effectiveShape,
   migrateLegacyMix,
   type SurfaceMaterialData,
+  type StaticObjectV2,
 } from '@hobo/content'
 import { Water } from './water.js'
 import {
@@ -122,24 +125,58 @@ export function registerMapAssets(
  * Imported-model static: the box shape stays the (invisible) physics
  * proxy; the glb renders in its place, centered on the proxy.
  */
-function attachModel(scene: Scene, proxy: Mesh, modelId: string): void {
+/**
+ * The game's model cache, so a model placed thirty times is parsed ONCE.
+ *
+ * This used to call `SceneLoader.ImportMeshAsync` per placement, which
+ * re-parsed the same glTF for every copy — the editor already had a cache and
+ * the runtime did not, so a map that opened instantly in the editor took
+ * seconds to load in the game.
+ */
+let gameModelCache: ModelCache | null = null
+const modelCacheFor = (scene: Scene): ModelCache => {
+  if (!gameModelCache || gameModelCache.scene !== scene) gameModelCache = new ModelCache(scene)
+  return gameModelCache
+}
+
+function attachModel(scene: Scene, proxy: Mesh, modelId: string, body?: StaticObjectV2): void {
   const model = mapModels.get(modelId)
   if (!model) return
-  void import('@babylonjs/loaders/glTF/2.0/glTFLoader.js')
-    .then(() => import('@babylonjs/core/Loading/sceneLoader.js'))
-    .then(({ SceneLoader }) =>
-      SceneLoader.ImportMeshAsync('', '', model.glb, scene, undefined, '.glb'),
-    )
-    .then((result) => {
-      const root = result.meshes[0]
-      if (!root) return
-      root.parent = proxy
+  void modelCacheFor(scene)
+    .instantiate(modelId, model.glb)
+    .then((inst) => {
+      if (!inst) return
+      inst.root.parent = proxy
       proxy.visibility = 0
-      for (const m of result.meshes) m.isPickable = false
+      for (const m of inst.root.getChildMeshes()) m.isPickable = false
+      // Painted model slots get the same transparent overlay the editor
+      // uses: the original glTF material stays visible wherever coverage is
+      // zero, so an unpainted model looks exactly as its author exported it.
+      const surfaces = (body?.surfaces ?? {}) as Record<string, SurfaceMaterialData>
+      for (const [surfaceId, data] of Object.entries(surfaces)) {
+        if (!surfaceId.startsWith('mesh:') || !data.paint?.layers.length) continue
+        const path = /^mesh:([^/]+)\/material:\d+$/.exec(surfaceId)?.[1]
+        const target = path ? childAtIndexPath(inst.root, path) : inst.root.getChildMeshes()[0]
+        if (target)
+          createModelPaintOverlay(scene, target, body!.id, surfaceId, data, (_o, _s, d) =>
+            maskTextureFrom(scene, d.paint?.mask),
+          )
+      }
     })
     .catch(() => {
       // Model failed to load — the proxy box stays visible as a stand-in.
     })
+}
+
+/** Walk an index path to a child (matches the editor's surface ids). */
+function childAtIndexPath(root: { getChildren?: () => unknown[] }, path: string): Mesh | null {
+  let node: { getChildren?: () => unknown[] } | null = root
+  for (const part of path.split('/')) {
+    const children = (node?.getChildren?.() ?? []) as Mesh[]
+    node = children[Number(part)] ?? null
+    if (!node) return null
+  }
+  return node as unknown as Mesh
 }
 
 /** Extra terrain patches (mountains, cave shells) from the edited map. */
@@ -254,7 +291,13 @@ function renderStaticBody(
 ): void {
   const mesh = meshForShape(scene, name, effectiveShape(s), s.color)
   applyStaticStyle(scene, mesh, s)
-  if (s.model) attachModel(scene, mesh, s.model)
+  // v2 painted surfaces render through the SAME module the editor uses, so
+  // what an author painted is what players see. Legacy statics with no
+  // surface data are untouched by this.
+  applyPaintedStatic(scene, mesh, s as StaticObjectV2, (_owner, _surface, data) =>
+    maskTextureFrom(scene, data.paint?.mask),
+  )
+  if (s.model) attachModel(scene, mesh, s.model, s as StaticObjectV2)
   mesh.position.set(s.pos[0], s.pos[1], s.pos[2])
   mesh.rotationQuaternion = s.rot
     ? Quaternion.FromEulerAngles(s.rot[0], s.rot[1], s.rot[2])

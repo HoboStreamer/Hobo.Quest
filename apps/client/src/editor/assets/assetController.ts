@@ -16,7 +16,7 @@ import type { MapModelV2, MapTextureEntry } from '@hobo/content'
 import type { EditorDocument } from '../document/editorDocument.js'
 import type { CommandHistory } from '../history/commandHistory.js'
 import { newId } from '../catalog.js'
-import type { ModelCache } from './modelCache.js'
+import type { ModelCache } from '../../render/modelCache.js'
 
 export interface UploadedAsset {
   url: string

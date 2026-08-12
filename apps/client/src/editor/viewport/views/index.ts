@@ -38,14 +38,22 @@ import { NODE_LOOKS } from '../../catalog.js'
 import { meshForShape } from '../../../render/sceneSetup.js'
 import { applyStaticStyle, instantiateMapLight } from '../../../render/mapStyle.js'
 import { LayeredSurfaceMaterial } from '../../../render/layeredSurface.js'
-import { PaintMask } from '../../materials/paintMask.js'
-import type { ModelCache } from '../../assets/modelCache.js'
+import type { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture.js'
+import { WHOLE_SURFACE } from '../../materials/paintableSurface.js'
+import { applyPaintedStatic, createModelPaintOverlay } from '../../../render/paintedStatic.js'
+import type { ModelCache } from '../../../render/modelCache.js'
 import type { EditorObject, EditorObjectKind } from '../../document/editorDocument.js'
 import type { EditorView } from '../editorViewRegistry.js'
 
 /** Everything a view needs that is not the object itself. */
 export interface ViewContext {
   scene: Scene
+  /**
+   * The live mask for a surface, created on demand. Views ask for one
+   * rather than owning it: a box has six independently paintable faces and
+   * a model has one per slot, so a mask belongs to a SURFACE.
+   */
+  maskFor: (ownerId: string, surfaceId: string, data: SurfaceMaterialData) => DynamicTexture
   content: ContentRegistry
   modelCache: ModelCache
   /** Shared wireframe material for terrain sculpt overlays. */
@@ -83,6 +91,8 @@ class StaticView implements EditorView {
   readonly kind = 'static' as const
   readonly root: Mesh
   private modelDisposer: (() => void) | null = null
+  private paintDisposer: (() => void) | null = null
+  private readonly overlays = new Map<string, { mesh: Mesh; dispose: () => void }>()
   private alive = true
 
   constructor(
@@ -92,8 +102,55 @@ class StaticView implements EditorView {
   ) {
     this.root = meshForShape(ctx.scene, `static:${id}`, body.shape, body.color)
     applyStaticStyle(ctx.scene, this.root, body)
+    this.applyPaint()
     this.applyPose()
     if (body.model) this.attachModel(body.model)
+  }
+
+  /**
+   * Painted surfaces on top of the ordinary style. The style runs first so
+   * an unpainted face keeps exactly the look it had; paint only adds
+   * coverage over it.
+   */
+  private applyPaint(): void {
+    this.paintDisposer?.()
+    this.paintDisposer =
+      applyPaintedStatic(this.ctx.scene, this.root, this.body, (owner, surface, data) =>
+        this.ctx.maskFor(owner, surface, data),
+      )?.dispose ?? null
+    this.applyModelPaint()
+  }
+
+  /**
+   * Paint overlays for an imported model's slots. Per INSTANCE: the overlay
+   * is a clone owned by this view, so painting one placement of a model
+   * cannot touch the cached template or any other placement of it.
+   */
+  private applyModelPaint(): void {
+    const surfaces = (this.body.surfaces ?? {}) as Record<string, SurfaceMaterialData>
+    const wanted = new Set(Object.keys(surfaces).filter((k) => k.startsWith('mesh:')))
+    for (const [surfaceId, overlay] of this.overlays) {
+      if (wanted.has(surfaceId)) continue
+      overlay.dispose()
+      this.overlays.delete(surfaceId)
+    }
+    if (wanted.size === 0) return
+    const children = this.root.getChildMeshes()
+    for (const surfaceId of wanted) {
+      if (this.overlays.has(surfaceId)) continue
+      const path = /^mesh:([^/]+)\/material:(\d+)$/.exec(surfaceId)?.[1]
+      const target = path ? childAtPath(this.root, path) : children[0]
+      if (!target) continue
+      const overlay = createModelPaintOverlay(
+        this.ctx.scene,
+        target,
+        this.id,
+        surfaceId,
+        surfaces[surfaceId]!,
+        (owner, surface, data) => this.ctx.maskFor(owner, surface, data),
+      )
+      if (overlay) this.overlays.set(surfaceId, overlay)
+    }
   }
 
   private applyPose(): void {
@@ -118,6 +175,9 @@ class StaticView implements EditorView {
       for (const m of inst.root.getChildMeshes()) m.isPickable = false
       this.modelDisposer = () => inst.dispose()
       this.ctx.reindex(this.id)
+      // The model's own meshes only exist now, so any painted slots on it
+      // can finally get their overlays.
+      this.applyModelPaint()
     })
   }
 
@@ -135,6 +195,7 @@ class StaticView implements EditorView {
     // or model change needs a new mesh.
     if (keys.some((k) => k === 'shape' || k === 'model')) return false
     applyStaticStyle(this.ctx.scene, this.root, this.body)
+    this.applyPaint()
     this.applyPose()
     return true
   }
@@ -145,9 +206,23 @@ class StaticView implements EditorView {
 
   dispose(): void {
     this.alive = false
+    for (const overlay of this.overlays.values()) overlay.dispose()
+    this.overlays.clear()
+    this.paintDisposer?.()
     this.modelDisposer?.()
     this.root.dispose(false, true)
   }
+}
+
+/** Walk an index path (see `paintController`'s `nodePath`) to a child. */
+function childAtPath(root: Mesh, path: string): Mesh | null {
+  let node: { getChildren?: () => unknown[] } | null = root
+  for (const part of path.split('/')) {
+    const children = (node?.getChildren?.() ?? []) as Mesh[]
+    node = children[Number(part)] ?? null
+    if (!node) return null
+  }
+  return node as unknown as Mesh
 }
 
 // ── Resource nodes and props (gameplay stand-ins) ─────────────────────
@@ -451,7 +526,7 @@ export class TerrainView implements EditorView {
   sub: number
   halfExtent: number
   surface: LayeredSurfaceMaterial
-  mask: PaintMask
+  private maskTexture: DynamicTexture
   private terrain: TerrainObjectV2
 
   constructor(
@@ -487,20 +562,14 @@ export class TerrainView implements EditorView {
     this.wire.parent = this.root
     this.wire.setEnabled(false)
 
-    this.mask = new PaintMask(ctx.scene, `pmask:${id}`)
     const data = this.surfaceData()
-    if (data.paint?.mask) {
-      const img = new Image()
-      img.onload = () => this.mask.drawImage(img)
-      img.crossOrigin = 'anonymous'
-      img.src = data.paint.mask
-    }
+    this.maskTexture = ctx.maskFor(id, WHOLE_SURFACE, data)
     this.surface = new LayeredSurfaceMaterial(ctx.scene, `psurf:${id}`, data, {
       baseTiling: Math.max(2, terrain.halfExtent / 2),
       layerTiling: Math.max(2, terrain.halfExtent / 2),
       backFaceCulling: false,
     })
-    this.surface.setMaskTexture(this.mask.texture)
+    this.surface.setMaskTexture(this.maskTexture)
     this.root.material = this.surface.material
     this.applyPose()
   }
@@ -549,7 +618,7 @@ export class TerrainView implements EditorView {
   /** Re-read the material after a base/layer change. */
   refreshSurface(data: SurfaceMaterialData): void {
     this.surface.update(data)
-    this.surface.setMaskTexture(this.mask.texture)
+    this.surface.setMaskTexture(this.maskTexture)
   }
 
   setWireVisible(on: boolean): void {
@@ -585,8 +654,9 @@ export class TerrainView implements EditorView {
   }
 
   dispose(): void {
+    // The mask belongs to the paint registry, which disposes it with the
+    // object — a rebuilt view must not lose what has been painted.
     this.surface.material.dispose()
-    this.mask.texture.dispose()
     this.root.dispose(false, true)
   }
 }

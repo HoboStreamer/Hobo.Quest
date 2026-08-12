@@ -163,6 +163,9 @@ type Probe = {
   renameTexture: (from: string, to: string) => boolean
   deleteTexture: (name: string) => boolean
   textureRefsOf: (id: string) => string
+  paintedSurfaces: (id: string) => Record<string, { layers: number; hasMask: boolean }>
+  maskUploadCount: () => number
+  save: () => Promise<void>
   dirty: boolean
   groupMove: (dx: number, dy: number, dz: number) => void
 }
@@ -963,6 +966,122 @@ section('N. v1 migration smoke — old maps still load')
     },
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+section('S. Painting past terrain: box faces, cylinder, sphere')
+await withMap(
+  PORT + 6,
+  {
+    v: 2,
+    terrains: [],
+    statics: [
+      {
+        id: 'paint-box',
+        shape: { type: 'box', size: [8, 8, 8] },
+        pos: [0, 4, 0],
+        yaw: 0,
+        color: '#c04040',
+      },
+      {
+        id: 'paint-cyl',
+        shape: { type: 'cylinder', radius: 3, height: 6 },
+        pos: [20, 3, 0],
+        yaw: 0,
+        color: '#40c040',
+      },
+      {
+        id: 'paint-sphere',
+        shape: { type: 'sphere', radius: 3 },
+        pos: [-20, 3, 0],
+        yaw: 0,
+        color: '#4040c0',
+      },
+    ],
+    nodes: [],
+    props: [],
+    lights: [],
+    zones: [],
+  },
+  async (pg) => {
+    /** Drag the brush across an object's projected centre. */
+    const paintOn = async (id: string): Promise<void> => {
+      const at = (await probeArgs(
+        pg,
+        ([p, oid]) => {
+          const t = p.transformOf(oid as unknown as string)!
+          return p.worldToScreen(t.position)
+        },
+        id,
+      )) as [number, number]
+      await pg.mouse.move(at[0], at[1])
+      await pg.waitForTimeout(120)
+      await pg.mouse.down()
+      for (let i = 1; i <= 4; i++) {
+        await pg.mouse.move(at[0] + i * 3, at[1] + i * 2)
+        await pg.waitForTimeout(60)
+      }
+      await pg.mouse.up()
+      await pg.waitForTimeout(400)
+    }
+
+    await probeOf(pg, (p) => p.setToolByName('paint'))
+    await probeOf(pg, (p) => p.setPaintTexture('wood_planks'))
+    await pg.waitForTimeout(200)
+
+    await paintOn('paint-box')
+    const box = await probeArgs(
+      pg,
+      ([p, id]) => p.paintedSurfaces(id as unknown as string),
+      'paint-box',
+    )
+    const boxFaces = Object.keys(box).filter((k) => k.startsWith('face:'))
+    ok('a box paints ONE face, not all six', boxFaces.length === 1, box)
+    ok('and that face carries the layer and a mask', box[boxFaces[0]!]?.hasMask === true, box)
+
+    // The face on the far side must be untouched.
+    ok(
+      'the opposite face is unpainted',
+      !Object.keys(box).includes('face:1') || boxFaces[0] === 'face:1',
+      box,
+    )
+
+    await paintOn('paint-cyl')
+    const cyl = await probeArgs(
+      pg,
+      ([p, id]) => p.paintedSurfaces(id as unknown as string),
+      'paint-cyl',
+    )
+    ok('a cylinder paints its whole surface', cyl['surface']?.layers === 1, cyl)
+
+    await paintOn('paint-sphere')
+    const sphere = await probeArgs(
+      pg,
+      ([p, id]) => p.paintedSurfaces(id as unknown as string),
+      'paint-sphere',
+    )
+    ok('a sphere paints its whole surface', sphere['surface']?.layers === 1, sphere)
+
+    // Mask upload is incremental: save twice, upload once.
+    await probeOf(pg, (p) => p.save())
+    await pg.waitForTimeout(900)
+    const afterFirst = await probeOf(pg, (p) => p.maskUploadCount())
+    ok('saving uploads each dirty mask once', afterFirst === 3, afterFirst)
+    await probeOf(pg, (p) => p.save())
+    await pg.waitForTimeout(900)
+    const afterSecond = await probeOf(pg, (p) => p.maskUploadCount())
+    ok('an unchanged mask is NOT re-uploaded on the next save', afterSecond === afterFirst, {
+      afterFirst,
+      afterSecond,
+    })
+
+    const saved = await probeArgs(
+      pg,
+      ([p, id]) => p.paintedSurfaces(id as unknown as string),
+      'paint-cyl',
+    )
+    ok('and the document holds a hosted mask reference', saved['surface']?.hasMask === true, saved)
+  },
+)
 
 // ════════════════════════════════════════════════════════════════════════
 section('R. Asset import, rename and delete are real')

@@ -22,7 +22,7 @@ export interface ModelInstance {
 export class ModelCache {
   private readonly containers = new Map<string, Promise<AssetContainer | null>>()
 
-  constructor(private readonly scene: Scene) {}
+  constructor(readonly scene: Scene) {}
 
   get size(): number {
     return this.containers.size
