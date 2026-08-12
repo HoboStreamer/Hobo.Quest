@@ -6,6 +6,7 @@ import type { Logger } from '@hobo/shared'
 import type { ServerMetrics } from '../observability/metrics.js'
 import { canEditMap, resolveHoboToolsUser } from './hoboToolsAuth.js'
 import { MAX_MAP_BYTES, loadMap, saveMap } from './mapStore.js'
+import type { MapFileV2 } from '@hobo/content'
 
 /**
  * Minimal HTTP layer: health/metrics endpoints and (in production) the
@@ -65,7 +66,7 @@ export function createHttpServer(
   log: Logger,
   mapPath?: string,
   editorAuth?: EditorAuth,
-  onMapSaved?: (body: string) => void,
+  onMapSaved?: (next: MapFileV2, revision: string) => void,
   listCharacters?: (
     token: string,
     auth: string | undefined,
@@ -76,16 +77,15 @@ export function createHttpServer(
   return createServer((req: IncomingMessage, res: ServerResponse) => {
     const url = (req.url ?? '/').split('?')[0] ?? '/'
     if (url === '/map.json' && mapPath) {
-      // Always serve the CANONICAL v2 form with its revision as an ETag, so
-      // editors have something real to send back as If-Match.
+      // The canonical v2 document, with its revision as an ETag. This IS the
+      // wire format: there is no v1 projection any more.
       void loadMap(mapPath).then((rec) => {
         res.writeHead(200, {
           'content-type': 'application/json',
           'cache-control': 'no-cache',
           etag: `"${rec.revision}"`,
         })
-        // v1 projection: the game client and editor have not migrated yet.
-        res.end(JSON.stringify(rec.wire))
+        res.end(JSON.stringify(rec.map))
       })
       return
     }
@@ -137,7 +137,7 @@ export function createHttpServer(
               bytes: body.length,
               revision: outcome.record.revision,
             })
-            onMapSaved?.(JSON.stringify(outcome.record.wire))
+            onMapSaved?.(outcome.record.map, outcome.record.revision)
             res.writeHead(200, {
               'content-type': 'application/json',
               etag: `"${outcome.record.revision}"`,

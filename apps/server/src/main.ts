@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { createContent, mapFileToOverride, setMapOverride, type MapFile } from '@hobo/content'
+import { compileMapFileV2, createContent, parseMapFile, setMapOverride } from '@hobo/content'
 import { openSqliteStore } from '@hobo/persistence/sqlite'
 import { createHeadlessHavokWorld } from '@hobo/physics/havok'
 import { createConsoleLogger } from '@hobo/shared'
@@ -34,11 +34,19 @@ async function main(): Promise<void> {
   // same file over /map.json).
   if (existsSync(config.mapPath)) {
     try {
-      const raw = JSON.parse(readFileSync(config.mapPath, 'utf8')) as MapFile | null
-      if (raw && raw.v === 1) {
-        setMapOverride(mapFileToOverride(raw))
-        content.world.statics.push(...raw.statics)
-        log.info('edited map loaded', { statics: raw.statics.length, sub: raw.sub })
+      // v1 artifacts still load — parseMapFile migrates them — but the
+      // RUNTIME representation is always v2 compiled straight through.
+      const parsed = parseMapFile(JSON.parse(readFileSync(config.mapPath, 'utf8')))
+      if (parsed.ok) {
+        setMapOverride(compileMapFileV2(parsed.map))
+        content.world.statics.push(...parsed.map.statics)
+        log.info('edited map loaded', {
+          statics: parsed.map.statics.length,
+          terrains: parsed.map.terrains.length,
+          migrated: parsed.migrated,
+        })
+      } else {
+        log.warn('edited map invalid — ignoring', { issues: parsed.issues.slice(0, 5).join('; ') })
       }
     } catch (err) {
       log.warn('edited map unreadable — using procedural terrain', { error: String(err) })
@@ -71,21 +79,18 @@ async function main(): Promise<void> {
       key: config.editorKey,
       hoboToolsUrl: config.hoboToolsAuthUrl,
     },
-    (body) => {
-      // LIVE map apply: swap the heightfield under everyone's feet and tell
-      // clients to refetch + rebuild. (Statics still need a restart; the
-      // editor works on terrain/paint live.)
+    // LIVE map apply. Receives the validated v2 DOCUMENT, not a JSON string
+    // of a fabricated v1 wire — the save pipeline has already parsed,
+    // migrated and validated it, so there is nothing to re-parse here.
+    (next, revision) => {
       try {
-        const raw = JSON.parse(body) as MapFile | null
-        if (raw && raw.v === 1) {
-          setMapOverride(mapFileToOverride(raw))
-          world.rebuildTerrain()
-          world.reconcileMapNodes()
-          world.reconcileMapProps()
-          game.broadcastMapReload()
-          editors.broadcastSaved()
-          log.info('map applied live', { sub: raw.sub })
-        }
+        setMapOverride(compileMapFileV2(next))
+        world.rebuildTerrain()
+        world.reconcileMapNodes()
+        world.reconcileMapProps()
+        game.broadcastMapReload()
+        editors.broadcastSaved()
+        log.info('map applied live', { terrains: next.terrains.length, revision })
       } catch (err) {
         log.warn('live map apply failed', { error: String(err) })
       }

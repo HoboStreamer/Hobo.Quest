@@ -2,10 +2,11 @@ import HavokPhysics from '@babylonjs/havok'
 import havokWasmUrl from '@babylonjs/havok/lib/esm/HavokPhysics.wasm?url'
 import {
   createContent,
-  mapFileToOverride,
   setMapOverride,
-  type MapFile,
   type MapLight,
+  compileMapFileV2,
+  parseMapFile,
+  type MapTextureEntry,
 } from '@hobo/content'
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
@@ -56,13 +57,17 @@ async function start(): Promise<void> {
   let mapMix: string | undefined
   let mapLightsBoot: MapLight[] | undefined
   try {
-    const map = (await (await fetch('/map.json')).json()) as MapFile | null
-    registerMapAssets(map)
-    if (map && map.v === 1) {
-      setMapOverride(mapFileToOverride(map))
-      content.world.statics.push(...map.statics)
-      mapMix = map.mix
-      mapLightsBoot = map.lights
+    // /map.json is native v2. parseMapFile still accepts a legacy v1 file
+    // and migrates it, so old artifacts keep working — one direction only.
+    const parsed = parseMapFile(await (await fetch('/map.json')).json())
+    if (parsed.ok) {
+      registerMapAssets({
+        textures: parsed.map.textures as MapTextureEntry[],
+        models: parsed.map.models,
+      })
+      setMapOverride(compileMapFileV2(parsed.map))
+      content.world.statics.push(...parsed.map.statics)
+      mapLightsBoot = parsed.map.lights as unknown as MapLight[]
     }
   } catch {
     // no edited map — procedural terrain
@@ -235,14 +240,17 @@ async function start(): Promise<void> {
     if (msg.t === 'map_reload') {
       void (async () => {
         try {
-          const map = (await (await fetch('/map.json')).json()) as MapFile | null
-          registerMapAssets(map)
-          if (map && map.v === 1) {
-            setMapOverride(mapFileToOverride(map))
+          const parsed = parseMapFile(await (await fetch('/map.json')).json())
+          if (parsed.ok) {
+            registerMapAssets({
+              textures: parsed.map.textures as MapTextureEntry[],
+              models: parsed.map.models,
+            })
+            setMapOverride(compileMapFileV2(parsed.map))
             rebuildTerrainPhysics(physics, content)
-            rebuildTerrainVisual(scene, content, map.mix)
+            rebuildTerrainVisual(scene, content, undefined)
             rebuildTerrainPatchVisuals(scene, content)
-            buildMapLights(scene, map.lights)
+            buildMapLights(scene, parsed.map.lights as unknown as MapLight[])
           }
         } catch {
           // keep the old terrain if the fetch fails

@@ -12,7 +12,7 @@
  * genuinely empty.
  */
 import { z } from 'zod'
-import { FaceStyleSchema, StaticBodySchema } from './schema/world.js'
+import { FaceStyleSchema, StaticBodySchema, type FaceStyle } from './schema/world.js'
 import {
   decodeHeights,
   encodeHeights,
@@ -20,6 +20,7 @@ import {
   type MapLight,
   type MapTextureEntry,
 } from './mapFile.js'
+import type { MapOverride, TerrainPatchData } from './terrain.js'
 import {
   MAX_PAINT_LAYERS,
   PAINT_CHANNELS,
@@ -319,31 +320,33 @@ export function blankHeights(sub: number): string {
 export type { MapLight }
 
 /**
- * Project a v2 document back onto the v1 wire shape.
+ * Compile an authored v2 map into the runtime representation the game and
+ * client physics consume.
  *
- * The artifact on disk and the validation/revision pipeline are v2, but the
- * game client and the editor still consume v1. Rather than flag-day both of
- * them, v2 terrain objects are emitted as v1 `terrains[]` entries (which
- * already carry id/origin/rot/scale/surface) and the mandatory top-level
- * heightfield is emitted EMPTY — a flat, unpainted grid that contributes
- * nothing to `sampleOverride`.
+ * This is the ONE boundary between authoring and runtime. It replaces the
+ * former `v2 → fake v1 → MapOverride` chain, which fabricated a sunken
+ * heightfield purely so v1 consumers would parse. Ids, transforms, scale,
+ * surfaces and paint all survive; nothing is invented.
  *
- * That is what lets v2 have no main terrain while v1 consumers still parse.
+ * No Babylon imports here — @hobo/content stays engine-free so the server can
+ * use it headless.
  */
-export function projectV2ToV1(map: MapFileV2): MapFile {
-  // Match the resolution v1 consumers expect, so the editor's boot guard
-  // (`map.sub === SUB`) accepts the projection. The grid itself is flat and
-  // sunken, so it contributes nothing to the world.
-  const EMPTY_SUB = 128
+export function compileMapFileV2(map: MapFileV2): MapOverride {
   return {
-    v: 1,
-    halfExtent: 100,
-    sub: EMPTY_SUB,
-    // A sunken flat grid: present for the v1 schema, invisible in the world.
-    heights: encodeHeights(new Float32Array((EMPTY_SUB + 1) * (EMPTY_SUB + 1)).fill(-6)),
-    statics: map.statics,
-    // exactOptionalPropertyTypes: drop absent keys instead of emitting
-    // `undefined`, which the v1 types (rightly) do not accept.
+    terrains: map.terrains.map((t): TerrainPatchData => ({
+      id: t.id,
+      origin: t.pos,
+      halfExtent: t.halfExtent,
+      sub: t.sub,
+      heights: decodeHeights(t.heights),
+      ...(t.rot ? { rot: t.rot } : {}),
+      ...(t.scale ? { scale: t.scale } : {}),
+      ...(t.surface ? { surface: t.surface as SurfaceMaterialData } : {}),
+      // Legacy renderers still read these; they mirror the surface base.
+      ...(t.surface?.base.tex ? { tex: t.surface.base.tex } : {}),
+      ...(t.surface?.base.color ? { color: t.surface.base.color } : {}),
+      ...(t.surface?.base.uv ? { uv: t.surface.base.uv as FaceStyle } : {}),
+    })),
     nodes: map.nodes.map((n) => ({ node: n.node, pos: n.pos, ...(n.id ? { id: n.id } : {}) })),
     props: map.props.map((p) => ({
       item: p.item,
@@ -351,22 +354,6 @@ export function projectV2ToV1(map: MapFileV2): MapFile {
       ...(p.id ? { id: p.id } : {}),
       ...(p.yaw !== undefined ? { yaw: p.yaw } : {}),
     })),
-    terrains: map.terrains.map((t) => ({
-      id: t.id,
-      origin: t.pos,
-      halfExtent: t.halfExtent,
-      sub: t.sub,
-      heights: t.heights,
-      ...(t.rot ? { rot: t.rot } : {}),
-      ...(t.scale ? { scale: t.scale } : {}),
-      ...(t.surface ? { surface: t.surface as SurfaceMaterialData } : {}),
-      ...(t.surface?.base.tex !== undefined ? { tex: t.surface.base.tex } : {}),
-      ...(t.surface?.base.color !== undefined ? { color: t.surface.base.color } : {}),
-      ...(t.surface?.base.uv !== undefined ? { uv: t.surface.base.uv } : {}),
-    })),
-    models: map.models,
-    textures: map.textures as MapTextureEntry[],
-    lights: map.lights as unknown as MapLight[],
     ...(map.spawn ? { spawn: map.spawn } : {}),
     ...(map.spawnYaw !== undefined ? { spawnYaw: map.spawnYaw } : {}),
   }

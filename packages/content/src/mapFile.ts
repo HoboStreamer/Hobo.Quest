@@ -1,6 +1,6 @@
 import type { FaceStyle, StaticBody } from './schema/world.js'
 import type { SurfaceMaterialData } from './surface.js'
-import type { MapNodeSpawn, MapOverride, MapPropSpawn, TerrainPatchData } from './terrain.js'
+import type { MapNodeSpawn, MapOverride, MapPropSpawn } from './terrain.js'
 
 /**
  * The edited-map artifact produced by the /editor tool and consumed by the
@@ -106,18 +106,11 @@ export function encodeHeights(heights: Float32Array): string {
   return typeof btoa === 'function' ? btoa(bin) : Buffer.from(bin, 'binary').toString('base64')
 }
 
-export function mapFileToOverride(map: MapFile): MapOverride {
-  return {
-    halfExtent: map.halfExtent,
-    sub: map.sub,
-    heights: decodeHeights(map.heights),
-    nodes: map.nodes ?? [],
-    props: map.props ?? [],
-    terrains: (map.terrains ?? []).map((t): TerrainPatchData => ({
-      ...t,
-      heights: decodeHeights(t.heights),
-    })),
-    ...(map.spawn ? { spawn: map.spawn } : {}),
-    ...(map.spawnYaw !== undefined ? { spawnYaw: map.spawnYaw } : {}),
-  }
+/**
+ * Legacy v1 → runtime, by way of the v2 migration. v1 input is still
+ * accepted; it is just never the runtime representation.
+ */
+export function mapFileToOverride(_map: MapFile): MapOverride {
+  // Implemented in mapFileV2.ts to avoid an import cycle; see compileV1.
+  throw new Error('mapFileToOverride: use parseMapFile() + compileMapFileV2()')
 }

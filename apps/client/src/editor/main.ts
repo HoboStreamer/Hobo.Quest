@@ -21,11 +21,9 @@ import {
   buildTerrainGrid,
   createContent,
   decodeHeights,
-  defaultHeights,
   encodeHeights,
   setMapOverride,
   type FaceStyle,
-  type MapFile,
   type MapLight,
   type MapNodeSpawn,
   type MapTextureEntry,
@@ -37,6 +35,9 @@ import {
   type PaintLayer,
   type SurfaceMaterialData,
   validateSurface,
+  emptyMapV2,
+  parseMapFile,
+  type MapFileV2,
 } from '@hobo/content'
 import { HighlightLayer } from '@babylonjs/core/Layers/highlightLayer.js'
 import { meshForShape } from '../render/sceneSetup.js'
@@ -184,26 +185,29 @@ async function boot(): Promise<void> {
     }
   })
 
-  // ── Load map (or blank floor) ───────────────────────────────────────
-  let heights: Float32Array
-  let placedStatics: StaticBody[] = []
-  let placedNodes: MapNodeSpawn[] = []
-  let savedMix: string | undefined
-  // ONE boot fetch: every loader below reads this same artifact.
+  // ── Load the map ────────────────────────────────────────────────────
+  // /map.json is native v2. parseMapFile migrates a legacy v1 artifact on
+  // the way in, so the editor only ever holds v2 — and a missing or invalid
+  // map is emptyMapV2(), NOT a fabricated starter heightfield.
   const bootResp = await fetch('/map.json')
   const bootRevision = bootResp.headers.get('etag')?.replace(/"/g, '') ?? ''
-  const bootMap = (await bootResp.json().catch(() => null)) as MapFile | null
-  if (bootMap && bootMap.v === 1 && bootMap.sub === SUB) {
-    heights = decodeHeights(bootMap.heights)
-    placedStatics = bootMap.statics
-    placedNodes = bootMap.nodes ?? []
-    savedMix = bootMap.mix
-  } else {
-    heights = defaultHeights(world, SUB)
-  }
+  const bootParsed = parseMapFile(await bootResp.json().catch(() => null))
+  const bootDoc: MapFileV2 = bootParsed.ok ? bootParsed.map : emptyMapV2()
+  if (!bootParsed.ok && bootParsed.issues.length > 0)
+    console.warn('[editor] map rejected, starting empty:', bootParsed.issues.slice(0, 5))
+  let placedStatics: StaticBody[] = bootDoc.statics
+  let placedNodes: MapNodeSpawn[] = bootDoc.nodes as MapNodeSpawn[]
+  // The legacy top-level heightfield is gone: every terrain is an ordinary
+  // object in `patches` below. This buffer only feeds the old main-terrain
+  // mesh, which is retired — it stays flat and disabled.
+  const heights: Float32Array = new Float32Array((SUB + 1) * (SUB + 1)).fill(-6)
+  const savedMix: string | undefined = undefined
 
   // ── Terrain mesh (game-proven winding) + hover wireframe overlay ────
-  setMapOverride({ halfExtent: HALF, sub: SUB, heights })
+  // The runtime override carries TERRAIN OBJECTS only — there is no
+  // top-level heightfield any more. The editor keeps its own `patches` in
+  // sync through refreshGroundSampling() below.
+  setMapOverride({ terrains: [] })
   const grid = buildTerrainGrid(world)
   const terrain = new Mesh('terrain', scene)
   const vd = new VertexData()
@@ -215,9 +219,7 @@ async function boot(): Promise<void> {
   vd.normals = normals
   vd.applyToMesh(terrain, true)
   terrain.isPickable = true
-  const indices = grid.indices
   const cell = (HALF * 2) / SUB
-  const vtx = (i: number, j: number) => (SUB - j) * (SUB + 1) + i
 
   const wire = new Mesh('wire', scene)
   vd.applyToMesh(wire, true)
@@ -231,19 +233,6 @@ async function boot(): Promise<void> {
   wire.position.y = 0.03
   wire.parent = terrain
   wire.setEnabled(false)
-
-  const refreshTerrainMesh = (): void => {
-    for (let j = 0; j <= SUB; j++) {
-      for (let i = 0; i <= SUB; i++) {
-        posBuf[vtx(i, j) * 3 + 1] = heights[j * (SUB + 1) + i] ?? 0
-      }
-    }
-    terrain.updateVerticesData(VertexBuffer.PositionKind, posBuf, true)
-    const nn: number[] = []
-    VertexData.ComputeNormals(posBuf, indices, nn)
-    terrain.updateVerticesData(VertexBuffer.NormalKind, nn, true)
-    wire.updateVerticesData(VertexBuffer.PositionKind, posBuf, true)
-  }
 
   // ── Splat paint ─────────────────────────────────────────────────────
   const mixTex = new DynamicTexture('mix', MIX, scene, false)
@@ -747,24 +736,36 @@ async function boot(): Promise<void> {
   const patchMeshes = new Map<Mesh, PatchState>()
   /** Sculpt wireframe overlay per patch (main terrain has `wire`). */
   const patchWires = new Map<Mesh, Mesh>()
-  const extras = bootMap
-  let patches: PatchState[] = (extras?.terrains ?? []).map((t) => ({
-    ...t,
+  // v2 terrain objects: `pos` is the transform, `origin` is the editor's
+  // in-memory name for the same thing.
+  let patches: PatchState[] = bootDoc.terrains.map((t) => ({
+    id: t.id,
+    origin: t.pos,
+    halfExtent: t.halfExtent,
+    sub: t.sub,
     heights: decodeHeights(t.heights),
+    ...(t.rot ? { rot: t.rot } : {}),
+    ...(t.scale ? { scale: t.scale } : {}),
+    ...(t.surface ? { surface: t.surface as SurfaceMaterialData } : {}),
   }))
   let mapModels: { id: string; name: string; glb: string; bounds: [number, number, number] }[] =
-    extras?.models ?? []
-  let mapTextures: MapTextureEntry[] = extras?.textures ?? []
+    bootDoc.models
+  let mapTextures: MapTextureEntry[] = bootDoc.textures as MapTextureEntry[]
   registerCustomTextures(mapTextures)
-  let mapLightsArr: MapLight[] = extras?.lights ?? []
+  let mapLightsArr: MapLight[] = bootDoc.lights as unknown as MapLight[]
   let placedProps: { id?: string; item: string; pos: [number, number, number]; yaw?: number }[] =
-    extras?.props ?? []
+    bootDoc.props.map((p) => ({
+      item: p.item,
+      pos: p.pos,
+      ...(p.id ? { id: p.id } : {}),
+      ...(p.yaw !== undefined ? { yaw: p.yaw } : {}),
+    }))
   // Stable document ids: everything editable gets one (persisted on save).
   for (const b of placedStatics) b.id = b.id ?? newId('s')
   for (const n of placedNodes) n.id = n.id ?? newId('n')
   for (const pr of placedProps) pr.id = pr.id ?? newId('pr')
-  let spawnPos: [number, number, number] | null = extras?.spawn ?? null
-  let spawnYaw = extras?.spawnYaw ?? 0
+  let spawnPos: [number, number, number] | null = bootDoc.spawn ?? null
+  let spawnYaw = bootDoc.spawnYaw ?? 0
 
   // Spawn flag marker (pole + pennant), moved by the Spawn placeable.
   const spawnFlag = new TransformNode('spawnflag', scene)
@@ -995,7 +996,6 @@ async function boot(): Promise<void> {
   }
 
   // ── Sculpt core ─────────────────────────────────────────────────────
-  const posBuf = terrain.getVerticesData(VertexBuffer.PositionKind) as Float32Array
   terrainTargets.push({ id: 'main', mesh: terrain, heights, sub: SUB, half: HALF, patch: null })
   if (mainGone()) terrain.setEnabled(false)
   let shift = false
@@ -3529,44 +3529,35 @@ async function boot(): Promise<void> {
   })
 
   /**
-   * Signature of the artifact we last synced with. Seeded from the BOOT map:
-   * leaving it empty made the very first poll rebuild the whole world —
-   * disposing meshes, dropping the selection and blanking terrain wires
-   * roughly six seconds after load.
+   * Cheap change signature for the remote-merge poll, seeded from the BOOT
+   * map: leaving it empty made the very first poll rebuild the whole world.
    */
-  const sigOf = (m: MapFile): string =>
-    `${m.heights.length}:${m.statics.length}:${(m.nodes ?? []).length}:${(m.mix ?? '').length}:${(m.terrains ?? []).length}:${(m.models ?? []).length}:${(m.textures ?? []).length}:${(m.lights ?? []).length}`
-  let lastSig = bootMap ? sigOf(bootMap) : ''
+  const sigOfDoc = (m: MapFileV2): string =>
+    `${m.terrains.length}:${m.statics.length}:${m.nodes.length}:${m.props.length}:${m.lights.length}:${m.models.length}:${m.textures.length}`
+  let lastSig = sigOfDoc(bootDoc)
   /** Revision of the map we last loaded — sent as If-Match on save. */
   let baseRevision = bootRevision
 
   // ── Save ────────────────────────────────────────────────────────────
-  const buildFile = (): MapFile => ({
-    v: 1,
-    halfExtent: HALF,
-    sub: SUB,
-    heights: encodeHeights(heights),
-    mix: (mixCtx.canvas as HTMLCanvasElement).toDataURL('image/png'),
-    statics: placedStatics,
-    nodes: placedNodes,
-    props: placedProps,
+  /** Serialize the editor's state as a native v2 document. */
+  const buildFile = (): MapFileV2 => ({
+    v: 2,
     terrains: patches.map((pp) => ({
       id: pp.id,
-      origin: pp.origin,
+      pos: pp.origin,
       halfExtent: pp.halfExtent,
       sub: pp.sub,
       heights: encodeHeights(pp.heights),
       ...(pp.rot ? { rot: pp.rot } : {}),
-      ...(pp.tex ? { tex: pp.tex } : {}),
-      ...(pp.color ? { color: pp.color } : {}),
-      ...(pp.uv ? { uv: pp.uv } : {}),
-      // v2 surface (base + paint layers). `mix` is deliberately NOT written
-      // back: once migrated, the layers own the paint.
-      ...(pp.surface ? { surface: pp.surface } : pp.mix ? { mix: pp.mix } : {}),
+      ...(pp.scale ? { scale: pp.scale } : {}),
+      surface: surfaceDataOf(pp),
     })),
+    statics: placedStatics,
+    nodes: placedNodes,
+    props: placedProps,
+    lights: mapLightsArr as unknown as MapFileV2['lights'],
     models: mapModels,
     textures: mapTextures,
-    lights: mapLightsArr,
     ...(spawnPos ? { spawn: spawnPos, spawnYaw } : {}),
   })
   document.getElementById('save')?.addEventListener('click', () => {
@@ -3592,7 +3583,7 @@ async function boot(): Promise<void> {
         history.markSaved()
         nonHistoryDirt = false
         updateDirty()
-        lastSig = sigOf(file)
+        lastSig = sigOfDoc(file)
       }
       if (resp.status === 409) {
         $e('conflict').style.display = 'flex'
@@ -3623,11 +3614,12 @@ async function boot(): Promise<void> {
       // Unchanged revision = nothing to do. Rebuilding the world on every
       // poll was dropping selections and flickering terrain wires.
       if (served && served === baseRevision) return
-      const map = (await resp2.json()) as MapFile | null
-      if (!map || map.v !== 1 || map.sub !== SUB) return
+      const remote = parseMapFile(await resp2.json())
+      if (!remote.ok) return
+      const map = remote.map
       // Revision safety: a remote save must never wipe local dirty work.
       if (dirty) {
-        const sig2 = sigOf(map)
+        const sig2 = sigOfDoc(map)
         if (sig2 !== lastSig) {
           lastSig = sig2
           $e('conflict').style.display = 'flex'
@@ -3635,29 +3627,24 @@ async function boot(): Promise<void> {
         }
         return
       }
-      const sig = sigOf(map)
+      const sig = sigOfDoc(map)
       if (sig === lastSig) return
       lastSig = sig
       if (served) baseRevision = served
-      heights.set(decodeHeights(map.heights))
-      refreshTerrainMesh()
-      if (map.mix) {
-        const img = new Image()
-        img.onload = () => {
-          mixCtx.drawImage(img, 0, 0, MIX, MIX)
-          mixTex.update()
-        }
-        img.src = map.mix
-      }
       deselect()
       for (const m of [...staticMeshes.keys(), ...nodeMeshes.keys()]) m.dispose()
       staticMeshes.clear()
       nodeMeshes.clear()
       placedStatics = map.statics
-      placedNodes = map.nodes ?? []
+      placedNodes = map.nodes as MapNodeSpawn[]
       for (const m of propMeshes.keys()) m.dispose()
       propMeshes.clear()
-      placedProps = map.props ?? []
+      placedProps = map.props.map((p) => ({
+        item: p.item,
+        pos: p.pos,
+        ...(p.id ? { id: p.id } : {}),
+        ...(p.yaw !== undefined ? { yaw: p.yaw } : {}),
+      }))
       for (const st of placedStatics) renderStatic(st)
       for (const n of placedNodes) renderNode(n)
       for (const pr of placedProps) renderProp(pr)
@@ -3667,13 +3654,23 @@ async function boot(): Promise<void> {
       for (let i = terrainTargets.length - 1; i >= 0; i--) {
         if (terrainTargets[i]!.patch) terrainTargets.splice(i, 1)
       }
-      patches = (map.terrains ?? []).map((t) => ({ ...t, heights: decodeHeights(t.heights) }))
+      surfaces.clear()
+      patches = map.terrains.map((t) => ({
+        id: t.id,
+        origin: t.pos,
+        halfExtent: t.halfExtent,
+        sub: t.sub,
+        heights: decodeHeights(t.heights),
+        ...(t.rot ? { rot: t.rot } : {}),
+        ...(t.scale ? { scale: t.scale } : {}),
+        ...(t.surface ? { surface: t.surface as SurfaceMaterialData } : {}),
+      }))
       for (const pp of patches) buildPatchMesh(pp)
-      mapModels = map.models ?? []
-      mapTextures = map.textures ?? []
+      mapModels = map.models
+      mapTextures = map.textures as MapTextureEntry[]
       refreshImportedPalette()
       for (const l of [...mapLightsArr]) removeLightRender(l)
-      mapLightsArr = map.lights ?? []
+      mapLightsArr = map.lights as unknown as MapLight[]
       for (const l of mapLightsArr) renderLight(l)
       spawnPos = map.spawn ?? null
       spawnYaw = map.spawnYaw ?? 0

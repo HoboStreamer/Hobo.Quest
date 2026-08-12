@@ -143,22 +143,25 @@ export interface TerrainPatchData {
   uv?: FaceStyle
 }
 
+/**
+ * The compiled runtime form of an authored map.
+ *
+ * There is no top-level heightfield any more. v1 had one as a MANDATORY
+ * field, which is what made "no terrain" impossible to express: an empty map
+ * still shipped a grid, so the world always had invisible ground. Terrain is
+ * now just `terrains` — zero or more ordinary objects — and a map with none
+ * genuinely has none.
+ */
 export interface MapOverride {
   /** Editor-placed resource nodes (trees, deposits…) merged into seeding. */
   nodes?: MapNodeSpawn[]
   /** Editor-placed initial props merged into fresh-world seeding. */
   props?: MapPropSpawn[]
-  /** Extra sculptable terrain meshes (mountains, cave shells…). */
-  terrains?: TerrainPatchData[]
+  /** Every terrain object in the map. May be empty. */
+  terrains: TerrainPatchData[]
   /** Editor-placed spawn point (overrides the world def). */
   spawn?: [number, number, number]
   spawnYaw?: number
-
-  halfExtent: number
-  /** Grid points per side (sub+1 columns). */
-  sub: number
-  /** Row-major heights, (sub+1)^2 entries, row 0 at -z. */
-  heights: Float32Array
 }
 
 let mapOverride: MapOverride | null = null
@@ -200,8 +203,13 @@ function bilinearGrid(
  * nodes and props still land on whatever terrain is really there.
  * Rotated (tilted) patches are skipped — they're overhangs, not ground.
  */
-function sampleOverride(map: MapOverride, x: number, z: number): number {
-  let h = bilinearGrid(map.heights, map.sub, map.halfExtent, x, z)
+/**
+ * Highest terrain surface at (x, z), or null when no terrain covers it.
+ * Returning null rather than a fabricated 0 is what lets an empty map be
+ * empty instead of silently having a floor.
+ */
+function sampleOverride(map: MapOverride, x: number, z: number): number | null {
+  let h: number | null = null
   for (const p of map.terrains ?? []) {
     if (p.rot && (Math.abs(p.rot[0]) > 0.02 || Math.abs(p.rot[2]) > 0.02)) continue
     const sx = p.scale?.[0] ?? 1
@@ -213,14 +221,30 @@ function sampleOverride(map: MapOverride, x: number, z: number): number {
     const lz = (z - p.origin[2]) / sz
     if (Math.abs(lx) > p.halfExtent || Math.abs(lz) > p.halfExtent) continue
     const ph = bilinearGrid(p.heights, p.sub, p.halfExtent, lx, lz) * sy + p.origin[1]
-    if (ph > h) h = ph
+    if (h === null || ph > h) h = ph
   }
   return h
 }
 
-/** Terrain elevation at world (x, z). */
-export function terrainHeight(world: WorldDef, x: number, z: number): number {
+/**
+ * Terrain elevation at (x, z), or null where the world has no terrain.
+ * Callers that must place something regardless (spawn fallbacks) decide their
+ * own default instead of the sampler inventing ground.
+ */
+export function terrainHeightAt(world: WorldDef, x: number, z: number): number | null {
   if (mapOverride) return sampleOverride(mapOverride, x, z)
+  if (world.flatTerrain) return 0
+  return terrainHeight(world, x, z)
+}
+
+/** Terrain elevation at world (x, z). */
+/**
+ * Terrain elevation at (x, z), with 0 where there is no terrain — the
+ * convenience form for callers that need a number no matter what. Use
+ * `terrainHeightAt` when "there is no ground here" is meaningful.
+ */
+export function terrainHeight(world: WorldDef, x: number, z: number): number {
+  if (mapOverride) return sampleOverride(mapOverride, x, z) ?? 0
   if (world.flatTerrain) return 0
   let mask = 1
   for (const pad of padsFor(world)) {

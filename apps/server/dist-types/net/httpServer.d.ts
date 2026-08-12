@@ -1,6 +1,7 @@
 import { type Server } from 'node:http'
 import type { Logger } from '@hobo/shared'
 import type { ServerMetrics } from '../observability/metrics.js'
+import type { MapFileV2 } from '@hobo/content'
 export interface EditorAuth {
   /** Shared-secret fallback. */
   key: string | null
@@ -22,7 +23,7 @@ export declare function createHttpServer(
   log: Logger,
   mapPath?: string,
   editorAuth?: EditorAuth,
-  onMapSaved?: (body: string) => void,
+  onMapSaved?: (next: MapFileV2, revision: string) => void,
   listCharacters?: (
     token: string,
     auth: string | undefined,

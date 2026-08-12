@@ -1,8 +1,6 @@
-import { type MapFile, type MapFileV2 } from '@hobo/content'
+import { type MapFileV2 } from '@hobo/content'
 export interface MapRecord {
   map: MapFileV2
-  /** v1 projection for consumers that have not migrated yet. */
-  wire: MapFile
   /** SHA-256 of the canonical form — the ETag clients send back as If-Match. */
   revision: string
   canonical: string

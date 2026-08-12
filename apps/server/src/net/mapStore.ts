@@ -14,19 +14,10 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import {
-  canonicalizeMapFile,
-  emptyMapV2,
-  parseMapFile,
-  projectV2ToV1,
-  type MapFile,
-  type MapFileV2,
-} from '@hobo/content'
+import { canonicalizeMapFile, emptyMapV2, parseMapFile, type MapFileV2 } from '@hobo/content'
 
 export interface MapRecord {
   map: MapFileV2
-  /** v1 projection for consumers that have not migrated yet. */
-  wire: MapFile
   /** SHA-256 of the canonical form — the ETag clients send back as If-Match. */
   revision: string
   canonical: string
@@ -50,8 +41,7 @@ function record(map: MapFileV2): MapRecord {
   delete (bare as { revision?: string }).revision
   const canonical = canonicalizeMapFile(bare)
   const revision = revisionOf(canonical)
-  const withRev: MapFileV2 = { ...bare, revision }
-  return { map: withRev, wire: projectV2ToV1(withRev), revision, canonical }
+  return { map: { ...bare, revision }, revision, canonical }
 }
 
 /**
