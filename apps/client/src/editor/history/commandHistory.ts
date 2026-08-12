@@ -137,6 +137,19 @@ export class CommandHistory<TDoc = unknown> {
   }
 
   /** Record a command WITHOUT running it (the caller already applied it). */
+  /**
+   * Run a command and record it. This is how document commands are issued:
+   * one call, so a caller cannot apply a mutation and forget to make it
+   * undoable, or record one it never applied.
+   *
+   * `record` is the older half of the pair, for mutations that were applied
+   * by hand first; it exists only while the legacy paths are being retired.
+   */
+  apply(cmd: EditorCommand<TDoc>): void {
+    cmd.execute(this.doc)
+    this.record(cmd)
+  }
+
   record(cmd: EditorCommand<TDoc>): void {
     if (this._txn) {
       const last = this._txn.parts[this._txn.parts.length - 1]
