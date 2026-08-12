@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { chromium, type Page } from 'playwright'
+import { chromium, type JSHandle, type Page } from 'playwright'
 
 const PORT = 18195
 const dir = mkdtempSync(join(tmpdir(), 'hobo-repro-'))
@@ -141,12 +141,13 @@ type Probe = {
 }
 // The probe lives in the page; pass it into evaluate() as a JSHandle so the
 // scenarios below can be written as plain typed functions.
-let probeHandle: import('playwright').JSHandle<Probe>
+// Filled in once the page has booted; every helper below reads through it.
+const probe: { handle?: JSHandle<Probe> } = {}
 const ev = <T>(_page: Page, fn: (p: Probe) => T): Promise<T> =>
-  page.evaluate(fn as never, probeHandle as never) as Promise<T>
+  page.evaluate(fn as never, probe.handle as never) as Promise<T>
 /** evaluate with extra arguments (closures never cross the boundary). */
 const evA = <T>(fn: (a: [Probe, ...never[]]) => T, ...args: unknown[]): Promise<T> =>
-  page.evaluate(fn as never, [probeHandle, ...args] as never) as Promise<T>
+  page.evaluate(fn as never, [probe.handle, ...args] as never) as Promise<T>
 
 const browser = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-webgl', '--disable-gpu-sandbox'],
@@ -161,9 +162,9 @@ await page.waitForFunction(() => Boolean((window as never as { __editor?: unknow
   timeout: 90_000,
 })
 await page.waitForTimeout(5000)
-probeHandle = (await page.evaluateHandle(
+probe.handle = (await page.evaluateHandle(
   () => (window as never as { __editor: Probe }).__editor,
-)) as import('playwright').JSHandle<Probe>
+)) as JSHandle<Probe>
 
 // Warm-up: Babylon only learns the cursor position from a real pointermove,
 // and the editor picks with scene.pointerX/Y — so the very first synthetic
@@ -188,7 +189,7 @@ const screenOf = (id: string): Promise<[number, number]> =>
 /** transformOf across the process boundary (closures do not transfer). */
 const xf = (id: string): Promise<{ position: number[]; rotation: number[] | null }> =>
   page.evaluate(([p, oid]) => (p as Probe).transformOf(oid as string)!, [
-    probeHandle,
+    probe.handle,
     id,
   ] as never) as Promise<{ position: number[]; rotation: number[] | null }>
 const posOf = async (id: string): Promise<number[]> => (await xf(id)).position
@@ -369,7 +370,7 @@ const clickEmpty = async (mods: string[] = []): Promise<void> => {
   await page.waitForTimeout(150)
   await page.evaluate(
     ([pr, pos, rot]) => (pr as Probe).setCameraPose(pos as number[], rot as number[]),
-    [probeHandle, HOME_POS, HOME_ROT] as never,
+    [probe.handle, HOME_POS, HOME_ROT] as never,
   )
   // World→screen uses the last RENDERED transform matrix; under swiftshader a
   // frame can take ~250ms, so give the restore time to land.
