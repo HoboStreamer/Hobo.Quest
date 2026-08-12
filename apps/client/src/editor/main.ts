@@ -3184,16 +3184,24 @@ async function boot(): Promise<void> {
    * message) when the surface is at its four-layer budget — the base texture
    * is NEVER swapped out to make room.
    */
+  /** '' in the picker means Plain Colour, which the model calls 'none'. */
+  const paintTint = (): string | undefined => {
+    const el = document.getElementById('paint-color') as HTMLInputElement | null
+    const v = el?.value ?? '#ffffff'
+    // White = untinted; storing it would create a needless second layer.
+    return v.toLowerCase() === '#ffffff' ? undefined : v
+  }
   const activePaintLayer = (patch: PatchState): PaintLayer | null => {
-    const tex = paintTexSel.value
-    if (!tex) {
-      status.textContent = 'pick a paint texture first'
+    const tex = paintTexSel.value || 'none'
+    const color = paintTint()
+    if (tex === 'none' && !color) {
+      status.textContent = 'Plain Colour paint needs a colour — pick one'
       return null
     }
     const data = surfaceDataOf(patch)
-    const alloc = allocateLayer(data.paint, tex, () => newId('pl'))
+    const alloc = allocateLayer(data.paint, tex, () => newId('pl'), color)
     if (!alloc) {
-      status.textContent = `⛔ this surface already uses ${MAX_PAINT_LAYERS} paint textures — remove one in the layer list`
+      status.textContent = `⛔ this surface already uses ${MAX_PAINT_LAYERS} paint layers — remove one in the layer list`
       renderPaintLayers()
       return null
     }
@@ -3204,6 +3212,11 @@ async function boot(): Promise<void> {
     }
     return alloc.layer
   }
+  document.getElementById('paint-color-reset')?.addEventListener('click', () => {
+    const el = document.getElementById('paint-color') as HTMLInputElement | null
+    if (el) el.value = '#ffffff'
+    status.textContent = 'paint tint cleared — strokes use the texture untinted'
+  })
   const beginPaintStroke = (patch: PatchState): boolean => {
     const mesh = [...patchMeshes].find(([, pp]) => pp === patch)?.[0]
     if (!mesh) return false
@@ -3253,7 +3266,21 @@ async function boot(): Promise<void> {
       })
       const name = document.createElement('span')
       name.style.flex = '1'
-      name.textContent = `${layer.channel.toUpperCase()} · ${prettyTexName(layer.tex)}`
+      name.textContent = `${layer.channel.toUpperCase()} · ${
+        layer.tex === 'none' ? 'Plain Colour' : prettyTexName(layer.tex)
+      }`
+      // Editing a layer's tint restyles everywhere that layer is painted.
+      const tint = document.createElement('input')
+      tint.type = 'color'
+      tint.value = layer.color ?? '#ffffff'
+      tint.title = 'layer tint'
+      tint.style.width = '28px'
+      tint.addEventListener('change', () => {
+        if (tint.value.toLowerCase() === '#ffffff') delete layer.color
+        else layer.color = tint.value
+        refreshSurface(patch)
+        markDirty()
+      })
       const clear = document.createElement('button')
       clear.className = 'mini'
       clear.textContent = '␡'
@@ -3278,7 +3305,7 @@ async function boot(): Promise<void> {
         renderPaintLayers()
         markDirty()
       })
-      row.append(vis, name, clear, del)
+      row.append(vis, name, tint, clear, del)
       host.appendChild(row)
     }
   }
@@ -4333,6 +4360,7 @@ async function boot(): Promise<void> {
           tex: l.tex,
           channel: l.channel,
           hidden: Boolean(l.hidden),
+          color: l.color ?? null,
         })),
         hasMask: Boolean(data.paint?.mask),
       }
@@ -4346,6 +4374,10 @@ async function boot(): Promise<void> {
     setPaintTexture: (tex: string) => {
       paintTexSel.value = tex
       paintTexPicker.sync()
+    },
+    setPaintColor: (hex: string) => {
+      const el = document.getElementById('paint-color') as HTMLInputElement | null
+      if (el) el.value = hex
     },
     setToolByName: (t: string) => setTool(t as Tool),
     issueCount: () => issuesPanel.count(),

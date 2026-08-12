@@ -64,13 +64,15 @@ function emptyMask(scene: Scene): Texture {
 
 const FRAGMENT_BLEND = `
   // Coverage for up to four paint layers, packed into one RGBA mask.
+  // Each layer is its texture MULTIPLIED by its tint; a plain-colour layer
+  // simply samples a 1x1 white texture, so tint alone is the paint.
   vec4 hoboCoverage = texture2D(hoboMask, vDiffuseUV);
-  vec3 hoboBase = baseColor.rgb;
-  hoboBase = mix(hoboBase, texture2D(hoboLayer0, vDiffuseUV * hoboScale.x).rgb, hoboCoverage.r * hoboEnabled.x);
-  hoboBase = mix(hoboBase, texture2D(hoboLayer1, vDiffuseUV * hoboScale.y).rgb, hoboCoverage.g * hoboEnabled.y);
-  hoboBase = mix(hoboBase, texture2D(hoboLayer2, vDiffuseUV * hoboScale.z).rgb, hoboCoverage.b * hoboEnabled.z);
-  hoboBase = mix(hoboBase, texture2D(hoboLayer3, vDiffuseUV * hoboScale.w).rgb, hoboCoverage.a * hoboEnabled.w);
-  baseColor.rgb = hoboBase;
+  vec3 hoboOut = baseColor.rgb;
+  hoboOut = mix(hoboOut, texture2D(hoboLayer0, vDiffuseUV * hoboScale.x).rgb * hoboTint0, hoboCoverage.r * hoboEnabled.x);
+  hoboOut = mix(hoboOut, texture2D(hoboLayer1, vDiffuseUV * hoboScale.y).rgb * hoboTint1, hoboCoverage.g * hoboEnabled.y);
+  hoboOut = mix(hoboOut, texture2D(hoboLayer2, vDiffuseUV * hoboScale.z).rgb * hoboTint2, hoboCoverage.b * hoboEnabled.z);
+  hoboOut = mix(hoboOut, texture2D(hoboLayer3, vDiffuseUV * hoboScale.w).rgb * hoboTint3, hoboCoverage.a * hoboEnabled.w);
+  baseColor.rgb = hoboOut;
 `
 
 export interface LayeredSurfaceOptions {
@@ -106,6 +108,7 @@ export class LayeredSurfaceMaterial {
     // unbound sampler can never bleed through.
     m.AddUniform('hoboScale', 'vec4', null)
     m.AddUniform('hoboEnabled', 'vec4', null)
+    for (let i = 0; i < MAX_PAINT_LAYERS; i++) m.AddUniform(`hoboTint${i}`, 'vec3', null)
     m.Fragment_Custom_Diffuse(FRAGMENT_BLEND)
     this.material = m
     this.fallbackMask = emptyMask(scene)
@@ -143,29 +146,39 @@ export class LayeredSurfaceMaterial {
       : new Color3(0.85, 0.85, 0.85)
 
     // ── Layers ──────────────────────────────────────────────────────────
-    for (const t of this.layerTextures) t?.dispose()
+    // The shared white pixel is scene-owned; never dispose it with a layer.
+    for (const t of this.layerTextures) if (t && t.name !== 'hobo:white') t.dispose()
     this.layerTextures = [null, null, null, null]
     const scales: number[] = [1, 1, 1, 1]
     const enabled: number[] = [0, 0, 0, 0]
+    const tints: Color3[] = [Color3.White(), Color3.White(), Color3.White(), Color3.White()]
     for (const layer of activeLayers(data.paint)) {
       const idx = PAINT_CHANNELS.indexOf(layer.channel)
       if (idx < 0) continue
-      const info = resolveTexInfo(layer.tex)
-      if (!info) continue
-      const tx = new Texture(info.url, this.scene)
-      const tiles = layer.scale ?? this.opts.layerTiling ?? 8
-      tx.uScale = tx.vScale = 1
-      this.layerTextures[idx] = tx
-      scales[idx] = tiles
+      // 'none' is a PLAIN COLOUR layer: sample white so the tint is the paint.
+      const info = layer.tex === 'none' ? null : resolveTexInfo(layer.tex)
+      if (!info && layer.tex !== 'none') continue
+      if (info) {
+        const tx = new Texture(info.url, this.scene)
+        tx.uScale = tx.vScale = 1
+        this.layerTextures[idx] = tx
+        scales[idx] = layer.scale ?? this.opts.layerTiling ?? 8
+      } else {
+        this.layerTextures[idx] = white(this.scene)
+        scales[idx] = 1
+      }
+      if (layer.color) tints[idx] = Color3.FromHexString(layer.color)
       enabled[idx] = 1
     }
     this.scales = scales
     this.enabled = enabled
+    this.tints = tints
     this.bind()
   }
 
   private scales: number[] = [1, 1, 1, 1]
   private enabled: number[] = [0, 0, 0, 0]
+  private tints: Color3[] = [Color3.White(), Color3.White(), Color3.White(), Color3.White()]
 
   private bind(): void {
     const m = this.material
@@ -174,8 +187,10 @@ export class LayeredSurfaceMaterial {
       const effect = m.getEffect()
       if (!effect) return
       effect.setTexture('hoboMask', this.maskTexture ?? this.fallbackMask)
-      for (let i = 0; i < MAX_PAINT_LAYERS; i++)
+      for (let i = 0; i < MAX_PAINT_LAYERS; i++) {
         effect.setTexture(`hoboLayer${i}`, this.layerTextures[i] ?? this.fallbackMask)
+        effect.setColor3(`hoboTint${i}`, this.tints[i] ?? Color3.White())
+      }
       effect.setFloat4(
         'hoboScale',
         this.scales[0]!,
@@ -194,7 +209,7 @@ export class LayeredSurfaceMaterial {
   }
 
   dispose(): void {
-    for (const t of this.layerTextures) t?.dispose()
+    for (const t of this.layerTextures) if (t && t.name !== 'hobo:white') t.dispose()
     this.fallbackMask.dispose()
     this.material.dispose()
   }

@@ -72,6 +72,48 @@ describe('paint layer allocation', () => {
   })
 })
 
+describe('paint colour', () => {
+  it('the same texture in two tints becomes two layers', () => {
+    const a = allocateLayer(undefined, 'red_brick', makeId, '#ff0000')!
+    const b = allocateLayer(a.paint, 'red_brick', makeId, '#0000ff')!
+    expect(b.created).toBe(true)
+    expect(a.paint.layers).toHaveLength(2)
+    expect(a.paint.layers.map((l) => l.color)).toEqual(['#ff0000', '#0000ff'])
+  })
+
+  it('the same texture in the SAME tint reuses its layer', () => {
+    const a = allocateLayer(undefined, 'red_brick', makeId, '#ff0000')!
+    const b = allocateLayer(a.paint, 'red_brick', makeId, '#ff0000')!
+    expect(b.created).toBe(false)
+    expect(b.layer.id).toBe(a.layer.id)
+  })
+
+  it('an untinted layer is distinct from a tinted one', () => {
+    const a = allocateLayer(undefined, 'red_brick', makeId)!
+    const b = allocateLayer(a.paint, 'red_brick', makeId, '#00ff00')!
+    expect(b.created).toBe(true)
+    expect(a.paint.layers[0]!.color).toBeUndefined()
+  })
+
+  it('supports plain-colour layers with no texture at all', () => {
+    const a = allocateLayer(undefined, 'none', makeId, '#123456')!
+    expect(a.layer.tex).toBe('none')
+    expect(a.layer.color).toBe('#123456')
+    // 'none' is not a dangling texture reference.
+    expect(
+      validateSurface({ base: {}, paint: { mask: 'data:x', layers: [a.layer] } }, () => false),
+    ).toEqual([])
+  })
+
+  it('flags a plain-colour layer that has no colour', () => {
+    const issues = validateSurface(
+      { base: {}, paint: { mask: 'data:x', layers: [{ id: 'l', tex: 'none', channel: 'r' }] } },
+      () => true,
+    )
+    expect(issues.join(' ')).toContain('no colour')
+  })
+})
+
 describe('base texture survives painting', () => {
   it('painting never touches the base style', () => {
     const surface = emptySurface({ tex: 'custom:sand', color: '#ddccaa' })

@@ -32,8 +32,16 @@ export interface SurfaceStyle {
 
 export interface PaintLayer {
   id: string
-  /** Texture ref, same vocabulary as SurfaceStyle.tex. */
+  /**
+   * Texture ref, same vocabulary as SurfaceStyle.tex. The sentinel 'none'
+   * paints a PLAIN COLOUR — no texture sampled, just `color`.
+   */
   tex: string
+  /**
+   * Tint multiplied into the layer. With a texture it tints the texture;
+   * with tex 'none' it IS the paint. Absent = untinted white.
+   */
+  color?: string
   /** Metres per tile; falls back to the texture registry's default. */
   scale?: number
   /** Which mask channel carries this layer's coverage. */
@@ -64,8 +72,20 @@ export function activeLayers(paint: SurfacePaint | undefined): PaintLayer[] {
   return paint.layers.filter((l) => !l.hidden)
 }
 
-export function layerForTexture(paint: SurfacePaint | undefined, tex: string): PaintLayer | null {
-  return paint?.layers.find((l) => l.tex === tex) ?? null
+/**
+ * A layer is identified by its texture AND its tint: painting red brick and
+ * blue brick are two different paints, so they get two channels rather than
+ * one silently restyling the other.
+ */
+export const sameLayerStyle = (l: PaintLayer, tex: string, color?: string): boolean =>
+  l.tex === tex && (l.color ?? '') === (color ?? '')
+
+export function layerForTexture(
+  paint: SurfacePaint | undefined,
+  tex: string,
+  color?: string,
+): PaintLayer | null {
+  return paint?.layers.find((l) => sameLayerStyle(l, tex, color)) ?? null
 }
 
 export function freeChannel(paint: SurfacePaint | undefined): PaintChannel | null {
@@ -91,9 +111,10 @@ export function allocateLayer(
   paint: SurfacePaint | undefined,
   tex: string,
   makeId: () => string,
+  color?: string,
 ): LayerAllocation | null {
   const current: SurfacePaint = paint ?? { layers: [] }
-  const existing = layerForTexture(current, tex)
+  const existing = layerForTexture(current, tex, color)
   if (existing) {
     // A hidden layer becomes visible again rather than duplicating.
     if (existing.hidden) delete existing.hidden
@@ -101,7 +122,7 @@ export function allocateLayer(
   }
   const channel = freeChannel(current)
   if (!channel) return null
-  const layer: PaintLayer = { id: makeId(), tex, channel }
+  const layer: PaintLayer = { id: makeId(), tex, channel, ...(color ? { color } : {}) }
   current.layers.push(layer)
   return { paint: current, layer, created: true }
 }
@@ -148,7 +169,9 @@ export function validateSurface(
     issues.push(`${paint.layers.length} paint layers exceeds the ${MAX_PAINT_LAYERS} supported`)
   const seen = new Set<PaintChannel>()
   for (const l of paint.layers) {
-    if (!textureExists(l.tex)) issues.push(`missing paint texture "${l.tex}"`)
+    // 'none' is a plain-colour layer, not a texture reference.
+    if (l.tex !== 'none' && !textureExists(l.tex)) issues.push(`missing paint texture "${l.tex}"`)
+    if (l.tex === 'none' && !l.color) issues.push('a plain-colour paint layer has no colour')
     if (seen.has(l.channel)) issues.push(`two paint layers share channel ${l.channel}`)
     seen.add(l.channel)
   }

@@ -42,6 +42,7 @@ export declare class LayeredSurfaceMaterial {
   update(data: SurfaceMaterialData): void
   private scales
   private enabled
+  private tints
   private bind
   dispose(): void
 }
