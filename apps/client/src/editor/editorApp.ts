@@ -33,6 +33,7 @@ import {
 import { Environment } from '../render/environment.js'
 import { registerCustomTextures } from '../render/mapStyle.js'
 import { ModelCache } from './assets/modelCache.js'
+import { AssetController } from './assets/assetController.js'
 import { ENTITY_DEFS, PLACEABLES, newId, type Placeable, type Tool } from './catalog.js'
 import { EditorDocument } from './document/editorDocument.js'
 import { transformOf } from './document/editorObject.js'
@@ -114,9 +115,6 @@ export async function bootEditor(): Promise<void> {
   setMapOverride({ terrains: [] })
   registerCustomTextures(bootMap.textures as MapTextureEntry[])
 
-  let mapModels = [...bootMap.models]
-  let mapTextures = [...bootMap.textures] as MapTextureEntry[]
-
   // ── Views ───────────────────────────────────────────────────────────
   const modelCache = new ModelCache(scene)
   const wireMat = new StandardMaterial('wiremat', scene)
@@ -152,7 +150,7 @@ export async function bootEditor(): Promise<void> {
       modelCache,
       wireMat,
       sampleGround,
-      modelSource: (id) => mapModels.find((m) => m.id === id)?.glb ?? null,
+      modelSource: (id) => doc.modelById(id)?.glb ?? null,
       reindex: (id) => views.reindex(id),
       newId,
     }),
@@ -195,7 +193,7 @@ export async function bootEditor(): Promise<void> {
   const placement = new PlacementTool({
     scene,
     authoredCount: () => doc.listByKind('static').length + doc.listByKind('terrain').length,
-    models: () => mapModels,
+    models: () => doc.models(),
     snapStep: () => Number((document.getElementById('snap') as HTMLInputElement).value),
     snapBypassed: () => router.holding('xf.nosnap'),
   })
@@ -542,6 +540,12 @@ export async function bootEditor(): Promise<void> {
 
   // ── Placement ───────────────────────────────────────────────────────
   const activePlaceable = (): Placeable | null => {
+    // An armed imported model wins until something else is chosen.
+    if (armedModelId !== null && tools.is('mesh')) {
+      const armed = importedPlaceables.get(armedModelId)
+      if (armed && doc.modelById(armedModelId)) return armed
+      armedModelId = null
+    }
     if (tools.is('entity'))
       return (
         ENTITY_DEFS[Number((document.getElementById('entity-sel') as HTMLSelectElement).value)] ??
@@ -558,7 +562,7 @@ export async function bootEditor(): Promise<void> {
     const def = activePlaceable()
     const pose = placement.computePose(def)
     if (!def || !pose) return
-    const made = objectForPlacement(def, pose, mapModels)
+    const made = objectForPlacement(def, pose, doc.models())
     if (!made) return
     // Spawn is a singleton: placing it again moves the one that exists.
     if (made.kind === 'spawn' && doc.has('spawn')) {
@@ -568,6 +572,8 @@ export async function bootEditor(): Promise<void> {
       history.apply(addObject(made.kind, made.object as never, `place ${made.kind}`))
     }
     selection.replace(String(made.object['id']))
+    // One click places one model; picking again is deliberate.
+    armedModelId = null
     ui.refreshAll()
   }
 
@@ -625,13 +631,9 @@ export async function bootEditor(): Promise<void> {
     doc,
     history,
     bootRevision,
-    models: () => mapModels,
-    textures: () => mapTextures,
     onAdopt: (map) => {
-      mapModels = [...map.models]
-      mapTextures = [...map.textures] as MapTextureEntry[]
-      registerCustomTextures(mapTextures)
       doc.replaceFromRemote(map)
+      registerCustomTextures(doc.textures() as MapTextureEntry[])
       history.rebase()
       selection.retain((id) => doc.has(id))
       ui.refreshAll()
@@ -671,8 +673,42 @@ export async function bootEditor(): Promise<void> {
   const bindings = loadBindings(localStorage.getItem('hobo.editor.bindings'))
   const bindingOf = (action: string): Binding => bindings[action] ?? { code: 'F24' }
 
+  const assets = new AssetController({
+    doc,
+    history,
+    modelCache,
+    editorKey: () => (document.getElementById('key') as HTMLInputElement).value.trim(),
+    onAssetsChanged: () => {
+      registerCustomTextures(doc.textures() as MapTextureEntry[])
+      ui.refreshAll()
+    },
+    setMessage: (m) => ui.setMessage(m),
+  })
+
+  /**
+   * Arm the Geometry tool with an imported model, so "Place" in the Asset
+   * browser actually places it.
+   */
+  const placeModel = (modelId: string): void => {
+    const model = doc.modelById(modelId)
+    if (!model) return
+    importedPlaceables.set(modelId, {
+      name: `🗿 ${model.name}`,
+      kind: 'model',
+      modelId,
+    })
+    armedModelId = modelId
+    tools.set('mesh')
+    ui.setMessage(`🗿 "${model.name}" armed — click in the viewport to place it`)
+  }
+  /** Placeables minted from imported models, keyed by model id. */
+  const importedPlaceables = new Map<string, Placeable>()
+  let armedModelId: string | null = null
+
   const ui = createEditorUi({
     shell,
+    assets,
+    placeModel,
     doc,
     views,
     selection,
@@ -685,8 +721,6 @@ export async function bootEditor(): Promise<void> {
     saveController,
     bindings,
     bindingOf,
-    textures: () => mapTextures,
-    models: () => mapModels,
     onPreferences: applyPreferences,
     focusObject: (id) => {
       selection.replace(id)
@@ -1033,6 +1067,22 @@ export async function bootEditor(): Promise<void> {
     setProperty: (ids: string[], key: string, value: unknown) => ui.setProperty(ids, key, value),
     deleteSelection: () => ui.remove(),
     colorOf: (id: string) => (doc.get(id) as { color?: string } | null)?.color ?? null,
+    /** Asset metadata straight from the document (no parallel array). */
+    assetState: () => ({
+      textures: doc.textures().map((t) => ({ name: t.name, url: t.url ?? null })),
+      models: doc.models().map((m) => ({ id: m.id, name: m.name, glb: m.glb })),
+      textureUsage: Object.fromEntries(
+        [...assets.textureUsage()].map(([ref, u]) => [ref, u.count]),
+      ),
+      modelUsage: Object.fromEntries([...assets.modelUsage()].map(([id, u]) => [id, u.count])),
+    }),
+    importTextureBytes: async (name: string, bytes: number[]) => {
+      const file = new File([new Uint8Array(bytes)], name, { type: 'image/png' })
+      return assets.importTexture(file)
+    },
+    renameTexture: (from: string, to: string) => assets.renameTexture(from, to),
+    deleteTexture: (name: string) => assets.deleteTexture(name),
+    textureRefsOf: (id: string) => JSON.stringify(doc.get(id) ?? null),
   }
 }
 

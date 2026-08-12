@@ -7,12 +7,7 @@
  * the status — and because "did this overwrite someone else's work?" is
  * worth being able to read in one place.
  */
-import {
-  canonicalizeMapFile,
-  type MapFileV2,
-  type MapModelV2,
-  type MapTextureEntry,
-} from '@hobo/content'
+import { canonicalizeMapFile, type MapFileV2 } from '@hobo/content'
 import type { EditorDocument } from '../document/editorDocument.js'
 import type { CommandHistory } from '../history/commandHistory.js'
 import type { PaintMask } from '../materials/paintMask.js'
@@ -20,8 +15,6 @@ export interface SaveControllerOptions {
   doc: EditorDocument
   history: CommandHistory<EditorDocument>
   bootRevision: string
-  models: () => readonly MapModelV2[]
-  textures: () => readonly MapTextureEntry[]
   /** Adopt a whole remote/imported/restored document. */
   onAdopt: (map: MapFileV2) => void
   /** The live paint mask for a terrain, if it has one. */

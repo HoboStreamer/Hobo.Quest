@@ -22,6 +22,8 @@ import {
   SPAWN_OBJECT_ID,
   emptyMapV2,
   type MapFileV2,
+  type MapModelV2,
+  type MapTextureEntry,
   type MapLightV2,
   type MapNodeV2,
   type MapPropV2,
@@ -84,6 +86,8 @@ export type DocumentChange =
   | { type: 'removed'; id: string; kind: EditorObjectKind }
   | { type: 'updated'; id: string; kind: EditorObjectKind; keys: readonly string[] }
   | { type: 'replaced'; id: string; kind: EditorObjectKind }
+  /** Model/texture metadata changed (imported, renamed, removed). */
+  | { type: 'assetsChanged' }
   | { type: 'documentReplaced' }
 
 export type DocumentListener = (changes: readonly DocumentChange[], revision: number) => void
@@ -271,6 +275,84 @@ export class EditorDocument {
       // back through history rather than the document replaying anything.
       throw err
     }
+  }
+
+  // ── Asset metadata ──────────────────────────────────────────────────
+  //
+  // Models and textures are map DATA, so the document owns them, exactly
+  // like every other part of the wire. They were held in two mutable arrays
+  // beside the document and re-injected at serialize time, which is the same
+  // two-authorities bug this class exists to remove — just for the fields
+  // nobody had got round to yet.
+  //
+  // They are not selectable objects (there is nothing in the viewport to
+  // click), so they are not `EditorObject`s; they are addressed by their own
+  // ids and announced with `assetsChanged`.
+
+  models(): readonly MapModelV2[] {
+    return this.map.models
+  }
+
+  textures(): readonly MapTextureEntry[] {
+    return this.map.textures as MapTextureEntry[]
+  }
+
+  modelById(id: string): MapModelV2 | null {
+    return this.map.models.find((m) => m.id === id) ?? null
+  }
+
+  textureByName(name: string): MapTextureEntry | null {
+    return (this.map.textures as MapTextureEntry[]).find((t) => t.name === name) ?? null
+  }
+
+  addModelAsset(model: MapModelV2): void {
+    if (this.modelById(model.id)) throw new Error(`model "${model.id}" already exists`)
+    this.map.models.push(clone(model))
+    this.emit({ type: 'assetsChanged' })
+  }
+
+  removeModelAsset(id: string): void {
+    const i = this.map.models.findIndex((m) => m.id === id)
+    if (i < 0) return
+    this.map.models.splice(i, 1)
+    this.emit({ type: 'assetsChanged' })
+  }
+
+  addTextureAsset(texture: MapTextureEntry): void {
+    if (this.textureByName(texture.name))
+      throw new Error(`texture "${texture.name}" already exists`)
+    ;(this.map.textures as MapTextureEntry[]).push(clone(texture))
+    this.emit({ type: 'assetsChanged' })
+  }
+
+  removeTextureAsset(name: string): void {
+    const list = this.map.textures as MapTextureEntry[]
+    const i = list.findIndex((t) => t.name === name)
+    if (i < 0) return
+    list.splice(i, 1)
+    this.emit({ type: 'assetsChanged' })
+  }
+
+  /**
+   * Rename a texture. Callers are responsible for the REFERENCES —
+   * `custom:<name>` appears in terrain and static surfaces — which is why
+   * the Asset Browser does this inside one history transaction rather than
+   * calling it directly.
+   */
+  renameTextureAsset(from: string, to: string): void {
+    if (from === to) return
+    if (this.textureByName(to)) throw new Error(`texture "${to}" already exists`)
+    const entry = (this.map.textures as MapTextureEntry[]).find((t) => t.name === from)
+    if (!entry) return
+    entry.name = to
+    this.emit({ type: 'assetsChanged' })
+  }
+
+  /** Replace the whole asset metadata set (undo of a rename, import). */
+  replaceAssets(models: readonly MapModelV2[], textures: readonly MapTextureEntry[]): void {
+    this.map.models = clone([...models]) as MapFileV2['models']
+    this.map.textures = clone([...textures]) as MapFileV2['textures']
+    this.emit({ type: 'assetsChanged' })
   }
 
   // ── Whole-document ──────────────────────────────────────────────────

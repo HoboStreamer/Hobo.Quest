@@ -14,8 +14,6 @@ import {
   emptyMapV2,
   parseMapFile,
   type MapFileV2,
-  type MapModelV2,
-  type MapTextureEntry,
 } from '@hobo/content'
 import type { EditorDocument } from '../document/editorDocument.js'
 import type { CommandHistory } from '../history/commandHistory.js'
@@ -26,8 +24,6 @@ export interface SaveControllerOptions {
   doc: EditorDocument
   history: CommandHistory<EditorDocument>
   bootRevision: string
-  models: () => readonly MapModelV2[]
-  textures: () => readonly MapTextureEntry[]
   /** Adopt a whole remote/imported/restored document. */
   onAdopt: (map: MapFileV2) => void
   /** The live paint mask for a terrain, if it has one. */
@@ -66,12 +62,11 @@ export function createSaveController(opts: SaveControllerOptions): SaveControlle
 
   const isDirty = (): boolean => nonHistoryDirt || history.isDirty()
 
-  const serialize = (): MapFileV2 => {
-    const map = doc.serialize()
-    map.models = [...opts.models()] as MapFileV2['models']
-    map.textures = [...opts.textures()] as MapFileV2['textures']
-    return map
-  }
+  // The document owns model/texture metadata like everything else on the
+  // wire, so serializing is just serializing. This used to overwrite
+  // `models` and `textures` from two arrays held outside the document —
+  // the last place two authorities described the same map.
+  const serialize = (): MapFileV2 => doc.serialize()
 
   const editorKey = (): string =>
     (document.getElementById('key') as HTMLInputElement | null)?.value.trim() ?? ''

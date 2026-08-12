@@ -35,6 +35,8 @@ describe('AssetBrowser', () => {
     onDeleteTexture: vi.fn(),
     onDeleteModel: vi.fn(),
     onRenameTexture: vi.fn(),
+    onImportTexture: vi.fn(),
+    onImportModel: vi.fn(),
   }
   beforeEach(() => {
     for (const fn of Object.values(callbacks)) fn.mockReset()
@@ -79,14 +81,14 @@ describe('AssetBrowser', () => {
   it('disables Delete for a referenced asset and enables Find', () => {
     browser()
     const actions = root.querySelector('[data-asset="brick"] .asset-actions')!
-    const [find, del] = [...actions.querySelectorAll('button')]
+    const [, find, del] = [...actions.querySelectorAll('button')]
     expect((find as HTMLButtonElement).disabled).toBe(false)
     expect((del as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('allows deleting an unreferenced asset', () => {
     browser()
-    const del = root.querySelectorAll('[data-asset="legacy"] .asset-actions button')[1]!
+    const del = root.querySelectorAll('[data-asset="legacy"] .asset-actions button')[2]!
     expect((del as HTMLButtonElement).disabled).toBe(false)
     del.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(callbacks.onDeleteTexture).toHaveBeenCalledWith('legacy')
@@ -95,7 +97,7 @@ describe('AssetBrowser', () => {
   it('finds usages without also selecting the asset', () => {
     browser()
     root
-      .querySelectorAll('[data-asset="brick"] .asset-actions button')[0]!
+      .querySelectorAll('[data-asset="brick"] .asset-actions button')[1]!
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
     expect(callbacks.onFindUsages).toHaveBeenCalledWith(['s1', 's2'])
     expect(callbacks.onUseTexture).not.toHaveBeenCalled()

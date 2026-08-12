@@ -21,6 +21,8 @@ export interface AssetBrowserCallbacks {
   onDeleteTexture: (name: string) => void
   onDeleteModel: (id: string) => void
   onRenameTexture: (name: string, next: string) => void
+  onImportTexture: (file: File) => void
+  onImportModel: (file: File) => void
 }
 export interface AssetBrowserState {
   textures: readonly MapTextureEntry[]

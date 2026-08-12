@@ -153,6 +153,16 @@ type Probe = {
   objectCounts: () => Record<string, number>
   terrainMeshCount: () => number
   sceneMeshNames: () => string[]
+  assetState: () => {
+    textures: { name: string; url: string | null }[]
+    models: { id: string; name: string; glb: string }[]
+    textureUsage: Record<string, number>
+    modelUsage: Record<string, number>
+  }
+  importTextureBytes: (name: string, bytes: number[]) => Promise<string | null>
+  renameTexture: (from: string, to: string) => boolean
+  deleteTexture: (name: string) => boolean
+  textureRefsOf: (id: string) => string
   dirty: boolean
   groupMove: (dx: number, dy: number, dz: number) => void
 }
@@ -676,6 +686,8 @@ async function withMap(
     })
     try {
       const pg = await br.newPage({ viewport: { width: 1400, height: 900 } })
+      // Asset upload and collaboration both need the editor credential.
+      await pg.addInitScript(() => localStorage.setItem('hobo.editorkey', 'test-admin-key'))
       pg.on('pageerror', (e) =>
         console.log('[pageerror]', String((e as Error).stack ?? e).slice(0, 500)),
       )
@@ -704,6 +716,12 @@ async function withMap(
 const handles = new Map<Page, JSHandle<Probe>>()
 const probeOf = <T>(pg: Page, fn: (p: Probe) => T): Promise<T> =>
   pg.evaluate(fn as never, handles.get(pg) as never) as Promise<T>
+/** Same, with extra arguments — closures never cross the boundary. */
+const probeArgs = <T>(
+  pg: Page,
+  fn: (a: [Probe, ...never[]]) => T,
+  ...args: unknown[]
+): Promise<T> => pg.evaluate(fn as never, [handles.get(pg), ...args] as never) as Promise<T>
 
 // ════════════════════════════════════════════════════════════════════════
 section('O. Live static reconciliation reaches the running server')
@@ -945,6 +963,95 @@ section('N. v1 migration smoke — old maps still load')
     },
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+section('R. Asset import, rename and delete are real')
+await withMap(
+  PORT + 5,
+  {
+    v: 2,
+    terrains: [],
+    statics: [
+      {
+        id: 'asset-box',
+        shape: { type: 'box', size: [2, 2, 2] },
+        pos: [0, 1, 0],
+        yaw: 0,
+        color: '#ffffff',
+      },
+    ],
+    nodes: [],
+    props: [],
+    lights: [],
+    zones: [],
+  },
+  async (pg) => {
+    // A minimal but genuine PNG, so the server's content sniffing accepts it.
+    const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x65, 0x32, 0x65, 0x70, 0x69, 0x78]
+    const first = await probeArgs(
+      pg,
+      ([p, bytes]) => p.importTextureBytes('Red Brick.png', bytes as unknown as number[]),
+      png,
+    )
+    ok('importing a texture returns a usable name', first === 'red_brick', first)
+
+    let state = await probeOf(pg, (p) => p.assetState())
+    ok('the document owns it — no parallel array', state.textures.length === 1, state.textures)
+    ok(
+      'and it is stored by content hash, not embedded',
+      state.textures[0]?.url?.includes('sha256-') === true,
+      state.textures[0],
+    )
+
+    // The same bytes again: the content-addressed store must reuse the blob.
+    const second = await probeArgs(
+      pg,
+      ([p, bytes]) => p.importTextureBytes('other-name.png', bytes as unknown as number[]),
+      png,
+    )
+    state = await probeOf(pg, (p) => p.assetState())
+    ok(
+      'a second import of identical bytes reuses the same asset URL',
+      state.textures[0]?.url === state.textures[1]?.url,
+      state.textures,
+    )
+    void second
+
+    // Reference it, then prove rename rewrites the reference too.
+    await probeOf(pg, (p) => p.setToolByName('select'))
+    await probeOf(pg, (p) => p.selectByIds(['asset-box']))
+    await probeOf(pg, (p) => p.setInspectorTexture('custom:red_brick'))
+    await pg.waitForTimeout(300)
+    state = await probeOf(pg, (p) => p.assetState())
+    ok(
+      'usage counting sees the reference',
+      state.textureUsage['custom:red_brick'] === 1,
+      state.textureUsage,
+    )
+
+    ok(
+      'a referenced texture cannot be deleted',
+      (await probeOf(pg, (p) => p.deleteTexture('red_brick'))) === false,
+    )
+    ok(
+      'an unreferenced one can',
+      (await probeOf(pg, (p) => p.deleteTexture('red_brick_2'))) === true,
+    )
+
+    ok(
+      'rename succeeds',
+      (await probeOf(pg, (p) => p.renameTexture('red_brick', 'stone'))) === true,
+    )
+    const body = await probeOf(pg, (p) => p.textureRefsOf('asset-box'))
+    ok('and it rewrote the object that referenced it', body.includes('custom:stone'), body)
+    ok('leaving no dangling old reference', !body.includes('custom:red_brick'), body)
+
+    await probeOf(pg, (p) => p.undo())
+    await pg.waitForTimeout(200)
+    const undone = await probeOf(pg, (p) => p.textureRefsOf('asset-box'))
+    ok('undo restores the name and the reference', undone.includes('custom:red_brick'), undone)
+  },
+)
 
 // ════════════════════════════════════════════════════════════════════════
 section('Q. Local draft recovery survives a reload')

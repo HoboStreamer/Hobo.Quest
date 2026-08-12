@@ -25,6 +25,8 @@ export interface AssetBrowserCallbacks {
   onDeleteTexture: (name: string) => void
   onDeleteModel: (id: string) => void
   onRenameTexture: (name: string, next: string) => void
+  onImportTexture: (file: File) => void
+  onImportModel: (file: File) => void
 }
 
 export interface AssetBrowserState {
@@ -83,6 +85,24 @@ export class AssetBrowser {
       b.addEventListener('click', () => this.setState({ tab: name }))
       tabs.append(b)
     }
+    // Import lives beside the list it adds to, so the flow is obvious.
+    const importLabel = document.createElement('label')
+    importLabel.className = 'mini asset-import'
+    importLabel.textContent = tab === 'textures' ? '＋ Import texture' : '＋ Import GLB'
+    const importInput = document.createElement('input')
+    importInput.type = 'file'
+    importInput.hidden = true
+    importInput.accept =
+      tab === 'textures' ? 'image/png,image/jpeg,image/webp' : '.glb,model/gltf-binary'
+    importInput.addEventListener('change', () => {
+      const file = importInput.files?.[0]
+      if (!file) return
+      if (tab === 'textures') this.callbacks.onImportTexture(file)
+      else this.callbacks.onImportModel(file)
+      importInput.value = ''
+    })
+    importLabel.append(importInput)
+    tabs.append(importLabel)
     this.root.append(tabs)
 
     const needle = filter.trim().toLowerCase()
@@ -165,6 +185,19 @@ export class AssetBrowser {
   ): HTMLElement {
     const wrap = document.createElement('span')
     wrap.className = 'asset-actions'
+
+    if (kind === 'texture') {
+      const rename = document.createElement('button')
+      rename.type = 'button'
+      rename.textContent = 'Rename'
+      rename.title = 'Rename this texture and every reference to it'
+      rename.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const next = prompt(`Rename "${id}" to:`, id)
+        if (next && next !== id) this.callbacks.onRenameTexture(id, next)
+      })
+      wrap.append(rename)
+    }
 
     const find = document.createElement('button')
     find.type = 'button'

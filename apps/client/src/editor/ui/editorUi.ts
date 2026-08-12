@@ -7,7 +7,6 @@
  * without an engine, a document or a server.
  */
 import type { Environment } from '../../render/environment.js'
-import type { MapModelV2, MapTextureEntry } from '@hobo/content'
 import { validateMapFile } from '@hobo/content'
 import type { EditorDocument } from '../document/editorDocument.js'
 import type { CommandHistory } from '../history/commandHistory.js'
@@ -17,6 +16,7 @@ import type { EditorViewRegistry } from '../viewport/editorViewRegistry.js'
 import type { GizmoController } from '../viewport/gizmoController.js'
 import type { EditorPreferences } from '../viewport/editorPreferences.js'
 import type { Binding } from '../bindings.js'
+import type { AssetController } from '../assets/assetController.js'
 import { createSettingsPanel } from './settingsPanel.js'
 import { createIssuesPanel, type EditorIssue } from './issuesPanel.js'
 import { Outliner } from './outliner.js'
@@ -49,8 +49,9 @@ export interface EditorUiOptions {
   saveController: SaveController
   bindings: Record<string, Binding>
   bindingOf: (action: string) => Binding
-  textures: () => readonly MapTextureEntry[]
-  models: () => readonly MapModelV2[]
+  assets: AssetController
+  /** Arm the placement tool with an imported model. */
+  placeModel: (id: string) => void
   onPreferences: () => void
   focusObject: (id: string) => void
   deleteSelection: () => void
@@ -120,7 +121,7 @@ export function createEditorUi(opts: EditorUiOptions): EditorUi {
     { setProperty: (ids, key, value) => opts.setProperty(ids, key, value) },
     () => [
       { value: '', label: '— none —' },
-      ...opts.textures().map((t) => ({ value: `custom:${t.name}`, label: t.name })),
+      ...doc.textures().map((t) => ({ value: `custom:${t.name}`, label: t.name })),
     ],
   )
 
@@ -131,15 +132,15 @@ export function createEditorUi(opts: EditorUiOptions): EditorUi {
       if (ids.length > 0) opts.setProperty(ids, 'tex', name)
       else (document.getElementById('paint-tex') as HTMLSelectElement).value = name
     },
-    onPlaceModel: (id) => {
-      const index = -1 // imported models are appended to the placement list
-      void index
-      setMessage(`select the Geometry tool to place "${id}"`)
-    },
+    // Genuinely arms the placement tool rather than telling the user to go
+    // and find it themselves.
+    onPlaceModel: (id) => opts.placeModel(id),
     onFindUsages: (ids) => selection.replaceMany(ids),
-    onDeleteTexture: () => setMessage('texture removed from the map'),
-    onDeleteModel: () => setMessage('model removed from the map'),
-    onRenameTexture: () => undefined,
+    onDeleteTexture: (name) => void opts.assets.deleteTexture(name),
+    onDeleteModel: (id) => void opts.assets.deleteModel(id),
+    onRenameTexture: (name, next) => void opts.assets.renameTexture(name, next),
+    onImportTexture: (file) => void opts.assets.importTexture(file),
+    onImportModel: (file) => void opts.assets.importModel(file),
   })
 
   const historyPanel = new HistoryPanel(shell.dockPanels['history']!, (steps) => {
@@ -176,7 +177,7 @@ export function createEditorUi(opts: EditorUiOptions): EditorUi {
   issuesRoot.append(issuesBadge, issuesList)
 
   const issues = createIssuesPanel({
-    collect: () => collectIssues(doc, opts.textures(), opts.models()),
+    collect: () => collectIssues(doc),
     focus: (id) => opts.focusObject(id),
   })
   const settings = createSettingsPanel({
@@ -286,10 +287,10 @@ export function createEditorUi(opts: EditorUiOptions): EditorUi {
     outliner.render()
     refreshSelection()
     assets.setState({
-      textures: opts.textures(),
-      models: opts.models(),
-      textureUsage: usageOf(doc, 'tex'),
-      modelUsage: usageOf(doc, 'model'),
+      textures: doc.textures(),
+      models: doc.models(),
+      textureUsage: opts.assets.textureUsage(),
+      modelUsage: opts.assets.modelUsage(),
     })
     historyPanel.render(history.labels(), history.state())
     renderScene()
@@ -339,42 +340,14 @@ export function createEditorUi(opts: EditorUiOptions): EditorUi {
   }
 }
 
-/** Which objects reference each texture / model, for the Asset browser. */
-function usageOf(
-  doc: EditorDocument,
-  key: 'tex' | 'model',
-): Map<string, { count: number; ids: string[] }> {
-  const out = new Map<string, { count: number; ids: string[] }>()
-  const note = (ref: string | undefined, id: string): void => {
-    if (!ref) return
-    const entry = out.get(ref) ?? { count: 0, ids: [] }
-    entry.count++
-    entry.ids.push(id)
-    out.set(ref, entry)
-  }
-  for (const s of doc.listByKind('static')) note(s[key], s.id)
-  if (key === 'tex')
-    for (const t of doc.listByKind('terrain')) {
-      note(t.surface?.base.tex, t.id)
-      for (const l of t.surface?.paint?.layers ?? []) note(l.tex, t.id)
-    }
-  return out
-}
-
 /**
  * Document validation for the Issues panel. Runs the same
  * `validateMapFile` the SERVER runs, so an issue shown here is exactly what
  * a save would be rejected for, plus the editor-only checks the wire schema
  * cannot express.
  */
-function collectIssues(
-  doc: EditorDocument,
-  textures: readonly MapTextureEntry[],
-  models: readonly MapModelV2[],
-): EditorIssue[] {
+function collectIssues(doc: EditorDocument): EditorIssue[] {
   const map = doc.serialize()
-  map.textures = [...textures] as never
-  map.models = [...models] as never
   const issues: EditorIssue[] = validateMapFile(map).map((message) => ({
     severity: 'error' as const,
     message,

@@ -21,6 +21,8 @@
 import {
   SPAWN_OBJECT_ID,
   type MapFileV2,
+  type MapModelV2,
+  type MapTextureEntry,
   type MapLightV2,
   type MapNodeV2,
   type MapPropV2,
@@ -82,6 +84,10 @@ export type DocumentChange =
       id: string
       kind: EditorObjectKind
     }
+  /** Model/texture metadata changed (imported, renamed, removed). */
+  | {
+      type: 'assetsChanged'
+    }
   | {
       type: 'documentReplaced'
     }
@@ -134,6 +140,23 @@ export declare class EditorDocument {
    * Nesting joins the outer batch rather than opening a second one.
    */
   transact<T>(body: () => T): T
+  models(): readonly MapModelV2[]
+  textures(): readonly MapTextureEntry[]
+  modelById(id: string): MapModelV2 | null
+  textureByName(name: string): MapTextureEntry | null
+  addModelAsset(model: MapModelV2): void
+  removeModelAsset(id: string): void
+  addTextureAsset(texture: MapTextureEntry): void
+  removeTextureAsset(name: string): void
+  /**
+   * Rename a texture. Callers are responsible for the REFERENCES —
+   * `custom:<name>` appears in terrain and static surfaces — which is why
+   * the Asset Browser does this inside one history transaction rather than
+   * calling it directly.
+   */
+  renameTextureAsset(from: string, to: string): void
+  /** Replace the whole asset metadata set (undo of a rename, import). */
+  replaceAssets(models: readonly MapModelV2[], textures: readonly MapTextureEntry[]): void
   /** The canonical wire form, spawn folded back to top level. */
   serialize(): MapFileV2
   /**

@@ -120,6 +120,9 @@ export class EditorViewRegistry {
         this.rebuildAll()
         return
       }
+      // Asset metadata is not an object projection; the views that
+      // reference a model rebuild through their own `updated` change.
+      if (change.type === 'assetsChanged') continue
       if (change.type === 'removed') {
         this.destroy(change.id)
         continue
