@@ -94,9 +94,27 @@
         <div style="color: #ffb46e; font-size: 12px">
           ⚠ Newer map saved by another admin while you have unsaved changes.
         </div>
+        <div id="conflict-summary" class="hint"></div>
         <button id="conflict-load" class="mini">Discard mine · load theirs</button>
+        <button id="conflict-keep" class="mini">Keep mine · dismiss</button>
         <button id="conflict-export" class="mini">💾 Download my local copy</button>
-        <div class="hint"></div>
+        <div class="hint">
+          Nothing here merges. "Keep mine" only dismisses this panel — Save stays refused until you
+          reload.
+        </div>
+      </div>
+      <div style="display: flex; gap: 6px; flex-wrap: wrap">
+        <button
+          id="map-export"
+          class="mini"
+          title="Download the source map, including unsaved edits"
+        >
+          ⬇ Export map
+        </button>
+        <label class="mini" style="cursor: pointer">
+          ⬆ Import map
+          <input id="map-import" type="file" accept="application/json,.json" hidden />
+        </label>
       </div>
       <div class="hint">
         <b>1-4/Q</b> tools · <b>Z</b> free-look · WASD+QE fly (<b>Shift</b> = fast) ·

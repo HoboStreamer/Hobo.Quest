@@ -153,6 +153,8 @@ type Probe = {
   objectCounts: () => Record<string, number>
   terrainMeshCount: () => number
   sceneMeshNames: () => string[]
+  dirty: boolean
+  groupMove: (dx: number, dy: number, dz: number) => void
 }
 // The probe lives in the page; pass it into evaluate() as a JSHandle so the
 // scenarios below can be written as plain typed functions.
@@ -942,6 +944,83 @@ section('N. v1 migration smoke — old maps still load')
     },
   )
 }
+
+// ════════════════════════════════════════════════════════════════════════
+section('Q. Local draft recovery survives a reload')
+await withMap(
+  PORT + 4,
+  {
+    v: 2,
+    terrains: [],
+    statics: [
+      {
+        id: 'draft-box',
+        shape: { type: 'box', size: [2, 2, 2] },
+        pos: [6, 1, 0],
+        yaw: 0,
+        color: '#c04040',
+      },
+    ],
+    nodes: [],
+    props: [],
+    lights: [],
+    zones: [],
+  },
+  async (pg) => {
+    // Edit without saving, then wait past the draft debounce.
+    await probeOf(pg, (p) => p.setToolByName('select'))
+    await probeOf(pg, (p) => p.selectByIds(['draft-box']))
+    await probeOf(pg, (p) => p.groupMove(0, 0, 7))
+    ok('the edit made the document dirty', await probeOf(pg, (p) => p.dirty))
+    await pg.waitForTimeout(2500)
+
+    const stored = await pg.evaluate(
+      () =>
+        new Promise<{ found: boolean; z: number | null }>((resolve) => {
+          const req = indexedDB.open('hobo-editor', 1)
+          req.onerror = () => resolve({ found: false, z: null })
+          req.onsuccess = () => {
+            const db = req.result
+            const get = db.transaction('drafts', 'readonly').objectStore('drafts').getAll()
+            get.onsuccess = () => {
+              const row = (get.result as { map: { statics: { id: string; pos: number[] }[] } }[])[0]
+              const box = row?.map.statics.find((x) => x.id === 'draft-box')
+              resolve({ found: Boolean(row), z: box?.pos[2] ?? null })
+            }
+            get.onerror = () => resolve({ found: false, z: null })
+          }
+        }),
+    )
+    ok('the unsaved work was written to a local draft', stored.found, stored)
+    ok('and the draft holds the EDITED document, not the server one', stored.z === 7, stored)
+
+    // Reload with the dialog accepted: the draft comes back.
+    pg.on('dialog', (d) => void d.accept())
+    await pg.reload()
+    await pg.waitForSelector('#save', { timeout: 90_000 })
+    await pg.waitForFunction(() => Boolean((window as never as { __editor?: unknown }).__editor), {
+      timeout: 90_000,
+    })
+    handles.set(
+      pg,
+      await pg.evaluateHandle(() => (window as never as { __editor: Probe }).__editor),
+    )
+    await pg.waitForTimeout(800)
+    const restored = await probeOf(pg, (p) => p.transformOf('draft-box'))
+    ok('the restored document has the unsaved edit', restored?.position[2] === 7, restored)
+    ok('and it is still unsaved — a draft is never published', await probeOf(pg, (p) => p.dirty))
+
+    // The server was never told; its copy is untouched.
+    const onServer = (await (await fetch(`http://127.0.0.1:${PORT + 4}/map.json`)).json()) as {
+      statics: { id: string; pos: number[] }[]
+    }
+    ok(
+      'the server copy is unchanged — nothing was auto-published',
+      onServer.statics.find((x) => x.id === 'draft-box')!.pos[2] === 0,
+      onServer.statics,
+    )
+  },
+)
 
 console.log(
   `\n${'═'.repeat(64)}\n${checks - failures}/${checks} checks passed, ${failures} FAILED\n`,

@@ -30,6 +30,8 @@ import {
   type PaintLayer,
   type SurfaceMaterialData,
   validateSurface,
+  describeDiff,
+  diffMapFileV2,
   emptyMapV2,
   parseMapFile,
   type MapFileV2,
@@ -56,6 +58,7 @@ import {
   scrubAllNumbers,
   type TexOption,
 } from './ui.js'
+import { DraftStore, indexedDbDraftStorage } from './recovery/draftStore.js'
 import { InteractionController } from './interaction/interactionController.js'
 import { CommandHistory } from './history/commandHistory.js'
 import { TransformSession, type TransformAccessor } from './viewport/transformSession.js'
@@ -415,10 +418,13 @@ async function boot(): Promise<void> {
   const markDirty = (): void => {
     nonHistoryDirt = true
     updateDirty()
+    noteDraft()
   }
   window.addEventListener('beforeunload', (e) => {
     if (dirty) e.preventDefault()
   })
+  /** Set once the boot sequence has wired the draft store (see below). */
+  let noteDraft: () => void = () => {}
   /** Rough retained size, so paint/terrain strokes obey the memory budget. */
   const opBytes = (op: UndoOp): number => {
     if (op.kind === 'terrain') return op.before.byteLength * 2
@@ -3319,14 +3325,28 @@ async function boot(): Promise<void> {
   })
 
   /**
-   * Cheap change signature for the remote-merge poll, seeded from the BOOT
-   * map: leaving it empty made the very first poll rebuild the whole world.
+   * The map as last loaded from (or saved to) the server, and its revision.
+   *
+   * This used to be a signature of ARRAY LENGTHS. Two maps with the same
+   * counts compared equal, so moving every object in the map registered as
+   * "no change" and a remote save could be silently ignored. The real
+   * question — what actually differs — is `diffMapFileV2`.
    */
-  const sigOfDoc = (m: MapFileV2): string =>
-    `${m.terrains.length}:${m.statics.length}:${m.nodes.length}:${m.props.length}:${m.lights.length}:${m.models.length}:${m.textures.length}`
-  let lastSig = sigOfDoc(bootDoc)
+  let remoteDoc: MapFileV2 = bootDoc
   /** Revision of the map we last loaded — sent as If-Match on save. */
   let baseRevision = bootRevision
+
+  /**
+   * Crash/reload recovery. The draft is the map DOCUMENT, written to
+   * IndexedDB shortly after you stop editing, and NEVER published — a crash
+   * recovering itself into everyone else's world would be worse than losing
+   * the work. Keyed by server origin + map path so one map's work can never
+   * be restored into another.
+   */
+  const drafts = new DraftStore({
+    storage: indexedDbDraftStorage(),
+    mapKey: `${location.origin}/map.json`,
+  })
 
   // ── Save ────────────────────────────────────────────────────────────
   /** Serialize the editor's state as a native v2 document. */
@@ -3403,10 +3423,12 @@ async function boot(): Promise<void> {
         history.markSaved()
         nonHistoryDirt = false
         updateDirty()
-        lastSig = sigOfDoc(file)
+        remoteDoc = file
+        // The work is on the server; the local draft is obsolete.
+        void drafts.markSaved()
       }
       if (resp.status === 409) {
-        $e('conflict').style.display = 'flex'
+        await showConflict()
         status.textContent = '⚠ another admin saved first — your revision is stale'
         return
       }
@@ -3439,79 +3461,153 @@ async function boot(): Promise<void> {
       const map = remote.map
       // Revision safety: a remote save must never wipe local dirty work.
       if (dirty) {
-        const sig2 = sigOfDoc(map)
-        if (sig2 !== lastSig) {
-          lastSig = sig2
-          $e('conflict').style.display = 'flex'
+        if (!diffMapFileV2(remoteDoc, map).empty) {
+          remoteDoc = map
+          await showConflict()
           status.textContent = '⚠ another admin saved while you have unsaved changes'
         }
         return
       }
-      const sig = sigOfDoc(map)
-      if (sig === lastSig) return
-      lastSig = sig
+      if (diffMapFileV2(remoteDoc, map).empty) return
+      remoteDoc = map
       if (served) baseRevision = served
-      deselect()
-      for (const m of [...staticMeshes.keys(), ...nodeMeshes.keys()]) m.dispose()
-      staticMeshes.clear()
-      nodeMeshes.clear()
-      placedStatics = map.statics
-      placedNodes = map.nodes
-      mapZones = map.zones
-      for (const m of propMeshes.keys()) m.dispose()
-      propMeshes.clear()
-      placedProps = map.props
-      for (const st of placedStatics) renderStatic(st)
-      for (const n of placedNodes) renderNode(n)
-      for (const pr of placedProps) renderProp(pr)
-      // Patches: rebuild from the remote artifact.
-      for (const m of patchMeshes.keys()) m.dispose()
-      patchMeshes.clear()
-      for (let i = terrainTargets.length - 1; i >= 0; i--) {
-        if (terrainTargets[i]!.patch) terrainTargets.splice(i, 1)
-      }
-      surfaces.clear()
-      patches = map.terrains.map((t) => ({
-        id: t.id,
-        origin: t.pos,
-        halfExtent: t.halfExtent,
-        sub: t.sub,
-        heights: decodeHeights(t.heights),
-        ...(t.rot ? { rot: t.rot } : {}),
-        ...(t.scale ? { scale: t.scale } : {}),
-        ...(t.surface ? { surface: t.surface as SurfaceMaterialData } : {}),
-      }))
-      for (const pp of patches) buildPatchMesh(pp)
-      mapModels = map.models
-      mapTextures = map.textures as MapTextureEntry[]
-      refreshImportedPalette()
-      for (const l of [...mapLightsArr]) removeLightRender(l)
-      mapLightsArr = map.lights as unknown as MapLight[]
-      for (const l of mapLightsArr) renderLight(l)
-      spawnPos = map.spawn ?? null
-      spawnYaw = map.spawnYaw ?? 0
-      placeSpawnFlag()
+      applyRemoteDocument(map)
       status.textContent = '🔄 merged edits from another admin'
     } catch {
       /* offline poll */
     }
   }
+
+  /**
+   * Adopt a whole document — a remote save the local copy is clean for, an
+   * import, or a restored draft. Views are rebuilt from it; selection is
+   * dropped because the objects behind it may be gone.
+   */
+  function applyRemoteDocument(map: MapFileV2): void {
+    deselect()
+    for (const m of [...staticMeshes.keys(), ...nodeMeshes.keys()]) m.dispose()
+    staticMeshes.clear()
+    nodeMeshes.clear()
+    placedStatics = map.statics
+    placedNodes = map.nodes
+    mapZones = map.zones
+    for (const m of propMeshes.keys()) m.dispose()
+    propMeshes.clear()
+    placedProps = map.props
+    for (const st of placedStatics) renderStatic(st)
+    for (const n of placedNodes) renderNode(n)
+    for (const pr of placedProps) renderProp(pr)
+    // Patches: rebuild from the remote artifact.
+    for (const m of patchMeshes.keys()) m.dispose()
+    patchMeshes.clear()
+    for (let i = terrainTargets.length - 1; i >= 0; i--) {
+      if (terrainTargets[i]!.patch) terrainTargets.splice(i, 1)
+    }
+    surfaces.clear()
+    patches = map.terrains.map((t) => ({
+      id: t.id,
+      origin: t.pos,
+      halfExtent: t.halfExtent,
+      sub: t.sub,
+      heights: decodeHeights(t.heights),
+      ...(t.rot ? { rot: t.rot } : {}),
+      ...(t.scale ? { scale: t.scale } : {}),
+      ...(t.surface ? { surface: t.surface as SurfaceMaterialData } : {}),
+    }))
+    for (const pp of patches) buildPatchMesh(pp)
+    mapModels = map.models
+    mapTextures = map.textures as MapTextureEntry[]
+    refreshImportedPalette()
+    for (const l of [...mapLightsArr]) removeLightRender(l)
+    mapLightsArr = map.lights as unknown as MapLight[]
+    for (const l of mapLightsArr) renderLight(l)
+    spawnPos = map.spawn ?? null
+    spawnYaw = map.spawnYaw ?? 0
+    placeSpawnFlag()
+  }
   setInterval(() => void mergeRemote(), 6000)
+  /**
+   * Show the conflict panel with a summary of what actually differs.
+   *
+   * There is deliberately no "merge" button. Nothing here merges: the choice
+   * is take theirs, keep working on mine, or export mine — and the panel says
+   * exactly that rather than implying a three-way merge that does not exist.
+   */
+  const showConflict = async (): Promise<void> => {
+    $e('conflict').style.display = 'flex'
+    try {
+      const resp = await fetch('/map.json')
+      const parsedRemote = parseMapFile(await resp.json())
+      if (parsedRemote.ok) {
+        const lines = describeDiff(diffMapFileV2(buildFile(), parsedRemote.map))
+        $e('conflict-summary').textContent = lines.length
+          ? `Theirs differs from yours — ${lines.join('; ')}`
+          : 'Theirs differs from yours in ways this summary cannot name.'
+      }
+    } catch {
+      $e('conflict-summary').textContent = 'Could not fetch the remote map to compare.'
+    }
+  }
+
+  const downloadJson = (map: MapFileV2, name: string): void => {
+    const blob = new Blob([JSON.stringify(map, null, 2)], { type: 'application/json' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = name
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+  }
+
   document.getElementById('conflict-load')?.addEventListener('click', () => {
     // Explicit choice: discard local changes and take the remote version.
     nonHistoryDirt = false
     history.markSaved()
     updateDirty()
-    lastSig = ''
+    remoteDoc = emptyMapV2()
     $e('conflict').style.display = 'none'
+    void drafts.discard()
     void mergeRemote()
   })
+  document.getElementById('conflict-keep')?.addEventListener('click', () => {
+    // Keep editing locally. Saving will still 409 until the editor reloads —
+    // this dismisses the panel, it does not resolve anything.
+    $e('conflict').style.display = 'none'
+    status.textContent = 'keeping your version — Save will still be refused until you reload'
+  })
   document.getElementById('conflict-export')?.addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(buildFile())], { type: 'application/json' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = `hoboquest-map-local-${Date.now()}.json`
-    a.click()
+    downloadJson(buildFile(), `hoboquest-map-local-${Date.now()}.json`)
+  })
+
+  // ── Import / export ─────────────────────────────────────────────────
+  document.getElementById('map-export')?.addEventListener('click', () => {
+    // The authoritative source document, INCLUDING unsaved edits.
+    downloadJson(buildFile(), `hoboquest-map-${Date.now()}.json`)
+  })
+  document.getElementById('map-import')?.addEventListener('change', (e) => {
+    const file = (e.target as HTMLInputElement).files?.[0]
+    if (!file) return
+    void (async () => {
+      let raw: unknown
+      try {
+        raw = JSON.parse(await file.text())
+      } catch {
+        status.textContent = '⛔ that file is not JSON'
+        return
+      }
+      // v1 migrates, v2 validates; either way the issues are shown BEFORE
+      // anything local is replaced.
+      const parsedImport = parseMapFile(raw)
+      if (!parsedImport.ok) {
+        status.textContent = `⛔ import rejected: ${parsedImport.issues.slice(0, 3).join('; ')}`
+        return
+      }
+      if (dirty && !confirm('Replace your unsaved work with the imported map?')) return
+      applyRemoteDocument(parsedImport.map)
+      markDirty()
+      status.textContent = parsedImport.migrated
+        ? '📥 imported (migrated from v1) — Save to publish'
+        : '📥 imported — Save to publish'
+    })()
   })
 
   // ── Live presence: co-editors as floating eyeballs ──────────────────
@@ -3972,6 +4068,52 @@ async function boot(): Promise<void> {
   })
 
   // Blender-style drag-scrub on every numeric input (incl. dynamic panels).
+  // ── Draft recovery ──────────────────────────────────────────────────
+  // Persist a moment after editing stops (the DraftStore debounces), so a
+  // terrain stroke is one write rather than hundreds.
+  noteDraft = (): void => {
+    if (dirty) drafts.noteChange(buildFile(), baseRevision)
+  }
+  history.onChange(() => noteDraft())
+  // A tab being hidden is the last reliable moment before it is discarded.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') void drafts.flush()
+  })
+
+  void (async () => {
+    const draft = await drafts.pendingDraft(baseRevision)
+    if (draft) {
+      const age = Math.max(1, Math.round((Date.now() - draft.savedAt) / 60_000))
+      if (
+        confirm(
+          `Unsaved local work found from ~${age} minute(s) ago.\n\n` +
+            'OK: restore it (it is NOT published until you Save).\n' +
+            'Cancel: discard it and keep the server version.',
+        )
+      ) {
+        applyRemoteDocument(draft.map)
+        markDirty()
+        status.textContent = '↩ restored your unsaved draft — Save to publish it'
+        return
+      }
+      await drafts.discard()
+      return
+    }
+    // A draft whose parent revision is gone cannot be applied safely, but the
+    // work should not simply vanish either.
+    const stale = await drafts.staleDraft(baseRevision)
+    if (
+      stale &&
+      confirm(
+        'An unsaved draft exists, but the map has been saved by someone else since.\n\n' +
+          'OK: download the draft so nothing is lost.\nCancel: discard it.',
+      )
+    ) {
+      downloadJson(stale.map, `hoboquest-map-draft-${stale.savedAt}.json`)
+    }
+    await drafts.discard()
+  })()
+
   scrubAllNumbers(document)
 
   // ── Editor probe API (harness-only; NOT a game/public API) ──────────
