@@ -25,6 +25,8 @@ export class ServerMetrics {
   mapStatics = 0
   mapTerrains = 0
   mapZones = 0
+  /** Cumulative map-layer body rebuilds; identical saves must not move it. */
+  mapRebuilds = 0
 
   private emaAlpha = 0.05
 
@@ -48,6 +50,7 @@ export class ServerMetrics {
       mapStatics: this.mapStatics,
       mapTerrains: this.mapTerrains,
       mapZones: this.mapZones,
+      mapRebuilds: this.mapRebuilds,
       memRssMb: round2(process.memoryUsage.rss() / 1024 / 1024),
     }
   }

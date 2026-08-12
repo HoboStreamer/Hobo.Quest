@@ -1,16 +1,15 @@
 import {
-  buildPatchGrid,
   buildTerrainGrid,
   getMapOverride,
   terrainHeight,
   worldSpawn,
   effectiveShape,
-  scalePatchPositions,
 } from '@hobo/content'
 import type { ContentRegistry, StaticBody, WorldShape } from '@hobo/content'
 import { EntityStore, ZoneIndex, type GameEntity, type MotionState } from '@hobo/gameplay'
 import type { ConstraintDto, PersistenceStore, WorldEntityDto } from '@hobo/persistence'
 import { MapStaticLayer } from './mapStaticLayer.js'
+import { MapTerrainLayer } from './mapTerrainLayer.js'
 import {
   CollisionLayer,
   type BodyId,
@@ -71,6 +70,7 @@ export class GameWorld {
   ) {
     this.zones = new ZoneIndex(content.world.zones)
     this.mapStatics = new MapStaticLayer(physics)
+    this.mapTerrain = new MapTerrainLayer(physics)
     this.reconcileMapZones()
     this.buildStaticWorld()
   }
@@ -89,7 +89,7 @@ export class GameWorld {
     // Heightfield terrain — the SAME grid the client builds for prediction
     // and rendering (see @hobo/content buildTerrainGrid).
     this.terrainBody = this.buildTerrainBody()
-    this.patchBodies = this.buildPatchBodies()
+    this.mapTerrain.reconcile(getMapOverride()?.terrains ?? [])
     // Invisible boundary walls: past the terrain edge there is only ocean
     // and an endless fall — the island's edge is the end of the world.
     const b = world.groundHalfExtent + 0.5
@@ -129,41 +129,10 @@ export class GameWorld {
   }
 
   private terrainBody: BodyId | null = null
-  private patchBodies: BodyId[] = []
+  private readonly mapTerrain: MapTerrainLayer
   private readonly mapStatics: MapStaticLayer
 
   /** Trimesh bodies for the map's extra terrain patches (world-space verts). */
-  private buildPatchBodies(): BodyId[] {
-    const bodies: BodyId[] = []
-    for (const patch of getMapOverride()?.terrains ?? []) {
-      const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
-      const rot = patch.rot ? qfromEuler(quat(), patch.rot[0], patch.rot[1], patch.rot[2]) : quat()
-      // Scale the vertices rather than the body: Babylon/Havok apply
-      // scale→rotate→translate, matching the client mesh's `scaling`.
-      const positions = scalePatchPositions(grid.positions, patch.scale)
-      bodies.push(
-        this.physics.addBody({
-          shape: { type: 'trimesh', positions, indices: grid.indices },
-          motion: 'static',
-          pos: vec3(patch.origin[0], patch.origin[1], patch.origin[2]),
-          rot,
-          layer: CollisionLayer.Static,
-          collidesWith: CollisionLayer.Prop | CollisionLayer.Player,
-        }),
-      )
-    }
-    return bodies
-  }
-
-  /**
-   * The BASE WORLD's procedural terrain collider.
-   *
-   * Not built when a map is loaded: the map's own terrain objects ARE the
-   * ground, and this grid resampled them onto a world-sized trimesh — a second
-   * floor at every authored height, and for a map with NO terrain a flat sheet
-   * at y = 0 that nothing rendered but everything stood on. A blank map must
-   * genuinely have nothing to stand on.
-   */
   private buildTerrainBody(): BodyId | null {
     if (getMapOverride()) return null
     const grid = buildTerrainGrid(this.content.world)
@@ -177,11 +146,25 @@ export class GameWorld {
   }
 
   /** Live map edit: swap terrain + patch collision for the new map. */
-  rebuildTerrain(): void {
-    if (this.terrainBody !== null) this.physics.removeBody(this.terrainBody)
-    this.terrainBody = this.buildTerrainBody()
-    for (const b of this.patchBodies) this.physics.removeBody(b)
-    this.patchBodies = this.buildPatchBodies()
+  /**
+   * Live map save: bring terrain collision up to date.
+   *
+   * This used to remove and recreate EVERY terrain body, so retinting one
+   * surface rebuilt the collision for the whole map. The layer reconciles by
+   * stable id and its signature covers only what collision depends on, so a
+   * surface-only edit touches no body and a sculpt rebuilds exactly one.
+   */
+  reconcileMapTerrain(): void {
+    // The base world's procedural collider exists only when there is no map;
+    // whether one is loaded can change between saves.
+    const wantBase = getMapOverride() === null
+    if (!wantBase && this.terrainBody !== null) {
+      this.physics.removeBody(this.terrainBody)
+      this.terrainBody = null
+    } else if (wantBase && this.terrainBody === null) {
+      this.terrainBody = this.buildTerrainBody()
+    }
+    this.mapTerrain.reconcile(getMapOverride()?.terrains ?? [])
   }
 
   /** Live-apply diagnostics and tests: what the map layers currently hold. */
@@ -190,7 +173,12 @@ export class GameWorld {
   }
 
   mapTerrainCount(): number {
-    return this.patchBodies.length
+    return this.mapTerrain.size
+  }
+
+  /** Cumulative map-layer body rebuilds, for churn assertions. */
+  mapRebuildCount(): number {
+    return this.mapStatics.rebuilds + this.mapTerrain.rebuilds
   }
 
   mapZoneCount(): number {

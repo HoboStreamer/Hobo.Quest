@@ -24,6 +24,8 @@ export declare class ServerMetrics {
   mapStatics: number
   mapTerrains: number
   mapZones: number
+  /** Cumulative map-layer body rebuilds; identical saves must not move it. */
+  mapRebuilds: number
   private emaAlpha
   recordTick(totalMs: number, physicsMs: number): void
   snapshot(): Record<string, number>

@@ -181,9 +181,15 @@ function childAtIndexPath(root: { getChildren?: () => unknown[] }, path: string)
 
 /** Extra terrain patches (mountains, cave shells) from the edited map. */
 let legacyLayer = 0
-export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mesh[] {
+export function buildTerrainPatches(
+  scene: Scene,
+  content: ContentRegistry,
+  onlyIds?: readonly string[],
+): Mesh[] {
   const meshes: Mesh[] = []
+  const only = onlyIds ? new Set(onlyIds) : null
   for (const patch of getMapOverride()?.terrains ?? []) {
+    if (only && !only.has(patch.id)) continue
     const grid = buildPatchGrid(patch.halfExtent, patch.sub, patch.heights)
     const mesh = new Mesh(`patch:${patch.id}`, scene)
     const vd = new VertexData()
@@ -247,11 +253,25 @@ export function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mes
   return meshes
 }
 
-export function rebuildTerrainPatchVisuals(scene: Scene, content: ContentRegistry): void {
+/**
+ * Rebuild only the terrain meshes named in `ids` (all of them when omitted).
+ *
+ * Disposing and rebuilding every terrain because one was retinted re-uploads
+ * the geometry of the whole map to the GPU; with stable ids only the ones
+ * that changed need to move.
+ */
+export function rebuildTerrainPatchVisuals(
+  scene: Scene,
+  content: ContentRegistry,
+  ids?: readonly string[],
+): void {
+  const wanted = ids ? new Set(ids.map((id) => `patch:${id}`)) : null
   for (const m of [...scene.meshes]) {
-    if (m.name.startsWith('patch:')) m.dispose(false, true)
+    if (!m.name.startsWith('patch:')) continue
+    if (wanted && !wanted.has(m.name)) continue
+    m.dispose(false, true)
   }
-  buildTerrainPatches(scene, content)
+  buildTerrainPatches(scene, content, ids)
 }
 
 export function buildStaticWorld(scene: Scene, content: ContentRegistry): void {
@@ -271,15 +291,30 @@ export function buildStaticWorld(scene: Scene, content: ContentRegistry): void {
  * a mesh but never move or remove one, and re-applying a map drew a second
  * copy on top of the first.
  */
-export function buildMapStaticVisuals(scene: Scene, water?: Water): void {
-  for (const s of getMapOverride()?.statics ?? [])
+export function buildMapStaticVisuals(
+  scene: Scene,
+  water?: Water,
+  onlyIds?: readonly string[],
+): void {
+  const only = onlyIds ? new Set(onlyIds) : null
+  for (const s of getMapOverride()?.statics ?? []) {
+    if (only && !only.has(s.id ?? '')) continue
     renderStaticBody(scene, water, s, `mapstatic:${s.id ?? ''}`)
+  }
 }
 
-/** Live map save: replace the map-static layer, leaving base content alone. */
-export function rebuildMapStaticVisuals(scene: Scene): void {
-  for (const m of [...scene.meshes]) if (m.name.startsWith('mapstatic:')) m.dispose(false, true)
-  buildMapStaticVisuals(scene)
+/**
+ * Live map save: rebuild only the map statics named in `ids` (all of them
+ * when omitted), leaving base content alone.
+ */
+export function rebuildMapStaticVisuals(scene: Scene, ids?: readonly string[]): void {
+  const wanted = ids ? new Set(ids.map((id) => `mapstatic:${id}`)) : null
+  for (const m of [...scene.meshes]) {
+    if (!m.name.startsWith('mapstatic:')) continue
+    if (wanted && !wanted.has(m.name)) continue
+    m.dispose(false, true)
+  }
+  buildMapStaticVisuals(scene, undefined, ids)
 }
 
 function renderStaticBody(

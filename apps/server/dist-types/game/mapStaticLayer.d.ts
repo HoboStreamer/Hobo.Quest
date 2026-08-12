@@ -21,6 +21,12 @@ type BodyPhysics = Pick<PhysicsWorld, 'addBody' | 'removeBody'>
 export declare class MapStaticLayer {
   private readonly physics
   private readonly bodies
+  /**
+   * Cumulative bodies created and destroyed. Exposed so "an identical save
+   * causes no churn" is checkable from outside the process rather than
+   * inferred from a count that would look the same either way.
+   */
+  rebuilds: number
   constructor(physics: BodyPhysics)
   get size(): number
   /** The body for a map static, for tests and diagnostics. */

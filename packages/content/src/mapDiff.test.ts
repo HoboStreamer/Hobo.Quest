@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { affectsCollision, describeDiff, diffMapFileV2 } from './mapDiff.js'
 import { blankHeights, emptyMapV2, type MapFileV2 } from './mapFileV2.js'
+import type { WorldDef } from './schema/world.js'
 
 const SUB = 4
 
@@ -120,5 +121,31 @@ describe('describeDiff', () => {
 
   it('says nothing about a diff with nothing in it', () => {
     expect(describeDiff(diffMapFileV2(emptyMapV2(), emptyMapV2()))).toEqual([])
+  })
+})
+
+describe('spawn is authoritative the moment a map is applied', () => {
+  it('worldSpawn follows the override, so a live save changes future spawns', async () => {
+    // No extra state is needed for this: worldSpawn reads the override at
+    // CALL time, so the next spawn/respawn already uses the saved value.
+    // Proven rather than assumed, because "it happens to work" is exactly
+    // the kind of thing a refactor breaks silently.
+    const { setMapOverride, worldSpawn } = await import('./terrain.js')
+    const world = { spawnPoint: [1, 2, 3], spawnYaw: 0 } as never as WorldDef
+
+    setMapOverride(null)
+    expect(worldSpawn(world).pos).toEqual([1, 2, 3])
+
+    setMapOverride({ terrains: [], spawn: [10, 0, 10], spawnYaw: 1.5 })
+    expect(worldSpawn(world)).toEqual({ pos: [10, 0, 10], yaw: 1.5 })
+
+    setMapOverride({ terrains: [], spawn: [-4, 0, 8], spawnYaw: 0.25 })
+    expect(worldSpawn(world)).toEqual({ pos: [-4, 0, 8], yaw: 0.25 })
+
+    // A map with no spawn falls back to the world def rather than the
+    // previous map's value.
+    setMapOverride({ terrains: [] })
+    expect(worldSpawn(world).pos).toEqual([1, 2, 3])
+    setMapOverride(null)
   })
 })

@@ -88,7 +88,7 @@ async function main(): Promise<void> {
     (next, revision) => {
       try {
         setMapOverride(compileMapFileV2(next))
-        world.rebuildTerrain()
+        world.reconcileMapTerrain()
         world.reconcileMapStatics()
         world.reconcileMapZones()
         world.reconcileMapNodes()

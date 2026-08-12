@@ -29,8 +29,23 @@ export declare function registerMapAssets(
     }[]
   } | null,
 ): void
-export declare function buildTerrainPatches(scene: Scene, content: ContentRegistry): Mesh[]
-export declare function rebuildTerrainPatchVisuals(scene: Scene, content: ContentRegistry): void
+export declare function buildTerrainPatches(
+  scene: Scene,
+  content: ContentRegistry,
+  onlyIds?: readonly string[],
+): Mesh[]
+/**
+ * Rebuild only the terrain meshes named in `ids` (all of them when omitted).
+ *
+ * Disposing and rebuilding every terrain because one was retinted re-uploads
+ * the geometry of the whole map to the GPU; with stable ids only the ones
+ * that changed need to move.
+ */
+export declare function rebuildTerrainPatchVisuals(
+  scene: Scene,
+  content: ContentRegistry,
+  ids?: readonly string[],
+): void
 export declare function buildStaticWorld(scene: Scene, content: ContentRegistry): void
 /**
  * The MAP's statics, rendered under their stable ids in their own layer.
@@ -39,9 +54,16 @@ export declare function buildStaticWorld(scene: Scene, content: ContentRegistry)
  * a mesh but never move or remove one, and re-applying a map drew a second
  * copy on top of the first.
  */
-export declare function buildMapStaticVisuals(scene: Scene, water?: Water): void
-/** Live map save: replace the map-static layer, leaving base content alone. */
-export declare function rebuildMapStaticVisuals(scene: Scene): void
+export declare function buildMapStaticVisuals(
+  scene: Scene,
+  water?: Water,
+  onlyIds?: readonly string[],
+): void
+/**
+ * Live map save: rebuild only the map statics named in `ids` (all of them
+ * when omitted), leaving base content alone.
+ */
+export declare function rebuildMapStaticVisuals(scene: Scene, ids?: readonly string[]): void
 /** Live map edit: replace the rendered terrain with the new grid + paint. */
 export declare function rebuildTerrainVisual(scene: Scene, content: ContentRegistry): void
 //# sourceMappingURL=sceneSetup.d.ts.map

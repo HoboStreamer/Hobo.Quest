@@ -5,9 +5,12 @@ import {
   setMapOverride,
   type MapLight,
   compileMapFileV2,
+  emptyMapV2,
+  type MapFileV2,
   parseMapFile,
   type MapTextureEntry,
 } from '@hobo/content'
+import { MapLightLayer, mapDiff, staticWork, terrainWork } from './render/mapRuntimeLayers.js'
 import { createHavokWorldForScene } from '@hobo/physics/havok'
 import { FixedTimestep } from '@hobo/shared'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector.js'
@@ -33,7 +36,6 @@ import {
   registerMapAssets,
   rebuildTerrainVisual,
 } from './render/sceneSetup.js'
-import { buildMapLights } from './render/mapStyle.js'
 import { Viewmodel } from './render/viewmodel.js'
 import { ClientState } from './state/clientState.js'
 import { characterSelect, type CharacterInfo } from './ui/characterSelect.js'
@@ -55,6 +57,9 @@ async function start(): Promise<void> {
   const identity = getIdentity()
   const content = createContent()
   // Edited map (must match the server's copy for prediction parity).
+  // The map as the runtime currently has it, so a reload can diff against
+  // it rather than rebuilding every category.
+  let liveMap: MapFileV2 = emptyMapV2()
   let mapLightsBoot: MapLight[] | undefined
   try {
     // /map.json is native v2. parseMapFile still accepts a legacy v1 file
@@ -68,6 +73,7 @@ async function start(): Promise<void> {
       // The map's statics stay in the override; merging them into
       // content.world.statics made the map layer permanent and unreplaceable.
       setMapOverride(compileMapFileV2(parsed.map))
+      liveMap = parsed.map
       mapLightsBoot = parsed.map.lights
     }
   } catch {
@@ -77,7 +83,9 @@ async function start(): Promise<void> {
   const scene = createScene(engine)
   buildStaticWorld(scene, content)
   buildTerrainPatches(scene, content)
-  buildMapLights(scene, mapLightsBoot)
+  // One owner for map lights, keyed by document id.
+  const mapLights = new MapLightLayer(scene)
+  mapLights.reconcile(mapLightsBoot ?? [])
 
   // Havok loads while the player customizes their character.
   const havokPromise = HavokPhysics({ locateFile: () => havokWasmUrl })
@@ -242,20 +250,44 @@ async function start(): Promise<void> {
       void (async () => {
         try {
           const parsed = parseMapFile(await (await fetch('/map.json')).json())
-          if (parsed.ok) {
-            registerMapAssets({
-              textures: parsed.map.textures as MapTextureEntry[],
-              models: parsed.map.models,
-            })
-            setMapOverride(compileMapFileV2(parsed.map))
+          if (!parsed.ok) return
+          registerMapAssets({
+            textures: parsed.map.textures as MapTextureEntry[],
+            models: parsed.map.models,
+          })
+          // ONE diff, handed to each layer. Rebuilding every category
+          // wholesale re-uploaded the whole map's geometry to move one box,
+          // and rebuilt collision the player was standing on.
+          const diff = mapDiff(liveMap, parsed.map)
+          const previousHadNoTerrain = liveMap.terrains.length === 0
+          liveMap = parsed.map
+          setMapOverride(compileMapFileV2(parsed.map))
+
+          const terrain = terrainWork(diff)
+          if (terrain.added.length || terrain.removed.length || terrain.collision.length) {
+            // Prediction collision reconciles by id internally.
             rebuildTerrainPhysics(physics, content)
-            rebuildTerrainVisual(scene, content)
-            rebuildTerrainPatchVisuals(scene, content)
-            rebuildMapStaticVisuals(scene)
-            buildMapLights(scene, parsed.map.lights)
           }
+          if (previousHadNoTerrain !== (parsed.map.terrains.length === 0)) {
+            // The base world's procedural mesh only exists with no map.
+            rebuildTerrainVisual(scene, content)
+          }
+          const terrainVisuals = [...terrain.added, ...terrain.collision, ...terrain.appearanceOnly]
+          if (terrainVisuals.length || terrain.removed.length)
+            rebuildTerrainPatchVisuals(scene, content, [...terrainVisuals, ...terrain.removed])
+
+          const statics = staticWork(diff)
+          const staticVisuals = [
+            ...statics.added,
+            ...statics.collision,
+            ...statics.appearanceOnly,
+            ...statics.removed,
+          ]
+          if (staticVisuals.length) rebuildMapStaticVisuals(scene, staticVisuals)
+
+          mapLights.reconcileFromDiff(diff, parsed.map.lights)
         } catch {
-          // keep the old terrain if the fetch fails
+          // keep the old map if the fetch fails
         }
       })()
     }

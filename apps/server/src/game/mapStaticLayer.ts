@@ -31,6 +31,13 @@ type BodyPhysics = Pick<PhysicsWorld, 'addBody' | 'removeBody'>
 export class MapStaticLayer {
   private readonly bodies = new Map<string, { body: BodyId; signature: string }>()
 
+  /**
+   * Cumulative bodies created and destroyed. Exposed so "an identical save
+   * causes no churn" is checkable from outside the process rather than
+   * inferred from a count that would look the same either way.
+   */
+  rebuilds = 0
+
   constructor(private readonly physics: BodyPhysics) {}
 
   get size(): number {
@@ -58,6 +65,7 @@ export class MapStaticLayer {
       const after = next.get(id)
       if (after && staticSignature(after) === entry.signature) continue
       this.physics.removeBody(entry.body)
+      this.rebuilds++
       this.bodies.delete(id)
     }
     for (const [id, s] of next) {

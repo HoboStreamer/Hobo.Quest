@@ -976,6 +976,172 @@ section('N. v1 migration smoke — old maps still load')
 }
 
 // ════════════════════════════════════════════════════════════════════════
+section('U. Live reconciliation touches only what changed')
+{
+  const port = PORT + 8
+  const d = mkdtempSync(join(tmpdir(), 'hobo-repro-'))
+  const mp = join(d, 'map.json')
+  const t64 = new Float32Array(65 * 65)
+  const tHeights = Buffer.from(new Uint8Array(t64.buffer, t64.byteOffset, t64.byteLength)).toString(
+    'base64',
+  )
+  const base = {
+    v: 2,
+    terrains: [{ id: 'ground', pos: [0, 0, 0], halfExtent: 40, sub: 64, heights: tHeights }],
+    statics: [
+      {
+        id: 'a',
+        shape: { type: 'box', size: [2, 2, 2] },
+        pos: [3, 1, 0],
+        yaw: 0,
+        color: '#ff0000',
+      },
+      {
+        id: 'b',
+        shape: { type: 'box', size: [2, 2, 2] },
+        pos: [9, 1, 0],
+        yaw: 0,
+        color: '#00ff00',
+      },
+    ],
+    nodes: [],
+    props: [],
+    lights: [{ id: 'l1', type: 'point', pos: [0, 6, 0], range: 20 }],
+    zones: [],
+  }
+  writeFileSync(mp, JSON.stringify(base))
+  const srv = spawn(process.execPath, ['--import', 'tsx', 'apps/server/src/main.ts'], {
+    env: {
+      ...process.env,
+      PORT: String(port),
+      DB_PATH: join(d, 'world.db'),
+      STATIC_DIR: 'apps/client/dist',
+      MAP_PATH: mp,
+      EDITOR_KEY: 'test-admin-key',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  srv.stderr!.on('data', (c) => console.log('[server]', String(c).slice(0, 300)))
+  try {
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('server never reported listening')), 30_000)
+      srv.stdout!.on('data', (c) => {
+        if (String(c).includes('listening')) {
+          clearTimeout(t)
+          res()
+        }
+      })
+    })
+    const root = `http://127.0.0.1:${port}`
+    const metrics = async (): Promise<Record<string, number>> => {
+      for (let i = 0; i < 40; i++) {
+        const m = (await (await fetch(`${root}/metrics`)).json()) as Record<string, number>
+        if (m['tick']! > 0) return m
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      throw new Error('server never ticked')
+    }
+    const save = async (map: unknown, ifMatch?: string): Promise<string> => {
+      const resp = await fetch(`${root}/api/map`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-editor-key': 'test-admin-key',
+          ...(ifMatch ? { 'if-match': ifMatch } : {}),
+        },
+        body: JSON.stringify(map),
+      })
+      if (!resp.ok) throw new Error(`save failed: ${resp.status} ${await resp.text()}`)
+      return resp.headers.get('etag')?.replace(/"/g, '') ?? ''
+    }
+
+    let m = await metrics()
+    ok('the map terrain has collision', m['mapTerrains'] === 1, m['mapTerrains'])
+    ok('and both statics do', m['mapStatics'] === 2, m['mapStatics'])
+    const churn0 = m['mapRebuilds']!
+
+    // An identical save must touch nothing at all.
+    let rev = await save(base)
+    await new Promise((r) => setTimeout(r, 400))
+    m = await metrics()
+    ok('an identical save causes ZERO body churn', m['mapRebuilds'] === churn0, {
+      churn0,
+      now: m['mapRebuilds'],
+    })
+
+    // A SURFACE-only terrain edit must not rebuild collision.
+    rev = await save(
+      {
+        ...base,
+        terrains: [{ ...base.terrains[0], surface: { base: { tex: 'red_brick' } } }],
+      },
+      rev,
+    )
+    await new Promise((r) => setTimeout(r, 400))
+    m = await metrics()
+    ok('retinting a terrain rebuilds NO collision', m['mapRebuilds'] === churn0, m['mapRebuilds'])
+    ok('and the terrain body is still there', m['mapTerrains'] === 1)
+
+    // Moving ONE static rebuilds exactly one body.
+    const churnBefore = m['mapRebuilds']!
+    rev = await save(
+      {
+        ...base,
+        terrains: [{ ...base.terrains[0], surface: { base: { tex: 'red_brick' } } }],
+        statics: [{ ...base.statics[0], pos: [3, 1, 8] }, base.statics[1]],
+      },
+      rev,
+    )
+    await new Promise((r) => setTimeout(r, 400))
+    m = await metrics()
+    ok('moving one static rebuilds exactly one body', m['mapRebuilds'] === churnBefore + 1, {
+      churnBefore,
+      now: m['mapRebuilds'],
+    })
+    ok('and the static count is unchanged', m['mapStatics'] === 2, m['mapStatics'])
+
+    // Sculpting the terrain rebuilds its body, and only its body.
+    const churnBeforeSculpt = m['mapRebuilds']!
+    const sculpted = new Float32Array(65 * 65)
+    sculpted[65 * 32 + 32] = 4
+    rev = await save(
+      {
+        ...base,
+        terrains: [
+          {
+            ...base.terrains[0],
+            surface: { base: { tex: 'red_brick' } },
+            heights: Buffer.from(
+              new Uint8Array(sculpted.buffer, sculpted.byteOffset, sculpted.byteLength),
+            ).toString('base64'),
+          },
+        ],
+        statics: [{ ...base.statics[0], pos: [3, 1, 8] }, base.statics[1]],
+      },
+      rev,
+    )
+    await new Promise((r) => setTimeout(r, 400))
+    m = await metrics()
+    ok('a sculpt rebuilds exactly one terrain body', m['mapRebuilds'] === churnBeforeSculpt + 1, {
+      churnBeforeSculpt,
+      now: m['mapRebuilds'],
+    })
+
+    // Spawn applies to future spawns immediately.
+    await save({ ...base, spawn: [12, 0, -7], spawnYaw: 1.25 }, rev)
+    await new Promise((r) => setTimeout(r, 400))
+    const spawnResp = (await (await fetch(`${root}/map.json`)).json()) as {
+      spawn?: number[]
+      spawnYaw?: number
+    }
+    ok('the saved spawn is authoritative immediately', spawnResp.spawn?.[0] === 12, spawnResp.spawn)
+    ok('including facing', spawnResp.spawnYaw === 1.25, spawnResp.spawnYaw)
+  } finally {
+    srv.kill()
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
 section('T. Zone and Light tools create real objects')
 await withMap(
   PORT + 7,

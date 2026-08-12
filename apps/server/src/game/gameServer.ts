@@ -1107,6 +1107,7 @@ export class GameServer {
     this.metrics.mapStatics = this.world.mapStaticCount()
     this.metrics.mapTerrains = this.world.mapTerrainCount()
     this.metrics.mapZones = this.world.mapZoneCount()
+    this.metrics.mapRebuilds = this.world.mapRebuildCount()
     this.metrics.recordTick(performance.now() - tickStart, physMs)
   }
 
