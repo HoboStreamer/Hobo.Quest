@@ -24,6 +24,8 @@ export interface ServerConfig {
   maxPlayers: number
   persistFlushSeconds: number
   metricsLogSeconds: number
+  /** Multiplier on world-event cadences (tests shrink it). */
+  eventIntervalScale: number
 }
 export declare function loadConfig(env: NodeJS.ProcessEnv): ServerConfig
 //# sourceMappingURL=config.d.ts.map

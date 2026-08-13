@@ -160,6 +160,13 @@ export const ItemDefSchema = z.object({
   /** Present iff the item is ammunition (referenced by rangedWeapon.ammoItem). */
   ammo: z.object({}).optional(),
 
+  /**
+   * Present iff the item is AT-RISK loot: it drops in a loot bag on death
+   * unless secured by an extraction (stack meta `secured`). The
+   * risk/reward heart of expedition play.
+   */
+  valuable: z.object({}).optional(),
+
   /** Present iff the item is wearable protection (one armor slot). Stack
    * meta `dur` tracks remaining durability; the piece breaks at 0. */
   armor: z

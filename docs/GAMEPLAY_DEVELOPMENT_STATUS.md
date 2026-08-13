@@ -300,10 +300,21 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
 
 ### Events / Extraction
 
-- **Supply drops only, hardcoded.** One crate at a time, random site from
-  content DROP_SITES, announce, loot via container, expiry. Lives directly
-  in gameServer.ts (tickSupplyDrops). No generic event framework, no
-  extraction mechanics, no secured-loot semantics.
+- **Implemented (Stage 9).** Generic EventManager: one server-owned
+  lifecycle (scheduled → announced → active → done/cleanup) with typed
+  handlers (create/onAnnounce/onActivate/onTick/onCleanup), one live
+  event per type, cadence scaled by EVENT_INTERVAL_SCALE (tests shrink
+  it). Event state is ephemeral by design (restart cancels — documented).
+- Supply drops migrated onto the engine (same gameplay, no special-cased
+  server code). Extraction: announced beacon sites (content), players
+  hold the circle for 25 s (leaving or dying resets), success SECURES
+  carried valuables (stack meta) and recalls to the city.
+- Secured-vs-at-risk semantics are explicit: `valuable` items
+  (salvage_core, pepper_tonic) drop into a lootable bag on death UNLESS
+  secured; ordinary gear always stays. Server owns every transition; the
+  partition/secure logic is pure and unit-tested.
+- Missing: extraction NPC activity/contest rules, persistent events
+  across restart, event UI beyond announcements (countdown widget).
 
 ### Loot
 

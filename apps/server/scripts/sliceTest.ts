@@ -75,6 +75,7 @@ function startServer(): Promise<void> {
         PORT: String(PORT),
         DB_PATH: dbPath,
         GUEST_IP_BINDING: 'off',
+        EVENT_INTERVAL_SCALE: '0.05',
         MAP_PATH: mapPath,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -134,6 +135,7 @@ class TestClient {
   lastWeather: string | null = null
   /** Faction standings (reputation message). */
   reputation: { id: string; name: string; value: number; stance: string }[] = []
+  announces: { text: string; at: number }[] = []
   /** Latest market view (market message). */
   lastMarket: {
     id: string
@@ -253,6 +255,9 @@ class TestClient {
         break
       case 'market':
         this.lastMarket = { id: msg.id, sells: msg.sells, buys: msg.buys }
+        break
+      case 'announce':
+        this.announces.push({ text: msg.text, at: Date.now() })
         break
       case 'container':
         this.lastContainer = { id: msg.id, size: msg.size, slots: msg.slots }
@@ -1510,6 +1515,73 @@ async function main(): Promise<void> {
       [8, 26],
     ])
     await settle(a)
+  }
+
+  console.log('phase: world events — supply drop loot, extraction secures valuables')
+  {
+    // Stand central so every drop site is inside interest range.
+    await walkPath(a, [
+      [0, 22],
+      [0, 12],
+    ])
+    await settle(a)
+    // A supply drop crate spawns on the event engine's (scaled) cadence.
+    let crate: WireEntity | undefined
+    {
+      const start = Date.now()
+      while (!crate && Date.now() - start < 60_000) {
+        crate = [...a.entities.values()].find((e) => e.kind === 'prop' && e.def === 'supply_crate')
+        await sleep(300)
+      }
+    }
+    assert(crate, 'supply drop event spawned a crate')
+    await walkTo(a, crate.pos[0] + 1.2, crate.pos[2] + 1.2)
+    await settle(a)
+    a.send({ t: 'container_open', target: crate.id })
+    await a.waitFor((m) => m.t === 'container' && m.id === crate.id, 5000)
+    const coreSlot = a.lastContainer?.slots.find((sl) => sl.def === 'salvage_core')
+    assert(coreSlot, 'crate holds salvage cores (at-risk loot)')
+    a.send({ t: 'container_move', target: crate.id, dir: 'out', slot: coreSlot.i })
+    await pollUntil(() => a.count('salvage_core') > 0)
+    assert(a.count('salvage_core') > 0, 'salvage core looted')
+
+    // Extraction: catch a FRESH announce (the window is 120s from its
+    // announce), hold the circle, come home secured.
+    let site: [number, number] | null = null
+    {
+      const start = Date.now()
+      while (!site && Date.now() - start < 150_000) {
+        const fresh = [...a.announces]
+          .reverse()
+          .find((n) => n.text.includes('Recovery bird inbound') && Date.now() - n.at < 60_000)
+        if (fresh) {
+          const m = /\((-?\d+), (-?\d+)\)/.exec(fresh.text)
+          if (m) site = [Number(m[1]), Number(m[2])]
+        }
+        await sleep(300)
+      }
+    }
+    assert(site, 'extraction event announced with a location')
+    await walkTo(a, site[0], site[1], 60_000)
+    // Hold the circle until the recall (25s hold + slack).
+    {
+      const start = Date.now()
+      while (Date.now() - start < 45_000) {
+        const me = a.me
+        if (me && Math.hypot(me.pos[0] - 0, me.pos[2] - 4) < 6) break // recalled to spawn
+        // Nudge back toward the beacon in case physics drift pushed us out.
+        const dist = me ? Math.hypot(me.pos[0] - site[0], me.pos[2] - site[1]) : 99
+        if (me && dist > 3) await walkTo(a, site[0], site[1], 6000)
+        await sleep(500)
+      }
+    }
+    const me = a.me as WirePlayerState
+    assert(
+      Math.hypot(me.pos[0] - 0, me.pos[2] - 4) < 8,
+      `extraction recalled the player to the city (at ${me.pos[0].toFixed(1)},${me.pos[2].toFixed(1)})`,
+    )
+    const coreStack = a.inventory?.slots.find((s) => s.stack.def === 'salvage_core')
+    assert(coreStack?.stack.meta?.secured === 1, 'looted valuables are SECURED after extraction')
   }
 
   console.log('phase: persistence across restart (props, frozen state, skills, friends, depletion)')

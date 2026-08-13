@@ -162,6 +162,36 @@ export class Inventory {
     return false
   }
 
+  /**
+   * Extraction risk semantics: removes and returns every UNSECURED
+   * valuable stack (death drops these into a loot bag). Stacks whose meta
+   * carries `secured: 1` made it through an extraction and stay.
+   */
+  takeUnsecuredValuables(isValuable: (defId: string) => boolean): ItemStack[] {
+    const taken: ItemStack[] = []
+    for (let i = 0; i < this.size; i++) {
+      const s = this.slots[i]
+      if (!s || !isValuable(s.defId)) continue
+      if (s.meta?.secured === 1) continue
+      taken.push({ ...s })
+      this.slots[i] = null
+    }
+    return taken
+  }
+
+  /** Marks every valuable stack secured (extraction completed). Returns
+   * how many stacks were newly secured. */
+  secureValuables(isValuable: (defId: string) => boolean): number {
+    let secured = 0
+    for (const s of this.slots) {
+      if (!s || !isValuable(s.defId)) continue
+      if (s.meta?.secured === 1) continue
+      s.meta = { ...s.meta, secured: 1 }
+      secured++
+    }
+    return secured
+  }
+
   /** Space check without mutating: could `count` of `defId` be added? */
   canFit(defId: string, count: number): boolean {
     const maxStack = this.maxStackOf(defId)

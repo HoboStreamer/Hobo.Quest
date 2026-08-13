@@ -43,8 +43,6 @@ import {
   type WeatherKind,
 } from '@hobo/gameplay'
 import {
-  DROP_LOOT,
-  DROP_SITES,
   STARTER_ITEMS,
   WATER_LEVEL,
   recipeSkill,
@@ -100,6 +98,7 @@ import {
 } from './playerSession.js'
 import { buildSnapshot, updateInterest, wireEntityFor } from './replication.js'
 import { NpcManager } from './npcManager.js'
+import { EventManager } from './eventManager.js'
 
 /** A network connection as the game sees it — transport-agnostic. */
 export interface GameConnection {
@@ -131,6 +130,8 @@ export class GameServer {
   readonly regions = new RegionTracker(32)
   /** Server-authoritative NPC simulation (LOD-aware). */
   readonly npcs: NpcManager
+  /** Generic world events (supply drops, extraction). */
+  readonly events: EventManager
   /** Players who recently attacked someone (defensive NPCs respond). */
   private readonly aggro = new Map<string, number>()
   /** Sound events (gunshots, fights) accumulated for NPC hearing. */
@@ -194,6 +195,31 @@ export class GameServer {
       log.child({ system: 'npc' }),
     )
     this.npcs.seedOrRestore(store)
+
+    this.events = new EventManager(
+      world,
+      {
+        announce: (text) => this.broadcastAll({ t: 'announce', text }),
+        announceTo: (entityId, text) => {
+          const target = this.sessionsByEntity.get(entityId as EntityId)
+          if (target) this.send(target, { t: 'announce', text })
+        },
+        playersIn: (x, z, radius) => {
+          const out: { entityId: string; alive: boolean }[] = []
+          for (const s of this.sessions.values()) {
+            if (Math.hypot(s.move.pos.x - x, s.move.pos.z - z) <= radius) {
+              out.push({ entityId: s.entityId as string, alive: s.stats.health > 0 })
+            }
+          }
+          return out
+        },
+        extractPlayer: (entityId) => this.extractPlayer(entityId),
+        broadcastSpawn: (entity) => this.broadcastSpawn(entity),
+        broadcastDespawn: (id) => this.broadcastDespawn(id),
+      },
+      config.eventIntervalScale,
+      log.child({ system: 'events' }),
+    )
 
     // Players block players: sweeps include the Player layer, minus the
     // mover's own kinematic body.
@@ -830,62 +856,6 @@ export class GameServer {
       size: box.length,
       slots: box.flatMap((slot, i) => (slot ? [{ i, def: slot.defId, count: slot.count }] : [])),
     })
-  }
-
-  /** Live supply crate (one at a time), plus its expiry tick. */
-  private supplyCrateId: EntityId | null = null
-  private supplyExpiresTick = 0
-  private nextDropTick = 0
-
-  /**
-   * Extraction events v1: every few minutes a supply crate lands at a random
-   * wilderness site, announced to everyone. First to loot it wins; the
-   * crate despawns once emptied (or after 6 minutes).
-   */
-  private tickSupplyDrops(): void {
-    const rate = this.config.tickRate
-    if (this.nextDropTick === 0) this.nextDropTick = this.tick + 150 * rate
-    // Expire or clean up the live crate.
-    if (this.supplyCrateId) {
-      const crate = this.world.entities.get(this.supplyCrateId)
-      const emptied = !crate?.prop?.container?.some((s) => s !== null)
-      if (!crate || emptied || this.tick >= this.supplyExpiresTick) {
-        if (crate) {
-          this.world.despawn(crate.id)
-          this.broadcastDespawn(crate.id)
-        }
-        this.supplyCrateId = null
-      }
-      return
-    }
-    if (this.tick < this.nextDropTick || this.sessions.size === 0) return
-    this.nextDropTick = this.tick + 360 * rate
-    const site = DROP_SITES[Math.floor(Math.random() * DROP_SITES.length)]!
-    const world = this.world.content.world
-    const crate = this.world.spawnProp({
-      defId: 'supply_crate',
-      pos: vec3(site[0], terrainHeight(world, site[0], site[2]) + 0.6, site[2]),
-      rot: qfromYaw(quat(), Math.random() * 6.28),
-      motion: 'static',
-    })
-    crate.persistent = false
-    if (crate.prop?.container) {
-      let slot = 0
-      for (const [item, min, max] of DROP_LOOT) {
-        const count = min + Math.floor(Math.random() * (max - min + 1))
-        if (count > 0 && slot < crate.prop.container.length) {
-          crate.prop.container[slot++] = { defId: item, count }
-        }
-      }
-    }
-    this.supplyCrateId = crate.id
-    this.supplyExpiresTick = this.tick + 360 * rate
-    this.broadcastSpawn(crate)
-    this.broadcastAll({
-      t: 'announce',
-      text: '📦 Supply drop spotted in the wilds — first come, first served!',
-    })
-    this.log.info('supply drop spawned', { site: site.join(',') })
   }
 
   private timeWire(): ServerMessage {
@@ -1758,9 +1728,60 @@ export class GameServer {
     this.log.info('prop destroyed', { def: def?.id ?? 'unknown', drops: drops.length })
   }
 
+  /**
+   * Extraction success: carried valuables become SECURED (they no longer
+   * drop on death) and the player is recalled to the safe city.
+   */
+  private extractPlayer(entityId: string): void {
+    const session = this.sessionsByEntity.get(entityId as EntityId)
+    if (!session) return
+    const secured = session.inventory.secureValuables(
+      (defId) => this.world.content.item(defId)?.valuable !== undefined,
+    )
+    const spawn = worldSpawn(this.world.content.world).pos
+    session.move.pos.x = spawn[0]
+    session.move.pos.y = spawn[1]
+    session.move.pos.z = spawn[2]
+    session.move.vel.x = 0
+    session.move.vel.y = 0
+    session.move.vel.z = 0
+    session.dirty = true
+    this.send(session, {
+      t: 'announce',
+      text:
+        secured > 0
+          ? `🚁 Extracted! ${secured} stack${secured === 1 ? '' : 's'} of loot secured.`
+          : '🚁 Extracted safely back to Hoboville.',
+    })
+    this.sendInventory(session)
+    this.log.info('player extracted', { playerId: session.playerId, secured })
+  }
+
   /** Death/rescue respawn: back to the city with restored vitals. */
   private respawn(session: PlayerSession, died: boolean): void {
     const spawn = worldSpawn(this.world.content.world).pos
+    // Risk made real: UNSECURED valuables drop where you fell, in a bag
+    // anyone can loot. Secured loot and ordinary gear stay with you.
+    if (died) {
+      const dropped = session.inventory.takeUnsecuredValuables(
+        (defId) => this.world.content.item(defId)?.valuable !== undefined,
+      )
+      if (dropped.length > 0) {
+        const bag = this.world.spawnProp({
+          defId: 'loot_bag',
+          pos: vec3(session.move.pos.x, session.move.pos.y + 0.4, session.move.pos.z),
+          rot: qfromYaw(quat(), session.yaw),
+          motion: 'dynamic',
+        })
+        if (bag.prop?.container) {
+          for (let i = 0; i < dropped.length && i < bag.prop.container.length; i++) {
+            bag.prop.container[i] = { defId: dropped[i]!.defId, count: dropped[i]!.count }
+          }
+        }
+        this.broadcastSpawn(bag)
+        this.send(session, { t: 'announce', text: '💀 Your unsecured loot hit the dirt.' })
+      }
+    }
     session.move.pos.x = spawn[0]
     session.move.pos.y = spawn[1]
     session.move.pos.z = spawn[2]
@@ -1915,7 +1936,7 @@ export class GameServer {
       if (this.tick % (this.config.tickRate * 10) === 0) {
         this.broadcastAll(this.timeWire())
       }
-      this.tickSupplyDrops()
+      this.events.tick(nowMs, this.sessions.size)
       this.tickProduction(nowMs, raining, ambientC)
     }
 

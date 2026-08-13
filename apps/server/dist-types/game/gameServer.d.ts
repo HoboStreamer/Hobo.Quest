@@ -7,6 +7,7 @@ import type { ServerMetrics } from '../observability/metrics.js'
 import type { GameWorld } from './gameWorld.js'
 import { type PlayerSession } from './playerSession.js'
 import { NpcManager } from './npcManager.js'
+import { EventManager } from './eventManager.js'
 /** A network connection as the game sees it — transport-agnostic. */
 export interface GameConnection {
   /** Real client IP (Cloudflare-aware) — guest identity hangs off this. */
@@ -38,6 +39,8 @@ export declare class GameServer {
   readonly regions: RegionTracker
   /** Server-authoritative NPC simulation (LOD-aware). */
   readonly npcs: NpcManager
+  /** Generic world events (supply drops, extraction). */
+  readonly events: EventManager
   /** Players who recently attacked someone (defensive NPCs respond). */
   private readonly aggro
   /** Sound events (gunshots, fights) accumulated for NPC hearing. */
@@ -72,16 +75,6 @@ export declare class GameServer {
   /** Range + prop-protection gate shared by all container operations. */
   private containerAccessDenied
   private sendContainer
-  /** Live supply crate (one at a time), plus its expiry tick. */
-  private supplyCrateId
-  private supplyExpiresTick
-  private nextDropTick
-  /**
-   * Extraction events v1: every few minutes a supply crate lands at a random
-   * wilderness site, announced to everyone. First to loot it wins; the
-   * crate despawns once emptied (or after 6 minutes).
-   */
-  private tickSupplyDrops
   private timeWire
   /**
    * Utility + production sweep, once a second over prop entities. Plants
@@ -128,6 +121,11 @@ export declare class GameServer {
   private applyPropDamage
   /** Destruction: scatter salvage + stored contents as physical props. */
   private destroyProp
+  /**
+   * Extraction success: carried valuables become SECURED (they no longer
+   * drop on death) and the player is recalled to the safe city.
+   */
+  private extractPlayer
   /** Death/rescue respawn: back to the city with restored vitals. */
   private respawn
   private statsWire

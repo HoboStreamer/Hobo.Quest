@@ -19,3 +19,13 @@ export const DROP_LOOT: [string, number, number][] = [
   ['scrap_metal', 3, 8],
   ['trail_stew', 1, 2],
 ]
+
+/** Wilderness extraction beacons: hold the circle, secure your haul. */
+export const EXTRACTION_SITES: { pos: [number, number]; radius: number }[] = [
+  { pos: [50, 40], radius: 6 },
+  { pos: [-48, -40], radius: 6 },
+  { pos: [56, -20], radius: 6 },
+]
+
+/** Seconds a player must hold an active extraction to secure loot. */
+export const EXTRACTION_HOLD_SECONDS = 25

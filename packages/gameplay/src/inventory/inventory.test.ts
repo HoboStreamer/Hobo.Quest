@@ -92,4 +92,25 @@ describe('Inventory', () => {
     expect(restored.toDto()).toEqual(dto)
     expect(restored.countOf('wood_plank')).toBe(60)
   })
+
+  it('partitions unsecured valuables for the death drop', () => {
+    const inv = new Inventory(6, 2, content)
+    inv.add('wood_plank', 5)
+    inv.addStack({ defId: 'salvage_core', count: 2 })
+    inv.addStack({ defId: 'salvage_core', count: 1, meta: { secured: 1 } })
+    const isValuable = (id: string) => id === 'salvage_core'
+    const dropped = inv.takeUnsecuredValuables(isValuable)
+    expect(dropped).toEqual([{ defId: 'salvage_core', count: 2 }])
+    expect(inv.countOf('salvage_core')).toBe(1) // the secured stack stays
+    expect(inv.countOf('wood_plank')).toBe(5)
+  })
+
+  it('secures valuables exactly once', () => {
+    const inv = new Inventory(6, 2, content)
+    inv.addStack({ defId: 'salvage_core', count: 2 })
+    const isValuable = (id: string) => id === 'salvage_core'
+    expect(inv.secureValuables(isValuable)).toBe(1)
+    expect(inv.secureValuables(isValuable)).toBe(0)
+    expect(inv.takeUnsecuredValuables(isValuable)).toEqual([])
+  })
 })

@@ -19,6 +19,8 @@ export interface ServerConfig {
   maxPlayers: number
   persistFlushSeconds: number
   metricsLogSeconds: number
+  /** Multiplier on world-event cadences (tests shrink it). */
+  eventIntervalScale: number
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
@@ -51,6 +53,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ServerConfig {
     maxPlayers: intEnv(env, 'MAX_PLAYERS', 64),
     persistFlushSeconds: intEnv(env, 'PERSIST_FLUSH_SECONDS', 10),
     metricsLogSeconds: intEnv(env, 'METRICS_LOG_SECONDS', 30),
+    eventIntervalScale: env.EVENT_INTERVAL_SCALE ? Number(env.EVENT_INTERVAL_SCALE) : 1,
   }
 }
 

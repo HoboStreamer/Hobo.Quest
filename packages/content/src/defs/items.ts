@@ -160,9 +160,11 @@ export const ITEMS: ItemDef[] = [
   {
     id: 'salvage_core',
     name: 'Salvage Core',
-    description: 'Dense pre-collapse tech. The merchant pays a fortune for these.',
+    description:
+      'Dense pre-collapse tech. The merchant pays a fortune — IF you get it home. Drops when you die; extract to secure it.',
     category: 'misc',
     maxStack: 5,
+    valuable: {},
     world: {
       shape: { type: 'box', size: [0.24, 0.24, 0.24] },
       massKg: 8,
@@ -238,6 +240,21 @@ export const ITEMS: ItemDef[] = [
       shape: { type: 'cylinder', radius: 0.12, height: 0.2 },
       massKg: 6,
       color: '#3a4a5a',
+      physgun: true,
+    },
+  },
+
+  {
+    id: 'loot_bag',
+    name: 'Dropped Loot',
+    description: 'Somebody died carrying this. Finders keepers.',
+    category: 'misc',
+    maxStack: 1,
+    container: { slots: 8 },
+    world: {
+      shape: { type: 'sphere', radius: 0.3 },
+      massKg: 8,
+      color: '#5a4a3a',
       physgun: true,
     },
   },
@@ -534,9 +551,10 @@ export const ITEMS: ItemDef[] = [
     id: 'pepper_tonic',
     name: 'Pepper Tonic',
     description:
-      'Ember pepper and flour mash run through a still. Burns twice. The Goose pays absurdly well and asks no questions.',
+      'Ember pepper and flour mash run through a still. Burns twice. The Goose pays absurdly well and asks no questions. At-risk until extracted.',
     category: 'food',
     maxStack: 10,
+    valuable: {},
     food: { hunger: 6, thirst: 10, health: 8 },
   },
   {
