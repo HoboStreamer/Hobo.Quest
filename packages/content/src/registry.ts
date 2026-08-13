@@ -6,6 +6,7 @@ import {
   type NpcArchetype,
 } from './schema/npc.js'
 import { ItemDefSchema, type ItemDef } from './schema/item.js'
+import { MarketSchema, type MarketDef } from './schema/market.js'
 import { RecipeSchema, type Recipe } from './schema/recipe.js'
 import { ResourceNodeTypeSchema, type ResourceNodeType } from './schema/resourceNode.js'
 import { SkillDefSchema, type SkillDef } from './schema/skill.js'
@@ -19,6 +20,7 @@ export interface ContentDefs {
   crops: CropDef[]
   npcs: NpcArchetype[]
   factions: FactionDef[]
+  markets: MarketDef[]
   world: WorldDef
 }
 
@@ -36,6 +38,7 @@ export class ContentRegistry {
   private readonly crops = new Map<string, CropDef>()
   private readonly npcs = new Map<string, NpcArchetype>()
   private readonly factions = new Map<string, FactionDef>()
+  private readonly markets = new Map<string, MarketDef>()
   readonly world: WorldDef
 
   constructor(defs: ContentDefs) {
@@ -114,6 +117,31 @@ export class ContentRegistry {
         }
       }
       this.npcs.set(npc.id, npc)
+    }
+
+    for (const raw of defs.markets) {
+      const parsed = MarketSchema.safeParse(raw)
+      if (!parsed.success) {
+        errors.push(`market '${raw.id}': ${parsed.error.message}`)
+        continue
+      }
+      const market = parsed.data
+      if (this.markets.has(market.id)) errors.push(`duplicate market '${market.id}'`)
+      if (!this.factions.has(market.faction)) {
+        errors.push(`market '${market.id}' references unknown faction '${market.faction}'`)
+      }
+      for (const entry of [...market.sells, ...market.buys]) {
+        if (!this.items.has(entry.item)) {
+          errors.push(`market '${market.id}' references unknown item '${entry.item}'`)
+        }
+      }
+      this.markets.set(market.id, market)
+    }
+    // Shop props must reference known markets.
+    for (const item of this.items.values()) {
+      if (item.shop && !this.markets.has(item.shop.market)) {
+        errors.push(`item '${item.id}' opens unknown market '${item.shop.market}'`)
+      }
     }
 
     for (const raw of defs.skills) {
@@ -261,6 +289,14 @@ export class ContentRegistry {
 
   faction(id: string): FactionDef | undefined {
     return this.factions.get(id)
+  }
+
+  allFactions(): readonly FactionDef[] {
+    return [...this.factions.values()]
+  }
+
+  market(id: string): MarketDef | undefined {
+    return this.markets.get(id)
   }
 
   /** Machine recipes for one machine kind (unattended production). */

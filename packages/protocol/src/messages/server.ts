@@ -209,6 +209,28 @@ export interface ServerAnnounce {
   text: string
 }
 
+/** Market data for an opened trading post (refreshed after each deal). */
+export interface ServerMarket {
+  t: 'market'
+  id: string
+  name: string
+  /** The owning faction's current stance toward this player. */
+  stance: 'friendly' | 'neutral' | 'hostile'
+  sells: { item: string; count: number; price: number; stock: number }[]
+  buys: { item: string; count: number; price: number }[]
+}
+
+/** The receiving player's faction standings (welcome + on change). */
+export interface ServerReputation {
+  t: 'reputation'
+  factions: {
+    id: string
+    name: string
+    value: number
+    stance: 'friendly' | 'neutral' | 'hostile'
+  }[]
+}
+
 /** Contents of an opened container (and pushed while it stays open). */
 export interface ServerContainer {
   t: 'container'
@@ -235,6 +257,8 @@ export type ServerMessage =
   | ServerStats
   | ServerTime
   | ServerContainer
+  | ServerMarket
+  | ServerReputation
   | ServerAnnounce
   | ServerTracer
   | ServerFx

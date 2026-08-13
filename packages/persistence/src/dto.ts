@@ -1,4 +1,10 @@
-import type { InventoryDto, ItemStack, SkillsDto, SurvivalStats } from '@hobo/gameplay'
+import type {
+  InventoryDto,
+  ItemStack,
+  ReputationDto,
+  SkillsDto,
+  SurvivalStats,
+} from '@hobo/gameplay'
 import type { Appearance } from '@hobo/protocol'
 
 /**
@@ -39,6 +45,8 @@ export interface PlayerDto {
   charSlot: number
   /** Worn armor piece; null for none (durability in stack meta). */
   armor: ItemStack | null
+  /** Faction reputation scores (absent factions = 0). */
+  reputation: ReputationDto
   /** Survival vitals; null/partial rows predate newer fields — the loader
    * normalizes (see @hobo/gameplay normalizeStats). */
   stats: Partial<SurvivalStats> | null

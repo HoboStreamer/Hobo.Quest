@@ -1,4 +1,3 @@
-import { TRADES } from '@hobo/content'
 import type { ContentRegistry } from '@hobo/content'
 import { HOTBAR_SLOTS } from '../constants.js'
 import type { Connection } from '../net/connection.js'
@@ -16,7 +15,7 @@ import { weaponModuleFor, type WeaponSettings } from '../weapons/registry.js'
  * 3D models. All mutations round-trip through the server.
  */
 
-type MenuTab = 'inventory' | 'crafting' | 'equipment' | 'skills' | 'players'
+type MenuTab = 'inventory' | 'crafting' | 'equipment' | 'skills' | 'standing' | 'players'
 
 export class Hud {
   private root: HTMLElement
@@ -84,6 +83,10 @@ export class Hud {
       if (this.openContainerId === id) this.closeContainer()
     })
     state.events.on('announce', (text) => this.showAnnounce(text))
+    state.events.on('market', (m) => this.setMarket(m as NonNullable<typeof this.marketData>))
+    state.events.on('reputation', () => {
+      if (this.activeTab === 'standing') this.renderMenu()
+    })
     state.events.on('actionResult', (r) => {
       if (r.action === 'trade' && r.ok) this.toast('🤝 Deal!')
     })
@@ -209,11 +212,29 @@ export class Hud {
   }
 
   /** Merchant trade sheet (content-driven; server validates every trade). */
-  openShop(): void {
+  /** Shop entity currently open (market requests target it). */
+  private shopTargetId: string | null = null
+  /** Latest market data from the server. */
+  private marketData: {
+    id: string
+    name: string
+    stance: string
+    sells: { item: string; count: number; price: number; stock: number }[]
+    buys: { item: string; count: number; price: number }[]
+  } | null = null
+
+  openShop(targetId: string): void {
     this.shopOpen = true
+    this.shopTargetId = targetId
     this.byId('shop-panel').style.display = 'flex'
+    this.connection.send({ t: 'market_open', target: targetId })
     this.renderShop()
     this.onUiCaptureChange?.(true)
+  }
+
+  setMarket(data: NonNullable<typeof this.marketData>): void {
+    this.marketData = data
+    if (this.shopOpen) this.renderShop()
   }
 
   closeShop(): void {
@@ -226,20 +247,53 @@ export class Hud {
   private renderShop(): void {
     const list = this.byId('shop-list')
     list.replaceChildren()
-    for (const trade of TRADES) {
-      const giveName = this.content.item(trade.give.item)?.name ?? trade.give.item
-      const getName = this.content.item(trade.get.item)?.name ?? trade.get.item
+    const market = this.marketData
+    const target = this.shopTargetId
+    if (!market || !target) {
+      const wait = document.createElement('div')
+      wait.className = 'hint-line'
+      wait.textContent = 'The merchant is sizing you up…'
+      list.appendChild(wait)
+      return
+    }
+    this.byId('shop-panel').querySelector('.container-title')!.textContent =
+      `${market.name}${market.stance === 'friendly' ? ' ❤' : ''}`
+    const coins = this.state.countOf('coin')
+    const header = document.createElement('div')
+    header.className = 'hint-line'
+    header.textContent = `Your caps: ${coins}`
+    list.appendChild(header)
+    for (const entry of market.sells) {
+      const name = this.content.item(entry.item)?.name ?? entry.item
       const row = document.createElement('button')
       row.className = 'shop-row'
-      const have = this.state.countOf(trade.give.item)
-      const afford = have >= trade.give.count
+      const afford = coins >= entry.price && entry.stock > 0
       row.disabled = !afford
       row.innerHTML = `
-        <img src="${this.icons.iconFor(trade.get.item)}" draggable="false" />
-        <span class="shop-get">${trade.get.count}× ${getName}</span>
-        <span class="shop-cost ${afford ? '' : 'missing'}">${trade.give.count}× ${giveName} (${have})</span>
+        <img src="${this.icons.iconFor(entry.item)}" draggable="false" />
+        <span class="shop-get">Buy ${entry.count}× ${name}</span>
+        <span class="shop-cost ${afford ? '' : 'missing'}">${entry.price} caps · ${entry.stock} left</span>
       `
-      row.addEventListener('click', () => this.connection.send({ t: 'trade', trade: trade.id }))
+      row.addEventListener('click', () =>
+        this.connection.send({ t: 'market_buy', target, item: entry.item }),
+      )
+      list.appendChild(row)
+    }
+    for (const entry of market.buys) {
+      const name = this.content.item(entry.item)?.name ?? entry.item
+      const have = this.state.countOf(entry.item)
+      const row = document.createElement('button')
+      row.className = 'shop-row'
+      const can = have >= entry.count
+      row.disabled = !can
+      row.innerHTML = `
+        <img src="${this.icons.iconFor(entry.item)}" draggable="false" />
+        <span class="shop-get">Sell ${entry.count}× ${name} (${have})</span>
+        <span class="shop-cost ${can ? '' : 'missing'}">+${entry.price} caps</span>
+      `
+      row.addEventListener('click', () =>
+        this.connection.send({ t: 'market_sell', target, item: entry.item }),
+      )
       list.appendChild(row)
     }
   }
@@ -468,7 +522,32 @@ export class Hud {
     else if (this.activeTab === 'crafting') this.renderCrafting()
     else if (this.activeTab === 'equipment') this.renderEquipment()
     else if (this.activeTab === 'skills') this.renderSkills()
+    else if (this.activeTab === 'standing') this.renderStanding()
     else this.renderPlayers()
+  }
+
+  /** Faction standings: who likes you, who wants you dead. */
+  private renderStanding(): void {
+    const wrap = document.createElement('div')
+    wrap.className = 'skills-list'
+    if (this.state.reputation.length === 0) {
+      const empty = document.createElement('div')
+      empty.className = 'hint-line'
+      empty.textContent = 'Nobody knows your name yet.'
+      wrap.appendChild(empty)
+    }
+    const FACE: Record<string, string> = { friendly: '🤝', neutral: '😐', hostile: '☠' }
+    for (const f of this.state.reputation) {
+      const row = document.createElement('div')
+      row.className = 'hint-line'
+      row.textContent = `${FACE[f.stance] ?? ''} ${f.name}: ${f.value >= 0 ? '+' : ''}${f.value} (${f.stance})`
+      wrap.appendChild(row)
+    }
+    const hint = document.createElement('div')
+    hint.className = 'hint-line'
+    hint.textContent = 'Trading earns favor. Killing their people does not.'
+    wrap.appendChild(hint)
+    this.menuBodyEl.appendChild(wrap)
   }
 
   // ── Slots (shared by hotbar + backpack) ────────────────────────────

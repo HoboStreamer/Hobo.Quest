@@ -74,6 +74,13 @@ export interface ClientStateEvents {
     }[]
   }
   announce: string
+  market: unknown
+  reputation: {
+    id: string
+    name: string
+    value: number
+    stance: string
+  }[]
   fx: {
     kind: 'hurt' | 'death'
     id: string
@@ -130,6 +137,13 @@ export declare class ClientState {
   dayFraction: number
   /** Authoritative weather (rendering + prompts). */
   weather: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog'
+  /** Faction standings (welcome + on change). */
+  reputation: {
+    id: string
+    name: string
+    value: number
+    stance: string
+  }[]
   apply(msg: ServerMessage): void
   countOf(defId: string): number
   /** Item def id in the active hotbar slot (null when holstered). */

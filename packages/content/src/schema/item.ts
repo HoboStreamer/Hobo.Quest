@@ -119,8 +119,9 @@ export const ItemDefSchema = z.object({
     })
     .optional(),
 
-  /** Present iff the placed prop is an NPC trading post (E opens the shop). */
-  shop: z.object({}).optional(),
+  /** Present iff the placed prop is an NPC trading post (E opens the
+   * referenced market). */
+  shop: z.object({ market: z.string() }).optional(),
 
   /** Present iff the placed prop is a hinged door (E toggles when frozen). */
   door: z.object({ openAngle: z.number().default(1.75) }).optional(),

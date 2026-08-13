@@ -22,7 +22,10 @@ import {
   plantStage,
   precipitation,
   recordShot,
+  REP_DELTAS,
   RegionTracker,
+  addReputation,
+  stanceToward,
   startReload,
   stepEnvironment,
   stepMovement,
@@ -43,7 +46,6 @@ import {
   DROP_LOOT,
   DROP_SITES,
   STARTER_ITEMS,
-  TRADES,
   WATER_LEVEL,
   recipeSkill,
   recipeXp,
@@ -578,47 +580,10 @@ export class GameServer {
         this.sendInventory(session)
         break
       }
-      case 'trade': {
-        const trade = TRADES.find((t) => t.id === msg.trade)
-        if (!trade) {
-          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'no_such_trade' })
-          break
-        }
-        // Must be standing at a trading post (spatial-hash pruned).
-        let nearShop = false
-        this.world.spatial.forEachInRadius(session.move.pos.x, session.move.pos.z, 5, (id) => {
-          if (nearShop) return
-          const e = this.world.entities.get(id)
-          if (!e?.prop || !this.world.content.item(e.prop.defId)?.shop) return
-          const d = Math.hypot(
-            e.transform.pos.x - session.move.pos.x,
-            e.transform.pos.z - session.move.pos.z,
-          )
-          if (d < 5) nearShop = true
-        })
-        if (!nearShop) {
-          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'no_merchant' })
-          break
-        }
-        if (session.inventory.countOf(trade.give.item) < trade.give.count) {
-          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'missing_items' })
-          break
-        }
-        if (!session.inventory.canFit(trade.get.item, trade.get.count)) {
-          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'inventory_full' })
-          break
-        }
-        const consumed = session.inventory.consume([
-          { item: trade.give.item, count: trade.give.count },
-        ])
-        if (!consumed.ok) {
-          this.send(session, { t: 'result', action: 'trade', ok: false, error: 'missing_items' })
-          break
-        }
-        session.inventory.add(trade.get.item, trade.get.count)
-        session.dirty = true
-        this.send(session, { t: 'result', action: 'trade', ok: true })
-        this.sendInventory(session)
+      case 'market_open':
+      case 'market_buy':
+      case 'market_sell': {
+        this.handleMarket(session, msg)
         break
       }
       case 'container_open': {
@@ -710,6 +675,135 @@ export class GameServer {
         break
       }
     }
+  }
+
+  // ── Markets ────────────────────────────────────────────────────────
+
+  /** Live sell-stock per market: item -> remaining + next restock time. */
+  private readonly marketStock = new Map<string, Map<string, { stock: number; at: number }>>()
+
+  /** Lazily restocked stock entry for one market sell line. */
+  private stockOf(
+    marketId: string,
+    entry: { item: string; stock: number; restockSeconds: number },
+    nowMs: number,
+  ): { stock: number; at: number } {
+    let market = this.marketStock.get(marketId)
+    if (!market) {
+      // Restore from the persisted blob once per market.
+      market = new Map()
+      const raw = this.store.meta.get(`market_${marketId}`)
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as Record<string, { stock: number; at: number }>
+          for (const [item, s] of Object.entries(parsed)) market.set(item, s)
+        } catch {
+          /* corrupted blob: fall through to fresh stock */
+        }
+      }
+      this.marketStock.set(marketId, market)
+    }
+    let state = market.get(entry.item)
+    if (!state) {
+      state = { stock: entry.stock, at: nowMs + entry.restockSeconds * 1000 }
+      market.set(entry.item, state)
+    }
+    if (nowMs >= state.at) {
+      state.stock = entry.stock
+      state.at = nowMs + entry.restockSeconds * 1000
+    }
+    return state
+  }
+
+  private persistMarkets(): void {
+    for (const [id, market] of this.marketStock) {
+      this.store.meta.set(`market_${id}`, JSON.stringify(Object.fromEntries(market)))
+    }
+  }
+
+  /**
+   * Market interactions: open/buy/sell against the market a shop prop
+   * references. Everything server-atomic: proximity, faction stance,
+   * live stock, coins and space all validated here.
+   */
+  private handleMarket(
+    session: PlayerSession,
+    msg: { t: string; target: string; item?: string },
+  ): void {
+    const deny = (error: string) =>
+      this.send(session, { t: 'result', action: 'trade', ok: false, error })
+    const entity = this.world.entities.get(msg.target as EntityId)
+    const marketId = entity?.prop
+      ? this.world.content.item(entity.prop.defId)?.shop?.market
+      : undefined
+    const market = marketId ? this.world.content.market(marketId) : undefined
+    if (!entity || !market) return deny('no_merchant')
+    const d = Math.hypot(
+      entity.transform.pos.x - session.move.pos.x,
+      entity.transform.pos.z - session.move.pos.z,
+    )
+    if (d > 5) return deny('out_of_range')
+    const faction = this.world.content.faction(market.faction)
+    const stance = faction ? stanceToward(faction, session.reputation) : 'neutral'
+    if (stance === 'hostile') return deny('they_hate_you')
+    const nowMs = Date.now()
+
+    if (msg.t === 'market_buy' && msg.item) {
+      const entry = market.sells.find((s) => s.item === msg.item)
+      if (!entry) return deny('no_such_trade')
+      const state = this.stockOf(market.id, entry, nowMs)
+      if (state.stock <= 0) return deny('out_of_stock')
+      if (session.inventory.countOf('coin') < entry.price) return deny('missing_coins')
+      if (!session.inventory.canFit(entry.item, entry.count)) return deny('inventory_full')
+      const paid = session.inventory.consume([{ item: 'coin', count: entry.price }])
+      if (!paid.ok) return deny('missing_coins')
+      session.inventory.add(entry.item, entry.count)
+      state.stock -= 1
+      addReputation(session.reputation, market.faction, REP_DELTAS.trade)
+      session.dirty = true
+      this.send(session, { t: 'result', action: 'trade', ok: true })
+      this.sendInventory(session)
+      this.sendReputation(session)
+    } else if (msg.t === 'market_sell' && msg.item) {
+      const entry = market.buys.find((b) => b.item === msg.item)
+      if (!entry) return deny('no_such_trade')
+      if (session.inventory.countOf(entry.item) < entry.count) return deny('missing_items')
+      if (!session.inventory.canFit('coin', entry.price)) return deny('inventory_full')
+      const taken = session.inventory.consume([{ item: entry.item, count: entry.count }])
+      if (!taken.ok) return deny('missing_items')
+      session.inventory.add('coin', entry.price)
+      addReputation(session.reputation, market.faction, REP_DELTAS.trade)
+      session.dirty = true
+      this.send(session, { t: 'result', action: 'trade', ok: true })
+      this.sendInventory(session)
+      this.sendReputation(session)
+    }
+    // Every path (including plain open) refreshes the market view.
+    this.send(session, {
+      t: 'market',
+      id: market.id,
+      name: market.name,
+      stance,
+      sells: market.sells.map((s) => ({
+        item: s.item,
+        count: s.count,
+        price: s.price,
+        stock: this.stockOf(market.id, s, nowMs).stock,
+      })),
+      buys: market.buys.map((b) => ({ item: b.item, count: b.count, price: b.price })),
+    })
+  }
+
+  private sendReputation(session: PlayerSession): void {
+    this.send(session, {
+      t: 'reputation',
+      factions: this.world.content.allFactions().map((f) => ({
+        id: f.id,
+        name: f.name,
+        value: Math.round(session.reputation[f.id] ?? 0),
+        stance: stanceToward(f, session.reputation),
+      })),
+    })
   }
 
   /** Range + prop-protection gate shared by all container operations. */
@@ -1081,6 +1175,7 @@ export class GameServer {
       appearance,
       stats: existing?.stats ?? undefined,
       armor: existing?.armor ?? null,
+      reputation: existing?.reputation ?? {},
       content: this.world.content,
       send: (text) => conn.send(text),
       closeConnection: (code, reason) => conn.close(code, reason),
@@ -1127,6 +1222,7 @@ export class GameServer {
     this.sendSkills(session)
     this.sendFriends(session)
     this.send(session, this.timeWire())
+    this.sendReputation(session)
     this.metrics.sessions = this.sessions.size
     this.log.info('player connected', {
       playerId: playerId as string,
@@ -1595,6 +1691,11 @@ export class GameServer {
       })
       this.broadcastSpawn(spawned)
     }
+    if (attacker && arch) {
+      addReputation(attacker.reputation, arch.faction, REP_DELTAS.killMember)
+      attacker.dirty = true
+      this.sendReputation(attacker)
+    }
     this.log.info('npc killed', {
       archetype: arch?.id ?? 'unknown',
       by: attacker?.playerId ?? 'world',
@@ -1978,6 +2079,7 @@ export class GameServer {
     // World clock + weather ride along with every flush (tiny meta writes).
     this.store.meta.set('env_time', String(this.env.timeOfDay))
     this.store.meta.set('env_weather', this.env.weather)
+    this.persistMarkets()
     this.npcs.flush(this.store, Date.now())
     const wrote = this.world.flushDirty(this.store)
     const dirtyPlayers: PlayerDto[] = []
@@ -2020,6 +2122,7 @@ export class GameServer {
       appearance: session.appearance,
       stats: session.stats,
       armor: session.armor,
+      reputation: session.reputation,
       updatedAt: Date.now(),
     }
   }

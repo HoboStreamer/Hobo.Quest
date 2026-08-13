@@ -258,7 +258,7 @@ async function start(): Promise<void> {
         interact.handle(action)
     }
   }
-  interact.onShopOpen = () => hud.openShop()
+  interact.onShopOpen = (targetId) => hud.openShop(targetId)
   input.onWheel = (delta) => interact.onWheel(delta)
 
   state.events.on('actionResult', (r) => {

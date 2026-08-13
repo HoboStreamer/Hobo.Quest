@@ -46,6 +46,8 @@ export interface ClientStateEvents {
   weather: string
   container: { id: string; size: number; slots: { i: number; def: string; count: number }[] }
   announce: string
+  market: unknown
+  reputation: { id: string; name: string; value: number; stance: string }[]
   fx: { kind: 'hurt' | 'death'; id: string }
   disconnected: undefined
   [key: string]: unknown
@@ -90,6 +92,8 @@ export class ClientState {
   dayFraction = 0.34
   /** Authoritative weather (rendering + prompts). */
   weather: 'clear' | 'cloudy' | 'rain' | 'storm' | 'fog' = 'clear'
+  /** Faction standings (welcome + on change). */
+  reputation: { id: string; name: string; value: number; stance: string }[] = []
 
   apply(msg: ServerMessage): void {
     switch (msg.t) {
@@ -204,6 +208,13 @@ export class ClientState {
         break
       case 'announce':
         this.events.emit('announce', msg.text)
+        break
+      case 'market':
+        this.events.emit('market', msg)
+        break
+      case 'reputation':
+        this.reputation = msg.factions
+        this.events.emit('reputation', msg.factions)
         break
       case 'fx':
         this.events.emit('fx', { kind: msg.kind, id: msg.id })

@@ -316,6 +316,31 @@ export const RECIPES: Recipe[] = [
     craftSeconds: 2,
   },
   {
+    id: 'craft_still',
+    name: 'Backwoods Still',
+    category: 'machines',
+    inputs: [
+      { item: 'sheet_metal', count: 5 },
+      { item: 'rope', count: 2 },
+    ],
+    outputs: [{ item: 'copper_still', count: 1 }],
+    craftSeconds: 10,
+    workstation: 'workbench',
+    requiredSkill: { skill: 'farming', level: 3 },
+  },
+  {
+    id: 'distill_tonic',
+    name: 'Pepper Tonic (still)',
+    category: 'processing',
+    inputs: [
+      { item: 'ember_pepper', count: 2 },
+      { item: 'flour', count: 1 },
+    ],
+    outputs: [{ item: 'pepper_tonic', count: 1 }],
+    craftSeconds: 20,
+    machine: 'still',
+  },
+  {
     id: 'craft_wooden_door',
     name: 'Wooden Door',
     category: 'construction',

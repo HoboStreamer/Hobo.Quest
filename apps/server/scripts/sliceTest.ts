@@ -132,6 +132,14 @@ class TestClient {
   } | null = null
   /** Latest authoritative weather from the time message. */
   lastWeather: string | null = null
+  /** Faction standings (reputation message). */
+  reputation: { id: string; name: string; value: number; stance: string }[] = []
+  /** Latest market view (market message). */
+  lastMarket: {
+    id: string
+    sells: { item: string; count: number; price: number; stock: number }[]
+    buys: { item: string; count: number; price: number }[]
+  } | null = null
   /** Mirrors the server's hotbar toggle: re-pressing the active slot holsters. */
   activeSlot = -1
   holstered = false
@@ -239,6 +247,12 @@ class TestClient {
         break
       case 'time':
         this.lastWeather = msg.weather
+        break
+      case 'reputation':
+        this.reputation = msg.factions
+        break
+      case 'market':
+        this.lastMarket = { id: msg.id, sells: msg.sells, buys: msg.buys }
         break
       case 'container':
         this.lastContainer = { id: msg.id, size: msg.size, slots: msg.slots }
@@ -1184,15 +1198,50 @@ async function main(): Promise<void> {
     [12, 14.6],
   ])
   await settle(a)
+  const stall = [...a.entities.values()].find((e) => e.def === 'merchant_stall')
+  assert(stall, 'trading post replicated')
+  // Market open returns stock + prices + stance.
+  a.send({ t: 'market_open', target: stall.id })
+  const marketMsg = await a.waitFor((m) => m.t === 'market', 5000)
+  assert(
+    marketMsg.t === 'market' && marketMsg.sells.length > 0 && marketMsg.buys.length > 0,
+    'market data received (stock + prices)',
+  )
+  const stockBefore =
+    marketMsg.t === 'market'
+      ? (marketMsg.sells.find((s) => s.item === 'berry_seeds')?.stock ?? 0)
+      : 0
   a.results.length = 0
-  a.send({ t: 'trade', trade: 'sell_stone' })
+  a.send({ t: 'market_sell', target: stall.id, item: 'stone' })
   await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
   assert(a.results.at(-1)?.ok === true, `sold stone to the merchant`)
-  if (a.count('coin') < 2) await a.waitFor((m) => m.t === 'inventory' && a.count('coin') >= 2, 5000)
-  a.send({ t: 'trade', trade: 'buy_seeds' })
-  if (a.count('berry_seeds') < 3)
-    await a.waitFor((m) => m.t === 'inventory' && a.count('berry_seeds') >= 3, 5000)
-  assert(a.count('berry_seeds') >= 3, 'bought seeds with coins')
+  await pollUntil(() => a.count('coin') >= 2)
+  a.results.length = 0
+  a.send({ t: 'market_buy', target: stall.id, item: 'berry_seeds' })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
+  assert(a.results.at(-1)?.ok === true, 'bought seeds with coins')
+  await pollUntil(() => a.count('berry_seeds') >= 3)
+  assert(a.count('berry_seeds') >= 3, 'seeds delivered')
+  // Stock decremented and replicated with the refreshed market view.
+  await pollUntil(
+    () =>
+      (a.lastMarket?.sells.find((s) => s.item === 'berry_seeds')?.stock ?? 99) === stockBefore - 1,
+  )
+  assert(
+    (a.lastMarket?.sells.find((s) => s.item === 'berry_seeds')?.stock ?? 99) === stockBefore - 1,
+    'market stock decremented',
+  )
+  // Trading earned Hoboville reputation.
+  await pollUntil(() => (a.reputation.find((f) => f.id === 'hoboville')?.value ?? 0) >= 4)
+  assert(
+    (a.reputation.find((f) => f.id === 'hoboville')?.value ?? 0) >= 4,
+    'trading earned faction reputation',
+  )
+  // Hostile-input: buying something the market does not sell.
+  a.results.length = 0
+  a.send({ t: 'market_buy', target: stall.id, item: 'physgun' })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
+  assert(a.results.at(-1)?.error === 'no_such_trade', 'unknown market item rejected')
 
   await craftAndWait(a, 'craft_planks', 'wood_plank')
   await craftAndWait(a, 'craft_planter_box', 'planter_box')

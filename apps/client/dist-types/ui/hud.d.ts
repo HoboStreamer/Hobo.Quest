@@ -39,7 +39,12 @@ export declare class Hud {
   private shopOpen
   private showDeathScreen
   /** Merchant trade sheet (content-driven; server validates every trade). */
-  openShop(): void
+  /** Shop entity currently open (market requests target it). */
+  private shopTargetId
+  /** Latest market data from the server. */
+  private marketData
+  openShop(targetId: string): void
+  setMarket(data: NonNullable<typeof this.marketData>): void
   closeShop(): void
   private renderShop
   private announceTimer
@@ -65,6 +70,8 @@ export declare class Hud {
   private editMode
   private renderTabs
   renderMenu(): void
+  /** Faction standings: who likes you, who wants you dead. */
+  private renderStanding
   private slotStack
   private dropToWorld
   private slotEl

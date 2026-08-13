@@ -199,7 +199,7 @@ export const ITEMS: ItemDef[] = [
     description: 'Buy and sell. The goose sees all.',
     category: 'misc',
     maxStack: 1,
-    shop: {},
+    shop: { market: 'goose_post' },
     world: {
       shape: { type: 'box', size: [1.8, 1.1, 0.9] },
       massKg: 200,
@@ -528,6 +528,39 @@ export const ITEMS: ItemDef[] = [
     category: 'material',
     maxStack: 10,
     fertilizer: { boost: 1.5 },
+  },
+
+  {
+    id: 'pepper_tonic',
+    name: 'Pepper Tonic',
+    description:
+      'Ember pepper and flour mash run through a still. Burns twice. The Goose pays absurdly well and asks no questions.',
+    category: 'food',
+    maxStack: 10,
+    food: { hunger: 6, thirst: 10, health: 8 },
+  },
+  {
+    id: 'copper_still',
+    name: 'Backwoods Still',
+    description:
+      'Feed it peppers and flour; take tonic. Needs generator power. Keep it out of sight.',
+    category: 'placeable',
+    maxStack: 1,
+    machine: { kind: 'still', inputSlots: 2, outputSlots: 2, needsPower: true },
+    container: { slots: 4 },
+    world: {
+      shape: { type: 'cylinder', radius: 0.4, height: 1.1 },
+      massKg: 90,
+      color: '#8a5a3a',
+      physgun: true,
+    },
+    health: {
+      max: 160,
+      resistance: 1,
+      repair: { item: 'scrap_metal', count: 1, restore: 60 },
+      destroyLoot: [{ item: 'sheet_metal', count: 2 }],
+    },
+    placeable: { maxRange: 3.5, snapStep: 0 },
   },
 
   // ── Utility props (power / water) ──────────────────────────────────

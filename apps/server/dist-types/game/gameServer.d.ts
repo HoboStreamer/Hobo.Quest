@@ -57,6 +57,18 @@ export declare class GameServer {
    */
   private canManipulate
   onMessage(conn: GameConnection, msg: ClientMessage): void
+  /** Live sell-stock per market: item -> remaining + next restock time. */
+  private readonly marketStock
+  /** Lazily restocked stock entry for one market sell line. */
+  private stockOf
+  private persistMarkets
+  /**
+   * Market interactions: open/buy/sell against the market a shop prop
+   * references. Everything server-atomic: proximity, faction stance,
+   * live stock, coins and space all validated here.
+   */
+  private handleMarket
+  private sendReputation
   /** Range + prop-protection gate shared by all container operations. */
   private containerAccessDenied
   private sendContainer

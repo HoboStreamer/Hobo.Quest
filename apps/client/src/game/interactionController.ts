@@ -64,8 +64,8 @@ export class InteractionController {
   onSwing: (() => void) | null = null
   /** True when the last 'use' this client sent targeted another player. */
   lastTargetWasPlayer = false
-  /** Hook: player pressed E on a trading post. */
-  onShopOpen: (() => void) | null = null
+  /** Hook: player pressed E on a trading post (entity id passed along). */
+  onShopOpen: ((targetId: string) => void) | null = null
   /** Rigging tool: first selected endpoint (highlight + prompt read this). */
   riggingFirst: RiggingPick | null = null
   /** Ghost preview pose supplier (wired by main; null = no valid ghost). */
@@ -225,7 +225,7 @@ export class InteractionController {
         }
         this.lastTargetWasPlayer = target.kind === 'player'
         if (target.def && this.content.item(target.def)?.shop) {
-          this.onShopOpen?.()
+          this.onShopOpen?.(target.entityId)
           break
         }
         // Containers open on E instead of being picked up.

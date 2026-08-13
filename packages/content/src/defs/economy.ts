@@ -1,42 +1,7 @@
 /**
- * NPC economy content: the city merchant's trade sheet and the wilderness
- * supply-drop sites. Pure data — the server validates and executes.
+ * Wilderness supply-drop content (the trade sheet moved to defs/markets).
+ * Pure data — the server validates and executes.
  */
-
-export interface Trade {
-  id: string
-  /** What the PLAYER pays. */
-  give: { item: string; count: number }
-  /** What the PLAYER receives. */
-  get: { item: string; count: number }
-}
-
-export const TRADES: Trade[] = [
-  { id: 'sell_stone', give: { item: 'stone', count: 3 }, get: { item: 'coin', count: 2 } },
-  { id: 'sell_scrap', give: { item: 'scrap_metal', count: 5 }, get: { item: 'coin', count: 3 } },
-  { id: 'sell_stew', give: { item: 'trail_stew', count: 1 }, get: { item: 'coin', count: 3 } },
-  { id: 'sell_logs', give: { item: 'wood_log', count: 10 }, get: { item: 'coin', count: 2 } },
-  { id: 'sell_core', give: { item: 'salvage_core', count: 1 }, get: { item: 'coin', count: 25 } },
-  { id: 'buy_seeds', give: { item: 'coin', count: 2 }, get: { item: 'berry_seeds', count: 3 } },
-  { id: 'buy_mudroot', give: { item: 'coin', count: 1 }, get: { item: 'mudroot_seeds', count: 3 } },
-  { id: 'buy_wheat', give: { item: 'coin', count: 2 }, get: { item: 'wheat_seeds', count: 4 } },
-  {
-    id: 'buy_wirevine',
-    give: { item: 'coin', count: 2 },
-    get: { item: 'wirevine_seeds', count: 3 },
-  },
-  {
-    id: 'buy_ember',
-    give: { item: 'coin', count: 8 },
-    get: { item: 'ember_pepper_seeds', count: 2 },
-  },
-  { id: 'sell_bread', give: { item: 'flatbread', count: 1 }, get: { item: 'coin', count: 4 } },
-  { id: 'sell_pepper', give: { item: 'ember_pepper', count: 1 }, get: { item: 'coin', count: 6 } },
-  { id: 'sell_planks', give: { item: 'wood_plank', count: 12 }, get: { item: 'coin', count: 4 } },
-  { id: 'buy_rope', give: { item: 'coin', count: 3 }, get: { item: 'rope', count: 2 } },
-  { id: 'buy_axe', give: { item: 'coin', count: 8 }, get: { item: 'stone_axe', count: 1 } },
-  { id: 'buy_stew', give: { item: 'coin', count: 5 }, get: { item: 'trail_stew', count: 1 } },
-]
 
 /** Wilderness landing points for supply-drop extraction events. */
 export const DROP_SITES: [number, number, number][] = [

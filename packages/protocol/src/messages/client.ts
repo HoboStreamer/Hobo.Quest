@@ -215,10 +215,24 @@ export const ClientDrinkSchema = z.object({
   t: z.literal('drink'),
 })
 
-/** Execute a merchant trade by id (validated against content). */
-export const ClientTradeSchema = z.object({
-  t: z.literal('trade'),
-  trade: z.string().max(32),
+/** Open a trading post's market (server replies with stock + prices). */
+export const ClientMarketOpenSchema = z.object({
+  t: z.literal('market_open'),
+  target: z.string().max(32),
+})
+
+/** Buy one sell-bundle from the market this shop prop references. */
+export const ClientMarketBuySchema = z.object({
+  t: z.literal('market_buy'),
+  target: z.string().max(32),
+  item: z.string().max(64),
+})
+
+/** Sell one buy-bundle to the market. */
+export const ClientMarketSellSchema = z.object({
+  t: z.literal('market_sell'),
+  target: z.string().max(32),
+  item: z.string().max(64),
 })
 
 /** Open a container prop (server replies with its contents). */
@@ -264,7 +278,9 @@ export const ClientMessageSchema = z.union([
   ClientConstraintRemoveSchema,
   ClientConsumeSchema,
   ClientDrinkSchema,
-  ClientTradeSchema,
+  ClientMarketOpenSchema,
+  ClientMarketBuySchema,
+  ClientMarketSellSchema,
   ClientContainerOpenSchema,
   ClientContainerMoveSchema,
   ClientContainerSortSchema,
@@ -288,7 +304,9 @@ export type ClientConstraint = z.infer<typeof ClientConstraintSchema>
 export type ClientConstraintRemove = z.infer<typeof ClientConstraintRemoveSchema>
 export type ClientConsume = z.infer<typeof ClientConsumeSchema>
 export type ClientDrink = z.infer<typeof ClientDrinkSchema>
-export type ClientTrade = z.infer<typeof ClientTradeSchema>
+export type ClientMarketOpen = z.infer<typeof ClientMarketOpenSchema>
+export type ClientMarketBuy = z.infer<typeof ClientMarketBuySchema>
+export type ClientMarketSell = z.infer<typeof ClientMarketSellSchema>
 export type ClientContainerOpen = z.infer<typeof ClientContainerOpenSchema>
 export type ClientContainerMove = z.infer<typeof ClientContainerMoveSchema>
 export type ClientContainerSort = z.infer<typeof ClientContainerSortSchema>

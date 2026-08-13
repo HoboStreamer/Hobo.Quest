@@ -2,7 +2,7 @@ import type { Appearance, ClientInput } from '@hobo/protocol'
 import type { ContentRegistry } from '@hobo/content'
 import type { Inventory, SkillSet } from '@hobo/gameplay'
 import { CraftQueue, type PlayerMoveState, type SurvivalStats } from '@hobo/gameplay'
-import type { ItemStack } from '@hobo/gameplay'
+import type { ItemStack, ReputationDto } from '@hobo/gameplay'
 import type { EntityId, PlayerId, Quat, Vec3 } from '@hobo/shared'
 export declare const INVENTORY_SIZE = 24
 export declare const HOTBAR_SIZE = 6
@@ -60,6 +60,8 @@ export interface PlayerSession {
   grabbing: boolean
   /** Worn armor piece (null = nothing). Durability lives in stack meta. */
   armor: ItemStack | null
+  /** Faction reputation scores (persistent). */
+  reputation: ReputationDto
   /** Survival vitals (server-authoritative; replicated only to the owner). */
   stats: SurvivalStats
   /** Vitals changed since last stats message. */
@@ -102,6 +104,7 @@ export interface SessionInit {
   appearance: Appearance
   stats?: Partial<SurvivalStats> | undefined
   armor?: ItemStack | null
+  reputation?: ReputationDto
   content: ContentRegistry
   send(text: string): void
   closeConnection(code: number, reason: string): void

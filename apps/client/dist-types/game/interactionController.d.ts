@@ -48,8 +48,8 @@ export declare class InteractionController {
   onSwing: (() => void) | null
   /** True when the last 'use' this client sent targeted another player. */
   lastTargetWasPlayer: boolean
-  /** Hook: player pressed E on a trading post. */
-  onShopOpen: (() => void) | null
+  /** Hook: player pressed E on a trading post (entity id passed along). */
+  onShopOpen: ((targetId: string) => void) | null
   /** Rigging tool: first selected endpoint (highlight + prompt read this). */
   riggingFirst: RiggingPick | null
   /** Ghost preview pose supplier (wired by main; null = no valid ghost). */

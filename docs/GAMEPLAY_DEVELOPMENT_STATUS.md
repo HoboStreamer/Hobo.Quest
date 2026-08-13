@@ -258,10 +258,20 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
 
 ### Economy
 
-- **Bootstrap.** 9 fixed TRADES at merchant stall (bottle-cap `coin`),
-  proximity check O(props), atomic-ish validation (consume then add — add
-  is checked by canFit first). No markets/stock/restock/pricing, no
-  economy API, no player shops.
+- **Implemented (Stage 8).** Data-driven markets: MarketDef content
+  (faction-owned, sell bundles with finite lazily-restocking stock, buy
+  bundles as sinks) opened via shop props (shop.market). Transactions are
+  server-atomic (proximity, stance, stock, coins, space); stock persists
+  (meta market_<id>); hostile-stance players are refused. Goose's Post
+  replaces the fixed trade sheet and cashes out every production chain —
+  lumber, flatbread, ember peppers, and 18-cap pepper tonic from the new
+  powered Backwoods Still (farm → mill → still → market).
+- Reputation: persistent per-faction scores (players.reputation, v10);
+  trades +2, killing members −15; stanceToward() shifts the faction's
+  base disposition per player — NPC hostility and market access read it.
+  Standing tab in the Tab menu; reputation message on change.
+- Missing: NPC merchants walking the stall (props today), player shops,
+  dynamic pricing, law/guard response to underground goods.
 
 ### NPCs / Factions / Reputation
 
