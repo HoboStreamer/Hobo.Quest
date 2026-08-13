@@ -170,6 +170,17 @@ export const ItemDefSchema = z.object({
   /** Present iff consuming this item permanently unlocks a recipe. */
   blueprint: z.object({ recipe: z.string() }).optional(),
 
+  /** Present iff the placed prop is a vehicle component. A chassis with
+   * >= 2 wheels attached by axis/motor constraints is drivable (E). */
+  vehiclePart: z
+    .object({
+      part: z.enum(['chassis', 'wheel']),
+      /** Chassis only: thrust force (N) and top speed (m/s). */
+      power: z.number().positive().optional(),
+      topSpeed: z.number().positive().optional(),
+    })
+    .optional(),
+
   /** Present iff the item is wearable protection (one armor slot). Stack
    * meta `dur` tracks remaining durability; the piece breaks at 0. */
   armor: z

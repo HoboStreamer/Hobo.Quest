@@ -76,6 +76,8 @@ export interface PlayerSession {
   unlocks: Set<string>
   /** Active contract + progress (persistent). */
   activeJob: { job: string; progress: number } | null
+  /** Chassis entity currently being driven (transient). */
+  driving: EntityId | null
   /** Survival vitals (server-authoritative; replicated only to the owner). */
   stats: SurvivalStats
   /** Vitals changed since last stats message. */
@@ -152,6 +154,7 @@ export function createSession(init: SessionInit): PlayerSession {
     reputation: init.reputation ?? {},
     unlocks: new Set(init.unlocks ?? []),
     activeJob: init.activeJob ?? null,
+    driving: null,
     stats: normalizeStats(init.stats),
     statsDirty: true,
     openContainer: null,

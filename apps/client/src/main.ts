@@ -508,6 +508,8 @@ function promptFor(
   content: ReturnType<typeof createContent>,
   state: ClientState,
 ): string | null {
+  // Behind the wheel, one prompt matters.
+  if (interact.drivingId()) return 'WASD — drive · E — dismount'
   const target = interact.aim()
   const tool = interact.equippedToolKind()
   // Placement mode owns the prompt while a placeable is in hand.
@@ -580,6 +582,9 @@ function promptFor(
     if (target.def && content.item(target.def)?.waterTank) {
       const held = state.activeItemDef()
       if (held && content.item(held)?.fluidContainer) return 'E — fill / pour water'
+    }
+    if (target.def && content.item(target.def)?.vehiclePart?.part === 'chassis') {
+      return 'E — drive (needs 2 rigged wheels + fuel in the trunk)'
     }
     if (interact.physgunActive)
       return 'RMB — freeze · E — rotate · Shift — grid · wheel — push/pull'

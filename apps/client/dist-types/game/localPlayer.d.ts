@@ -46,6 +46,8 @@ export declare class LocalPlayer {
   fixedUpdate(): void
   private applyInput
   /** Reconcile against an authoritative snapshot. */
+  /** Vehicle being driven (server-authoritative; disables prediction). */
+  driving: string | null
   onSnapshot(snap: ServerSnapshot): void
   /** Per-frame: camera follows interpolated predicted position. */
   frameUpdate(alpha: number, dt: number): void

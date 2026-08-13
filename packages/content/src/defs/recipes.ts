@@ -343,6 +343,33 @@ export const RECIPES: Recipe[] = [
     machine: 'still',
   },
   {
+    id: 'craft_cart_chassis',
+    name: 'Scrap Cart Chassis',
+    category: 'vehicles',
+    inputs: [
+      { item: 'wood_plank', count: 8 },
+      { item: 'sheet_metal', count: 4 },
+      { item: 'salvaged_motor', count: 1 },
+    ],
+    outputs: [{ item: 'cart_chassis', count: 1 }],
+    craftSeconds: 12,
+    workstation: 'workbench',
+    requiredSkill: { skill: 'construction', level: 4 },
+  },
+  {
+    id: 'craft_cart_wheel',
+    name: 'Cart Wheel',
+    category: 'vehicles',
+    inputs: [
+      { item: 'wood_plank', count: 2 },
+      { item: 'sheet_metal', count: 1 },
+    ],
+    outputs: [{ item: 'cart_wheel', count: 1 }],
+    craftSeconds: 4,
+    workstation: 'workbench',
+    requiredSkill: { skill: 'construction', level: 3 },
+  },
+  {
     id: 'craft_wooden_door',
     name: 'Wooden Door',
     category: 'construction',

@@ -91,6 +91,8 @@ export interface WirePlayerState {
   proneBits?: number
   /** Self-only: admin edit-mode noclip flag (prediction must match). */
   noclip?: boolean
+  /** Self-only: entity id of the vehicle being driven (prediction off). */
+  driving?: string
 }
 
 export interface WireItemStack {

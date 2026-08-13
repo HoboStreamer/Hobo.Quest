@@ -77,6 +77,8 @@ export declare class InteractionController {
     input: InputTracker,
     weaponSettings: WeaponSettings,
   )
+  /** Chassis entity id currently driven (server-authoritative). */
+  drivingId(): string | null
   equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'rigging' | null
   /** What the crosshair points at right now (client-side, UX only). */
   aim(): AimTarget | null

@@ -401,6 +401,14 @@ export class HavokWorld implements PhysicsWorld {
     this.constraints.delete(id)
   }
 
+  applyForce(id: BodyId, force: Vec3): void {
+    const rec = this.mustGet(id)
+    if (rec.motion !== 'dynamic') return
+    this._v1.set(force.x, force.y, force.z)
+    this._v2.copyFrom(rec.node.position)
+    rec.body.applyForce(this._v1, this._v2)
+  }
+
   raycast(from: Vec3, to: Vec3, collidesWith: number): RayHit | null {
     this._v1.set(from.x, from.y, from.z)
     this._v2.set(to.x, to.y, to.z)

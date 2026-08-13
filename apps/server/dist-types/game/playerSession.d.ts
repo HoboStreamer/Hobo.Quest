@@ -69,6 +69,8 @@ export interface PlayerSession {
     job: string
     progress: number
   } | null
+  /** Chassis entity currently being driven (transient). */
+  driving: EntityId | null
   /** Survival vitals (server-authoritative; replicated only to the owner). */
   stats: SurvivalStats
   /** Vitals changed since last stats message. */

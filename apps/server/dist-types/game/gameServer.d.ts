@@ -129,6 +129,15 @@ export declare class GameServer {
    * drop on death) and the player is recalled to the safe city.
    */
   private extractPlayer
+  /** E on a chassis: mount a valid assembly, or dismount if driving it. */
+  private handleVehicleUse
+  private dismount
+  /**
+   * Vehicle drive: intent (WASD) becomes thrust force + steering on the
+   * chassis body; wheels roll on their rigged bearings; fuel burns from
+   * the trunk like a generator. The rider is carried kinematically.
+   */
+  private driveVehicle
   /** Death/rescue respawn: back to the city with restored vitals. */
   private respawn
   private statsWire

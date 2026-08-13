@@ -136,10 +136,29 @@ export class LocalPlayer {
   }
 
   /** Reconcile against an authoritative snapshot. */
+  /** Vehicle being driven (server-authoritative; disables prediction). */
+  driving: string | null = null
+
   onSnapshot(snap: ServerSnapshot): void {
     const mine = snap.players.find((p) => p.id === this.state.myEntityId)
     if (!mine) return
     this.pending = this.pending.filter((c) => c.seq > snap.ack)
+    this.driving = mine.driving ?? null
+    if (this.driving) {
+      // Driving: the vehicle moves us — adopt the authoritative pose
+      // outright (no replay; inputs steer the cart, not the body).
+      this.move.pos.x = mine.pos[0]
+      this.move.pos.y = mine.pos[1]
+      this.move.pos.z = mine.pos[2]
+      this.move.vel.x = mine.vel[0]
+      this.move.vel.y = mine.vel[1]
+      this.move.vel.z = mine.vel[2]
+      this.currPos.set(this.move.pos.x, this.move.pos.y, this.move.pos.z)
+      this.corr.x = 0
+      this.corr.y = 0
+      this.corr.z = 0
+      return
+    }
 
     const beforeX = this.move.pos.x
     const beforeY = this.move.pos.y

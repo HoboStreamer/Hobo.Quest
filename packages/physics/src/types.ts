@@ -160,6 +160,9 @@ export interface PhysicsWorld {
   /** Retunes a motorized hinge/slider's drive. No-op on other constraints. */
   setConstraintMotor(id: ConstraintId, motor: ConstraintMotor): void
 
+  /** Applies a world-space force at the body's center (vehicle thrust). */
+  applyForce(id: BodyId, force: Vec3): void
+
   /** First hit along a segment, filtered by collision mask. */
   raycast(from: Vec3, to: Vec3, collidesWith: number): RayHit | null
 

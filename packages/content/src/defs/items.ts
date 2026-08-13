@@ -600,6 +600,49 @@ export const ITEMS: ItemDef[] = [
     placeable: { maxRange: 3.5, snapStep: 0 },
   },
 
+  // ── Vehicle parts (assembled with the rigging tool) ────────────────
+  {
+    id: 'cart_chassis',
+    name: 'Scrap Cart Chassis',
+    description:
+      'A motorized flatbed. Rig wheels to it (axis or motor links), load fuel in the trunk, E to drive.',
+    category: 'placeable',
+    maxStack: 1,
+    vehiclePart: { part: 'chassis', power: 5200, topSpeed: 11 },
+    container: { slots: 6 },
+    world: {
+      shape: { type: 'box', size: [1.5, 0.45, 2.3] },
+      massKg: 160,
+      color: '#5a5248',
+      physgun: true,
+    },
+    health: {
+      max: 300,
+      resistance: 0.8,
+      repair: { item: 'scrap_metal', count: 1, restore: 60 },
+      destroyLoot: [
+        { item: 'scrap_metal', count: 4 },
+        { item: 'sheet_metal', count: 2 },
+      ],
+    },
+    placeable: { maxRange: 4, snapStep: 0 },
+  },
+  {
+    id: 'cart_wheel',
+    name: 'Cart Wheel',
+    description: 'Banded scrap wheel. Rig to a chassis with an axis link.',
+    category: 'placeable',
+    maxStack: 4,
+    vehiclePart: { part: 'wheel' },
+    world: {
+      shape: { type: 'cylinder', radius: 0.38, height: 0.24 },
+      massKg: 16,
+      color: '#3a3a3a',
+      physgun: true,
+    },
+    placeable: { maxRange: 4, snapStep: 0 },
+  },
+
   // ── Utility props (power / water) ──────────────────────────────────
   {
     id: 'scrap_generator',

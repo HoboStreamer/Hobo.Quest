@@ -91,6 +91,11 @@ export class InteractionController {
     input.captureLook = () => this.rotating && this.physgunActive
   }
 
+  /** Chassis entity id currently driven (server-authoritative). */
+  drivingId(): string | null {
+    return this.player.driving
+  }
+
   equippedToolKind(): 'physgun' | 'axe' | 'pickaxe' | 'rigging' | null {
     const defId = this.state.activeItemDef()
     if (!defId) return null
@@ -221,6 +226,11 @@ export class InteractionController {
       case 'use_down': {
         if (this.physgunActive) {
           this.rotating = true
+          break
+        }
+        // Driving: E dismounts (targets the driven chassis).
+        if (this.player.driving) {
+          this.connection.send({ t: 'use', target: this.player.driving })
           break
         }
         const target = this.aim()

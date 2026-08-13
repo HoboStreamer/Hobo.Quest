@@ -329,9 +329,24 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
 
 - DROP_LOOT fixed table for crates. No loot-table content schema.
 
-### Vehicles / Power / Fuel / Water
+### Vehicles
 
-- **Missing entirely.**
+- **Prototype implemented (Stage 11), grown from item+physics+constraint
+  architecture as required.** cart_chassis (motorized flatbed: thrust
+  power, top speed, 6-slot trunk, health/repair) and cart_wheel items;
+  players physgun the parts together and rig wheels with axis/motor links
+  (the existing rigging tool). Assembly recognition: chassis + >= 2
+  rigged wheels = drivable; a bare chassis refuses (needs_wheels).
+- Driving is server-authoritative force control: intent (WASD) becomes
+  thrust along the chassis' facing plus blended yaw steering, top-speed
+  capped; wheels roll on their bearings; fuel items burn from the trunk
+  exactly like generators (no fuel = coasting). The rider is carried
+  kinematically; the client suppresses prediction while driving
+  (self-state `driving` flag) and adopts authoritative poses.
+- Persistence is free: chassis/wheels are ordinary props, the axles are
+  ordinary constraints — both already persist and restore.
+- Not yet: suspension tuning, multi-seat, headlights, trailer hitches
+  (rope tow actually works today), vehicle-vs-player impact damage.
 
 ### World regions / simulation LOD
 

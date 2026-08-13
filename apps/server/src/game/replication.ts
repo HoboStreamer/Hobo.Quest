@@ -125,6 +125,7 @@ export function buildSnapshot(
   self.stanceCd = session.move.stanceCooldown
   self.proneBits = (session.move.proneActive ? 1 : 0) | (session.move.proneHeld ? 2 : 0)
   self.noclip = session.move.noclip
+  if (session.driving) self.driving = session.driving as string
   const players: WirePlayerState[] = [self]
   for (const other of sessions) {
     if (other === session) continue

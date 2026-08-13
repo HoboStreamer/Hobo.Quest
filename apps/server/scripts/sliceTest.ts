@@ -58,6 +58,9 @@ function startServer(): Promise<void> {
       { item: 'merchant_stall', pos: [12, 0.6, 12.8], yaw: 3.14 },
       // Stage 4: an authored production yard outside the north gate.
       { item: 'sawmill', pos: [8, 0.7, 31], yaw: 0 },
+      { item: 'cart_chassis', pos: [-6, 0.8, 30], yaw: 0 },
+      { item: 'cart_wheel', pos: [-7.6, 0.6, 30], yaw: 0 },
+      { item: 'cart_wheel', pos: [-4.4, 0.6, 30], yaw: 0 },
       { item: 'scrap_generator', pos: [10, 0.7, 31], yaw: 0 },
       { item: 'wooden_crate', pos: [2, 1.0, 25], yaw: 0.3 },
       { item: 'wooden_crate', pos: [2.2, 1.8, 25.1], yaw: 0.9 },
@@ -1123,6 +1126,76 @@ async function main(): Promise<void> {
   const salvagePickup = await a.use(salvage.id)
   assert(salvagePickup.ok, 'salvage recovered')
   assert(a.count('wood_plank') > planksBefore2 - 1, 'salvage planks in inventory')
+
+  console.log('phase: vehicles — rig wheels, fuel up, drive, dismount')
+  {
+    const chassis = [...a.entities.values()].find((e) => e.def === 'cart_chassis')
+    const wheels = [...a.entities.values()].filter((e) => e.def === 'cart_wheel')
+    assert(chassis && wheels.length >= 2, 'cart parts replicated')
+    await walkTo(a, chassis.pos[0] + 1.5, chassis.pos[2] - 1.5)
+    await settle(a)
+    // Mounting a bare chassis is refused.
+    a.results.length = 0
+    a.send({ t: 'use', target: chassis.id })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'use')
+    assert(a.results.at(-1)?.error === 'needs_wheels', 'wheelless chassis refuses to drive')
+    // Rig both wheels with axis links (sideways axles).
+    await a.equip('rigging_tool')
+    for (const wheel of wheels.slice(0, 2)) {
+      a.results.length = 0
+      a.send({
+        t: 'constraint',
+        kind: 'axis',
+        a: chassis.id,
+        b: wheel.id,
+        pointA: a.entities.get(chassis.id)!.pos,
+        pointB: a.entities.get(wheel.id)!.pos,
+        axis: [1, 0, 0],
+      })
+      await a.waitFor((m) => m.t === 'result' && m.action === 'constraint')
+      assert(a.results.at(-1)?.ok === true, `wheel rigged (${JSON.stringify(a.results.at(-1))})`)
+      await sleep(250)
+    }
+    // Fuel the trunk with a log.
+    a.send({ t: 'container_open', target: chassis.id })
+    await a.waitFor((m) => m.t === 'container' && m.id === chassis.id, 5000)
+    assert(a.count('wood_log') >= 1, 'has a log for fuel')
+    a.send({
+      t: 'container_move',
+      target: chassis.id,
+      dir: 'in',
+      slot: a.slotOf('wood_log'),
+      count: 1,
+    })
+    await a.waitFor(
+      (m) =>
+        m.t === 'container' && m.id === chassis.id && m.slots.some((s) => s.def === 'wood_log'),
+      5000,
+    )
+    // Mount.
+    a.results.length = 0
+    a.send({ t: 'use', target: chassis.id })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'use')
+    assert(a.results.at(-1)?.ok === true, 'mounted the cart')
+    await pollUntil(() => a.me?.driving === chassis.id)
+    assert(a.me?.driving === chassis.id, 'driving flag replicated to the rider')
+    // Drive forward ~3s; the cart (and rider) must actually move.
+    const startX = a.me!.pos[0]
+    const startZ = a.me!.pos[2]
+    for (let i = 0; i < 90; i++) {
+      a.input(0, 1, 0) // full throttle, facing +z
+      await sleep(33)
+    }
+    const moved = Math.hypot((a.me?.pos[0] ?? 0) - startX, (a.me?.pos[2] ?? 0) - startZ)
+    assert(moved > 3, `the cart drove (${moved.toFixed(1)}m)`)
+    // Dismount.
+    a.results.length = 0
+    a.send({ t: 'use', target: chassis.id })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'use')
+    assert(a.results.at(-1)?.ok === true, 'dismounted')
+    await pollUntil(() => !a.me?.driving)
+    assert(!a.me?.driving, 'driving flag cleared')
+  }
 
   console.log('phase: machines — generator power gates the sawmill; logs become lumber')
   {
