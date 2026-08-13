@@ -1,4 +1,5 @@
 import {
+  BLEED_SECONDS,
   Buttons,
   DEFAULT_MOVEMENT,
   Inventory,
@@ -6,22 +7,33 @@ import {
   activeStatuses,
   ambientTemperature,
   applyDamage,
+  applyStatus,
+  canFire,
+  causesBleeding,
+  clearStatus,
   completeJob,
   containerAdd,
   containerSort,
   createEnvironment,
   eat,
   hullHeightFor,
+  mitigate,
   plantProgress,
   plantStage,
   precipitation,
+  recordShot,
+  startReload,
   stepEnvironment,
   stepMovement,
   tickSurvival,
   tryStartJob,
   updatePlant,
   waterPlant,
+  weaponStateFromMeta,
+  weaponStateToMeta,
   type CollisionQueries,
+  type DamageEvent,
+  type DamageType,
   type EnvironmentState,
   type GameEntity,
   type WeatherKind,
@@ -80,6 +92,7 @@ import {
   eyePosition,
   HOTBAR_SIZE,
   INVENTORY_SIZE,
+  viewDirection,
   type PlayerSession,
 } from './playerSession.js'
 import { buildSnapshot, updateInterest, wireEntityFor } from './replication.js'
@@ -200,6 +213,73 @@ export class GameServer {
           break
         }
         this.send(session, { t: 'result', action: 'attack', ok: false, error: 'no_target' })
+        break
+      }
+      case 'fire': {
+        this.handleFire(session)
+        break
+      }
+      case 'reload': {
+        const held = session.holstered ? null : session.inventory.get(session.activeHotbar)
+        const spec = held ? this.world.content.item(held.defId)?.rangedWeapon : undefined
+        if (!held || !spec) {
+          this.send(session, { t: 'result', action: 'attack', ok: false, error: 'not_a_weapon' })
+          break
+        }
+        const state = weaponStateFromMeta(held.meta)
+        const available = session.inventory.countOf(spec.ammoItem)
+        const took = startReload(state, spec, available, Date.now())
+        if (took <= 0) {
+          this.send(session, { t: 'result', action: 'attack', ok: false, error: 'no_ammo' })
+          break
+        }
+        session.inventory.consume([{ item: spec.ammoItem, count: took }])
+        held.meta = weaponStateToMeta(state, held.meta)
+        session.dirty = true
+        this.send(session, { t: 'result', action: 'attack', ok: true })
+        this.sendInventory(session)
+        break
+      }
+      case 'equip_armor': {
+        if (msg.slot === undefined) {
+          // Unequip into the first free inventory slot.
+          if (!session.armor) {
+            this.send(session, { t: 'result', action: 'inv_move', ok: false, error: 'no_armor' })
+            break
+          }
+          if (!session.inventory.addStack(session.armor)) {
+            this.send(session, {
+              t: 'result',
+              action: 'inv_move',
+              ok: false,
+              error: 'inventory_full',
+            })
+            break
+          }
+          session.armor = null
+          session.dirty = true
+          this.send(session, { t: 'result', action: 'inv_move', ok: true })
+          this.sendInventory(session)
+          break
+        }
+        const stack = session.inventory.get(msg.slot)
+        const armorDef = stack ? this.world.content.item(stack.defId)?.armor : undefined
+        if (!stack || !armorDef) {
+          this.send(session, { t: 'result', action: 'inv_move', ok: false, error: 'not_armor' })
+          break
+        }
+        const removed = session.inventory.removeFromSlot(msg.slot, 1)
+        if (!removed) break
+        // Fresh pieces get their full durability stamped into the stack.
+        if (removed.meta?.dur === undefined) {
+          removed.meta = { ...removed.meta, dur: armorDef.durability }
+        }
+        const previous = session.armor
+        session.armor = removed
+        if (previous) session.inventory.addStack(previous)
+        session.dirty = true
+        this.send(session, { t: 'result', action: 'inv_move', ok: true })
+        this.sendInventory(session)
         break
       }
       case 'use': {
@@ -427,16 +507,22 @@ export class GameServer {
       }
       case 'consume': {
         const stack = session.inventory.get(msg.slot)
-        const food = stack ? this.world.content.item(stack.defId)?.food : undefined
-        if (!stack || !food) {
+        const def = stack ? this.world.content.item(stack.defId) : undefined
+        if (!stack || (!def?.food && !def?.medical)) {
           this.send(session, { t: 'result', action: 'consume', ok: false, error: 'not_food' })
           break
         }
         session.inventory.removeFromSlot(msg.slot, 1)
-        eat(session.stats, food, Date.now())
+        if (def.food) eat(session.stats, def.food, Date.now())
+        if (def.medical) {
+          session.stats.health = Math.min(100, session.stats.health + def.medical.heal)
+          if (def.medical.curesBleeding) clearStatus(session.stats, 'bleeding')
+        }
         session.statsDirty = true
         session.dirty = true
         this.send(session, { t: 'result', action: 'consume', ok: true })
+        this.send(session, { t: 'stats', ...this.statsWire(session) })
+        session.statsDirty = false
         this.sendInventory(session)
         break
       }
@@ -935,6 +1021,7 @@ export class GameServer {
       friends,
       appearance,
       stats: existing?.stats ?? undefined,
+      armor: existing?.armor ?? null,
       content: this.world.content,
       send: (text) => conn.send(text),
       closeConnection: (code, reason) => conn.close(code, reason),
@@ -1182,7 +1269,9 @@ export class GameServer {
     attacker.stats.stamina = Math.max(0, attacker.stats.stamina - 12)
     attacker.statsDirty = true
     const base = weapon?.damage ?? (tool ? 6 + tool.power * 4 : heldDef ? 5 : 6)
-    const damage = base * (exhausted ? 0.5 : 1)
+    // Edged tools cut (can open wounds); everything else is blunt.
+    const type: DamageType =
+      weapon || tool?.kind === 'axe' || tool?.kind === 'pickaxe' ? 'cutting' : 'blunt'
     // Knockback: shove the victim away (replicates through prediction).
     const kx = victim.move.pos.x - attacker.move.pos.x
     const kz = victim.move.pos.z - attacker.move.pos.z
@@ -1190,11 +1279,137 @@ export class GameServer {
     victim.move.vel.x += (kx / kl) * 4.5
     victim.move.vel.z += (kz / kl) * 4.5
     victim.move.vel.y += 2.2
+    this.send(attacker, { t: 'result', action: 'use', ok: true })
+    this.damagePlayer(attacker, victim, { type, amount: base * (exhausted ? 0.5 : 1) })
+  }
+
+  /**
+   * Ranged fire: the client sent pure intent — the shot leaves the
+   * player's AUTHORITATIVE eye along their AUTHORITATIVE view (from
+   * movement inputs) plus server-rolled spread. Magazine, cadence and
+   * reload state live in the weapon stack's meta and are validated here.
+   */
+  private handleFire(session: PlayerSession): void {
+    const held = session.holstered ? null : session.inventory.get(session.activeHotbar)
+    const spec = held ? this.world.content.item(held.defId)?.rangedWeapon : undefined
+    if (!held || !spec) {
+      this.send(session, { t: 'result', action: 'attack', ok: false, error: 'not_a_weapon' })
+      return
+    }
+    if (!this.world.zones.rulesAt(session.move.pos).pvp) {
+      this.send(session, { t: 'result', action: 'attack', ok: false, error: 'safe_zone' })
+      return
+    }
+    const nowMs = Date.now()
+    const state = weaponStateFromMeta(held.meta)
+    const verdict = canFire(state, spec, nowMs)
+    if (verdict !== 'ok') {
+      this.send(session, { t: 'result', action: 'attack', ok: false, error: verdict })
+      return
+    }
+    recordShot(state, nowMs)
+    held.meta = weaponStateToMeta(state, held.meta)
+    session.dirty = true
+
+    eyePosition(session, _eyeScratch)
+    viewDirection(session, _fireDir)
+    // Server-rolled spread: deflect the view ray inside the cone.
+    const spread = (spec.spreadDeg * Math.PI) / 180
+    const dyaw = (Math.random() * 2 - 1) * spread
+    const dpitch = (Math.random() * 2 - 1) * spread
+    const cosP = Math.cos(dpitch)
+    const yaw = Math.atan2(_fireDir.x, _fireDir.z) + dyaw
+    const pitch = Math.asin(Math.max(-1, Math.min(1, _fireDir.y))) + dpitch
+    _fireDir.x = Math.sin(yaw) * Math.cos(pitch)
+    _fireDir.y = Math.sin(pitch)
+    _fireDir.z = Math.cos(yaw) * Math.cos(pitch)
+    void cosP
+    // Start past the shooter's own capsule (raycast cannot exclude bodies).
+    _fireFrom.x = _eyeScratch.x + _fireDir.x * 0.6
+    _fireFrom.y = _eyeScratch.y + _fireDir.y * 0.6
+    _fireFrom.z = _eyeScratch.z + _fireDir.z * 0.6
+    _fireTo.x = _fireFrom.x + _fireDir.x * spec.range
+    _fireTo.y = _fireFrom.y + _fireDir.y * spec.range
+    _fireTo.z = _fireFrom.z + _fireDir.z * spec.range
+    const hit = this.world.physics.raycast(
+      _fireFrom,
+      _fireTo,
+      CollisionLayer.Static | CollisionLayer.Prop | CollisionLayer.Player,
+    )
+    let end = _fireTo
+    let landed = false
+    if (hit) {
+      end = hit.point
+      // Player hit?
+      let victim: PlayerSession | null = null
+      for (const other of this.sessions.values()) {
+        if (this.playerBodies.get(other.playerId) === hit.bodyId) {
+          victim = other
+          break
+        }
+      }
+      if (victim && victim !== session) {
+        if (this.world.zones.rulesAt(victim.move.pos).pvp) {
+          landed = true
+          this.damagePlayer(session, victim, {
+            type: 'projectile',
+            amount: spec.damage,
+            sourceId: session.entityId as string,
+          })
+        }
+      } else if (!victim) {
+        const entity = this.world.entityOfBody(hit.bodyId)
+        if (entity?.prop && this.world.content.item(entity.prop.defId)?.health) {
+          landed = this.applyPropDamage(entity, spec.damage, 'projectile')
+        }
+      }
+    }
+    this.send(session, { t: 'result', action: 'attack', ok: true })
+    const tracer: ServerMessage = {
+      t: 'tracer',
+      shooter: session.entityId as string,
+      from: [_fireFrom.x, _fireFrom.y, _fireFrom.z],
+      to: [end.x, end.y, end.z],
+      hit: landed,
+    }
+    const encoded = encodeServerMessage(tracer)
+    for (const other of this.sessions.values()) {
+      if (other === session || other.known.has(session.entityId)) this.sendRaw(other, encoded)
+    }
+    this.sendInventory(session)
+  }
+
+  /**
+   * The one place player damage lands: armor mitigation (with durability
+   * wear), wound statuses, death handling, and hit feedback. Melee, bullets
+   * and future explosions all converge here.
+   */
+  private damagePlayer(
+    attacker: PlayerSession | null,
+    victim: PlayerSession,
+    event: DamageEvent,
+  ): void {
+    const armorDef = victim.armor ? this.world.content.item(victim.armor.defId)?.armor : undefined
+    const damage = mitigate(event, armorDef ? { reduction: armorDef.reduction } : null)
+    // Armor wears: every mitigated hit costs a point of durability.
+    if (victim.armor && armorDef && damage < event.amount) {
+      const dur = Number(victim.armor.meta?.dur ?? armorDef.durability) - 1
+      if (dur <= 0) {
+        victim.armor = null
+        this.send(victim, { t: 'announce', text: '🧥 Your armor fell apart!' })
+      } else {
+        victim.armor.meta = { ...victim.armor.meta, dur }
+      }
+      this.sendInventory(victim)
+    }
+    if (causesBleeding(event.type, damage)) {
+      applyStatus(victim.stats, 'bleeding', BLEED_SECONDS, Date.now())
+    }
     const died = applyDamage(victim.stats, damage)
     victim.statsDirty = true
     victim.dirty = true
-    this.send(attacker, { t: 'result', action: 'use', ok: true })
-    // Everyone nearby sees the flinch (or the drop).
+    this.send(victim, { t: 'stats', ...this.statsWire(victim), ...(died ? { died: true } : {}) })
+    victim.statsDirty = false
     this.broadcastToKnowing(victim.entityId, {
       t: 'fx',
       kind: died ? 'death' : 'hurt',
@@ -1203,7 +1418,8 @@ export class GameServer {
     if (died) {
       this.log.info('player killed', {
         victim: victim.playerId,
-        attacker: attacker.playerId,
+        attacker: attacker?.playerId ?? 'world',
+        type: event.type,
       })
       this.respawn(victim, true)
     }
@@ -1245,13 +1461,21 @@ export class GameServer {
     attacker.stats.stamina = Math.max(0, attacker.stats.stamina - 12)
     attacker.statsDirty = true
     const base = weapon?.damage ?? (tool ? 6 + tool.power * 4 : heldDef ? 5 : 6)
-    const damage = base * (exhausted ? 0.5 : 1) * cap.resistance
-    entity.prop.health = (entity.prop.health ?? cap.max) - damage
-    entity.dirty = true
     this.send(attacker, { t: 'result', action: 'attack', ok: true })
+    this.applyPropDamage(entity, base * (exhausted ? 0.5 : 1), 'blunt')
+  }
+
+  /** Damage application for props: resistance, destruction, feedback.
+   * Returns false when the prop has no health capability. */
+  private applyPropDamage(entity: GameEntity, rawAmount: number, _type: DamageType): boolean {
+    const cap = entity.prop ? this.world.content.item(entity.prop.defId)?.health : undefined
+    if (!entity.prop || !cap) return false
+    if (!this.world.zones.rulesAt(entity.transform.pos).build) return false
+    entity.prop.health = (entity.prop.health ?? cap.max) - rawAmount * cap.resistance
+    entity.dirty = true
     if (entity.prop.health <= 0) {
       this.destroyProp(entity)
-      return
+      return true
     }
     this.broadcastToKnowing(entity.id, {
       t: 'entity',
@@ -1259,6 +1483,7 @@ export class GameServer {
       health: Math.round(entity.prop.health),
     })
     this.broadcastToKnowing(entity.id, { t: 'fx', kind: 'hurt', id: entity.id as string })
+    return true
   }
 
   /** Destruction: scatter salvage + stored contents as physical props. */
@@ -1642,6 +1867,7 @@ export class GameServer {
       friends: [...session.friends],
       appearance: session.appearance,
       stats: session.stats,
+      armor: session.armor,
       updatedAt: Date.now(),
     }
   }
@@ -1675,6 +1901,13 @@ export class GameServer {
         })),
       },
       activeHotbar: session.activeHotbar,
+      armor: session.armor
+        ? {
+            def: session.armor.defId,
+            count: session.armor.count,
+            ...(session.armor.meta !== undefined ? { meta: session.armor.meta } : {}),
+          }
+        : null,
     })
   }
 
@@ -1753,6 +1986,9 @@ export class GameServer {
 const _eyeScratch = vec3()
 const _relVel = vec3()
 const _bodyPosScratch = vec3()
+const _fireDir = vec3()
+const _fireFrom = vec3()
+const _fireTo = vec3()
 
 function constraintStateWire(rec: ConstraintRecord, active: boolean): ServerMessage {
   return {

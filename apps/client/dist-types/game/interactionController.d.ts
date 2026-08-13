@@ -64,6 +64,7 @@ export declare class InteractionController {
   /** Wheel rotates the placement ghost while a placeable is equipped. */
   onPlacementRotate: ((delta: number) => void) | null
   private lastSwingMs
+  private lastFireMs
   private pendingRotate
   private gridOn
   constructor(

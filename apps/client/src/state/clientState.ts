@@ -25,6 +25,13 @@ export interface ClientStateEvents {
   skills: WireSkill[]
   levelUp: { skill: string; level: number }
   constraintState: ServerConstraintState
+  tracer: {
+    shooter: string
+    from: [number, number, number]
+    to: [number, number, number]
+    hit: boolean
+  }
+  armorChanged: undefined
   friendsChanged: { id: string; name: string }[]
   stats: {
     hp: number
@@ -58,6 +65,8 @@ export class ClientState {
   serverTick = 0
   ack = 0
   inventory: WireInventory | null = null
+  /** Worn armor stack (def/count/meta with dur), or null. */
+  armor: { def: string; count: number; meta?: Record<string, number | string> } | null = null
   activeHotbar = 0
   /** Mirrors the server's holster toggle (same deterministic rules). */
   holstered = false
@@ -133,6 +142,10 @@ export class ClientState {
       case 'inventory':
         this.inventory = msg.inv
         this.activeHotbar = msg.activeHotbar
+        if (msg.armor !== undefined) {
+          this.armor = msg.armor
+          this.events.emit('armorChanged', undefined)
+        }
         this.events.emit('inventory', { inv: msg.inv, activeHotbar: msg.activeHotbar })
         break
       case 'craft_state':
@@ -180,6 +193,14 @@ export class ClientState {
           this.events.emit('weather', msg.weather)
         }
         this.events.emit('timeSync', msg.frac)
+        break
+      case 'tracer':
+        this.events.emit('tracer', {
+          shooter: msg.shooter,
+          from: msg.from,
+          to: msg.to,
+          hit: msg.hit,
+        })
         break
       case 'announce':
         this.events.emit('announce', msg.text)

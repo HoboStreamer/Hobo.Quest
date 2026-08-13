@@ -42,6 +42,13 @@ export interface ClientStateEvents {
     level: number
   }
   constraintState: ServerConstraintState
+  tracer: {
+    shooter: string
+    from: [number, number, number]
+    to: [number, number, number]
+    hit: boolean
+  }
+  armorChanged: undefined
   friendsChanged: {
     id: string
     name: string
@@ -91,6 +98,12 @@ export declare class ClientState {
   serverTick: number
   ack: number
   inventory: WireInventory | null
+  /** Worn armor stack (def/count/meta with dur), or null. */
+  armor: {
+    def: string
+    count: number
+    meta?: Record<string, number | string>
+  } | null
   activeHotbar: number
   /** Mirrors the server's holster toggle (same deterministic rules). */
   holstered: boolean

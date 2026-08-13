@@ -46,6 +46,7 @@ describe('sqlite store', () => {
       name: 'Hobo',
       pos: [0, 1, 0],
       yaw: 1.5,
+      armor: { defId: 'padded_jacket', count: 1, meta: { dur: 12 } },
       inventory: {
         size: 24,
         hotbar: 6,
@@ -149,7 +150,17 @@ describe('sqlite store', () => {
     const loaded = store.constraints.loadAll()
     expect(loaded).toHaveLength(2)
     expect(loaded.find((c) => c.id === 'c2')?.params).toEqual({ length: 2 })
-    expect(store.meta.get('schema_version')).toBe('8')
+    expect(store.meta.get('schema_version')).toBe('9')
+    // v9 armor column round-trips.
+    store.players.upsert({
+      ...store.players.findByToken('tok_11111111')!,
+      armor: { defId: 'padded_jacket', count: 1, meta: { dur: 5 } },
+    })
+    expect(store.players.findByToken('tok_11111111')?.armor).toEqual({
+      defId: 'padded_jacket',
+      count: 1,
+      meta: { dur: 5 },
+    })
     store.close()
   })
 

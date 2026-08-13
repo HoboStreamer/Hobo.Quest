@@ -19,7 +19,7 @@ import type {
  * a database is upgraded step by step inside a transaction per step.
  */
 
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 9
 
 const BASE_SCHEMA = `
 CREATE TABLE IF NOT EXISTS world_entities (
@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS players (
   friends TEXT NOT NULL DEFAULT '[]',
   appearance TEXT,
   stats TEXT,
+  armor TEXT,
   updated_at INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_players_token_slot ON players (token, char_slot);
@@ -127,6 +128,10 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // lengths, limits, motor). Existing weld rows carry NULL params.
     db.exec('ALTER TABLE constraints ADD COLUMN params TEXT;')
   },
+  8: (db) => {
+    // Worn armor (one slot; durability rides in the stack meta).
+    db.exec('ALTER TABLE players ADD COLUMN armor TEXT;')
+  },
 }
 
 interface WorldEntityRow {
@@ -159,6 +164,7 @@ interface PlayerRow {
   friends: string
   appearance: string | null
   stats: string | null
+  armor: string | null
   char_slot: number
   updated_at: number
 }
@@ -270,11 +276,11 @@ export function openSqliteStore(path: string): PersistenceStore {
   }
 
   const upsertPlayer = db.prepare(`
-    INSERT INTO players (id, token, char_slot, name, pos_x, pos_y, pos_z, yaw, inventory, skills, friends, appearance, stats, updated_at)
-    VALUES (@id, @token, @char_slot, @name, @pos_x, @pos_y, @pos_z, @yaw, @inventory, @skills, @friends, @appearance, @stats, @updated_at)
+    INSERT INTO players (id, token, char_slot, name, pos_x, pos_y, pos_z, yaw, inventory, skills, friends, appearance, stats, armor, updated_at)
+    VALUES (@id, @token, @char_slot, @name, @pos_x, @pos_y, @pos_z, @yaw, @inventory, @skills, @friends, @appearance, @stats, @armor, @updated_at)
     ON CONFLICT(id) DO UPDATE SET
       name=excluded.name, pos_x=excluded.pos_x, pos_y=excluded.pos_y, pos_z=excluded.pos_z,
-      yaw=excluded.yaw, inventory=excluded.inventory, skills=excluded.skills, friends=excluded.friends, appearance=excluded.appearance, stats=excluded.stats, updated_at=excluded.updated_at
+      yaw=excluded.yaw, inventory=excluded.inventory, skills=excluded.skills, friends=excluded.friends, appearance=excluded.appearance, stats=excluded.stats, armor=excluded.armor, updated_at=excluded.updated_at
   `)
   const selectPlayerByToken = db.prepare<[string], PlayerRow>(
     'SELECT * FROM players WHERE token = ?',
@@ -291,6 +297,7 @@ export function openSqliteStore(path: string): PersistenceStore {
     skills: JSON.parse(row.skills || '{}') as SkillsDto,
     friends: JSON.parse(row.friends || '[]') as string[],
     appearance: row.appearance ? (JSON.parse(row.appearance) as PlayerDto['appearance']) : null,
+    armor: row.armor ? (JSON.parse(row.armor) as PlayerDto['armor']) : null,
     stats: row.stats ? (JSON.parse(row.stats) as PlayerDto['stats']) : null,
     charSlot: row.char_slot ?? 0,
     updatedAt: row.updated_at,
@@ -309,6 +316,7 @@ export function openSqliteStore(path: string): PersistenceStore {
     friends: JSON.stringify(p.friends),
     appearance: p.appearance ? JSON.stringify(p.appearance) : null,
     stats: p.stats ? JSON.stringify(p.stats) : null,
+    armor: p.armor ? JSON.stringify(p.armor) : null,
     char_slot: p.charSlot ?? 0,
     updated_at: p.updatedAt,
   })

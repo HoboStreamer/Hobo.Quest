@@ -82,6 +82,9 @@ export type InputAction =
       kind: 'hotbar6'
     }
   | {
+      kind: 'reload'
+    }
+  | {
       kind: 'rotate_held'
       dyaw: number
       dpitch: number

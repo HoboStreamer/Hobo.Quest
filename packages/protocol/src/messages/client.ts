@@ -54,6 +54,24 @@ export const ClientAttackSchema = z.object({
   target: z.string().max(32),
 })
 
+/** Fire the equipped ranged weapon. No aim data: the server shoots along
+ * the player's AUTHORITATIVE view (from movement inputs) plus spread. */
+export const ClientFireSchema = z.object({
+  t: z.literal('fire'),
+})
+
+/** Reload the equipped ranged weapon from inventory ammo. */
+export const ClientReloadSchema = z.object({
+  t: z.literal('reload'),
+})
+
+/** Wear the armor item in the given inventory slot (swaps with current). */
+export const ClientEquipArmorSchema = z.object({
+  t: z.literal('equip_armor'),
+  /** Inventory slot to equip from; omit to unequip into the inventory. */
+  slot: z.number().int().min(0).max(63).optional(),
+})
+
 export const ClientCraftSchema = z.object({
   t: z.literal('craft'),
   recipe: z.string().max(64),
@@ -232,6 +250,9 @@ export const ClientMessageSchema = z.union([
   ClientInputSchema,
   ClientUseSchema,
   ClientAttackSchema,
+  ClientFireSchema,
+  ClientReloadSchema,
+  ClientEquipArmorSchema,
   ClientCraftSchema,
   ClientDropSchema,
   ClientPlaceSchema,
@@ -253,6 +274,9 @@ export type ClientHello = z.infer<typeof ClientHelloSchema>
 export type ClientInput = z.infer<typeof ClientInputSchema>
 export type ClientUse = z.infer<typeof ClientUseSchema>
 export type ClientAttack = z.infer<typeof ClientAttackSchema>
+export type ClientFire = z.infer<typeof ClientFireSchema>
+export type ClientReload = z.infer<typeof ClientReloadSchema>
+export type ClientEquipArmor = z.infer<typeof ClientEquipArmorSchema>
 export type ClientCraft = z.infer<typeof ClientCraftSchema>
 export type ClientDrop = z.infer<typeof ClientDropSchema>
 export type ClientPlace = z.infer<typeof ClientPlaceSchema>

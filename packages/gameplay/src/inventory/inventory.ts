@@ -147,6 +147,21 @@ export class Inventory {
     return ok(undefined)
   }
 
+  /**
+   * Places a whole stack (meta and all) into the first empty slot. Used
+   * for unique items — armor coming off, weapons with state — that must
+   * never merge. Returns false when no slot is free.
+   */
+  addStack(stack: ItemStack): boolean {
+    for (let i = 0; i < this.size; i++) {
+      if (this.slots[i] === null) {
+        this.slots[i] = { ...stack }
+        return true
+      }
+    }
+    return false
+  }
+
   /** Space check without mutating: could `count` of `defId` be added? */
   canFit(defId: string, count: number): boolean {
     const maxStack = this.maxStackOf(defId)

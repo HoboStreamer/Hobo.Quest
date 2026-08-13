@@ -204,6 +204,22 @@ async function start(): Promise<void> {
   interact.placementPose = () => (ghost.valid ? ghost.pose : null)
   interact.onPlacementRotate = (delta) => ghost.rotate(delta)
 
+  // Tracer pool: each shot flashes a bright beam for ~90 ms.
+  const tracers: { key: string; until: number; beam: BeamState }[] = []
+  let tracerSeq = 0
+  state.events.on('tracer', ({ from, to, hit }) => {
+    tracers.push({
+      key: `tracer:${tracerSeq++}`,
+      until: performance.now() + 90,
+      beam: {
+        from: new Vector3(from[0], from[1], from[2]),
+        to: new Vector3(to[0], to[1], to[2]),
+        latched: true,
+      },
+    })
+    if (hit) hud.flashHitmarker()
+  })
+
   interact.onSwing = () => {
     viewmodel.triggerSwing()
     fpBody.triggerSwing()
@@ -438,6 +454,12 @@ async function start(): Promise<void> {
         })
       }
     }
+    // Bullet tracers: short-lived bright beams riding the same renderer.
+    for (let i = tracers.length - 1; i >= 0; i--) {
+      const tr = tracers[i]!
+      if (performance.now() > tr.until) tracers.splice(i, 1)
+      else activeBeams.set(tr.key, tr.beam)
+    }
     beams.update(elapsed, activeBeams)
 
     // Rope/spring visuals + rigging first-pick highlight.
@@ -493,6 +515,13 @@ function promptFor(
   const heldItem = heldId ? content.item(heldId) : undefined
   if (heldItem?.placeable && heldItem.world && !tool) {
     return 'LMB — place · wheel — rotate · Shift — snap · G — toss'
+  }
+  // Ranged weapon: ammo readout owns the prompt.
+  if (heldItem?.rangedWeapon) {
+    const slot = state.inventory?.slots.find((s) => s.i === state.activeHotbar)
+    const mag = Number(slot?.stack.meta?.mag ?? 0)
+    const reserve = state.countOf(heldItem.rangedWeapon.ammoItem)
+    return `LMB — fire · R — reload · ${mag}/${heldItem.rangedWeapon.magazine} (${reserve})`
   }
   if (!target) {
     if (interact.standingInWater()) {

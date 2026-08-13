@@ -1,5 +1,6 @@
 import type {
   WireBodyState,
+  WireItemStack,
   WireCraftJob,
   WireEntity,
   WireInventory,
@@ -75,6 +76,8 @@ export interface ServerInventory {
   t: 'inventory'
   inv: WireInventory
   activeHotbar: number
+  /** Worn armor (null = nothing equipped). */
+  armor?: WireItemStack | null
 }
 
 export interface ServerCraftState {
@@ -183,6 +186,16 @@ export interface ServerMapReload {
   t: 'map_reload'
 }
 
+/** A shot was fired: brief tracer + report for everyone nearby. */
+export interface ServerTracer {
+  t: 'tracer'
+  /** Shooter's entity id (viewmodel/beam anchoring). */
+  shooter: string
+  from: [number, number, number]
+  to: [number, number, number]
+  hit: boolean
+}
+
 /** Transient visual effect on an entity (hurt flinch, death...). */
 export interface ServerFx {
   t: 'fx'
@@ -223,5 +236,6 @@ export type ServerMessage =
   | ServerTime
   | ServerContainer
   | ServerAnnounce
+  | ServerTracer
   | ServerFx
   | ServerMapReload

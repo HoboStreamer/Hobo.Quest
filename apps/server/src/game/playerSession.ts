@@ -9,6 +9,7 @@ import {
   type PlayerMoveState,
   type SurvivalStats,
 } from '@hobo/gameplay'
+import type { ItemStack } from '@hobo/gameplay'
 import type { EntityId, PlayerId, Quat, Vec3 } from '@hobo/shared'
 
 export const INVENTORY_SIZE = 24
@@ -67,6 +68,8 @@ export interface PlayerSession {
   /** LMB held with the physgun out: the beam is firing. While nothing is
    * latched the server re-tries the grab each tick (GMod sweep-to-grab). */
   grabbing: boolean
+  /** Worn armor piece (null = nothing). Durability lives in stack meta. */
+  armor: ItemStack | null
   /** Survival vitals (server-authoritative; replicated only to the owner). */
   stats: SurvivalStats
   /** Vitals changed since last stats message. */
@@ -109,6 +112,7 @@ export interface SessionInit {
   friends: Set<string>
   appearance: Appearance
   stats?: Partial<SurvivalStats> | undefined
+  armor?: ItemStack | null
   content: ContentRegistry
   send(text: string): void
   closeConnection(code: number, reason: string): void
@@ -135,6 +139,7 @@ export function createSession(init: SessionInit): PlayerSession {
     holstered: false,
     held: null,
     grabbing: false,
+    armor: init.armor ?? null,
     stats: normalizeStats(init.stats),
     statsDirty: true,
     openContainer: null,

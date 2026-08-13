@@ -381,6 +381,48 @@ export const ITEMS: ItemDef[] = [
     placeable: { maxRange: 3.5, snapStep: 0 },
   },
 
+  // ── Combat / protection / medical ──────────────────────────────────
+  {
+    id: 'scrap_pistol',
+    name: 'Scrap Pistol',
+    description: 'Pipe, spring, and bad intentions. LMB fires, R reloads. The wilds shoot back.',
+    category: 'tool',
+    maxStack: 1,
+    rangedWeapon: {
+      damage: 22,
+      range: 45,
+      fireIntervalMs: 600,
+      spreadDeg: 2,
+      ammoItem: 'pistol_round',
+      magazine: 6,
+      reloadMs: 2200,
+    },
+  },
+  {
+    id: 'pistol_round',
+    name: 'Pistol Rounds',
+    description: 'Hand-loaded scrap casings. Fits the scrap pistol.',
+    category: 'component',
+    maxStack: 60,
+    ammo: {},
+  },
+  {
+    id: 'padded_jacket',
+    name: 'Padded Jacket',
+    description: 'Layered scrap cloth and rubber. Blunts a third of what hits you, for a while.',
+    category: 'misc',
+    maxStack: 1,
+    armor: { reduction: 0.35, durability: 30 },
+  },
+  {
+    id: 'bandage',
+    name: 'Bandage',
+    description: 'Boiled cloth strips. Stops bleeding, patches you up a little.',
+    category: 'misc',
+    maxStack: 10,
+    medical: { heal: 12, curesBleeding: true },
+  },
+
   // ── Farming & food ─────────────────────────────────────────────────
   {
     id: 'mudroot_seeds',

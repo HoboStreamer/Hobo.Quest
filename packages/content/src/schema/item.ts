@@ -142,6 +142,42 @@ export const ItemDefSchema = z.object({
     })
     .optional(),
 
+  /** Present iff the item fires server-validated hitscan shots. The
+   * per-instance magazine/cadence state lives in stack meta. */
+  rangedWeapon: z
+    .object({
+      damage: z.number().positive(),
+      range: z.number().positive(),
+      fireIntervalMs: z.number().positive(),
+      spreadDeg: z.number().min(0).max(20).default(1.5),
+      ammoItem: z.string(),
+      magazine: z.number().int().positive(),
+      reloadMs: z.number().positive(),
+    })
+    .optional(),
+
+  /** Present iff the item is ammunition (referenced by rangedWeapon.ammoItem). */
+  ammo: z.object({}).optional(),
+
+  /** Present iff the item is wearable protection (one armor slot). Stack
+   * meta `dur` tracks remaining durability; the piece breaks at 0. */
+  armor: z
+    .object({
+      /** Fraction of mitigable damage absorbed. */
+      reduction: z.number().min(0).max(0.9),
+      /** Hits absorbed before the piece breaks. */
+      durability: z.number().int().positive(),
+    })
+    .optional(),
+
+  /** Present iff consuming the item treats wounds (bandages, medkits). */
+  medical: z
+    .object({
+      heal: z.number().nonnegative().default(0),
+      curesBleeding: z.boolean().default(false),
+    })
+    .optional(),
+
   /**
    * Present iff the placed prop is damageable/destructible. Health is NOT
    * automatic — only structures/objects where destruction is gameplay get

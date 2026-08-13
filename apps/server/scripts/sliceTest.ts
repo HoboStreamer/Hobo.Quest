@@ -609,11 +609,11 @@ async function main(): Promise<void> {
 
   await walkTo(a, scrap.pos[0], scrap.pos[2])
   await settle(a)
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     await a.use(scrap.id)
     await sleep(260)
   }
-  assert(a.count('scrap_metal') === 8, 'hand-gathered 8 scrap')
+  assert(a.count('scrap_metal') === 10, 'hand-gathered 10 scrap (full pile)')
 
   const tree = byType('oak_tree')[0]
   assert(tree, 'trees replicated')
@@ -651,7 +651,7 @@ async function main(): Promise<void> {
   await sleep(150)
   const punch = await a.use(tree.id)
   assert(punch.ok, 'bare hands can chop (slowly)')
-  await a.waitFor((m) => m.t === 'inventory' && a.count('wood_log') === logsBeforePunch + 1, 5000)
+  await pollUntil(() => a.count('wood_log') === logsBeforePunch + 1)
   assert(a.count('wood_log') === logsBeforePunch + 1, 'punch yields a single log')
   await sleep(300) // swing cooldown
   a.hotbar(a.slotOf('stone_axe')) // unholster the axe
@@ -1322,6 +1322,53 @@ async function main(): Promise<void> {
   assert(hit?.ok === true, `melee hit accepted (${hit?.error ?? 'ok'})`)
   await b.waitFor((m) => m.t === 'stats' && m.hp < 100, 5000)
   assert((b.stats?.hp ?? 100) < 100, 'victim lost health')
+
+  console.log('phase: combat depth — fire/reload denials, bandage healing')
+  {
+    // Hostile: fire/reload without a ranged weapon equipped.
+    await a.equip('stone_axe')
+    a.results.length = 0
+    a.send({ t: 'fire' })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'attack')
+    assert(a.results.at(-1)?.error === 'not_a_weapon', 'fire without a gun rejected')
+    a.results.length = 0
+    a.send({ t: 'reload' })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'attack')
+    assert(a.results.at(-1)?.error === 'not_a_weapon', 'reload without a gun rejected')
+    // Hostile: wearing a non-armor item.
+    a.results.length = 0
+    a.send({ t: 'equip_armor', slot: a.slotOf('stone_axe') })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'inv_move')
+    assert(a.results.at(-1)?.error === 'not_armor', 'equipping a non-armor item rejected')
+    // Bob swings back bare-handed (via the attack message) so Alice has a
+    // wound to treat.
+    // Knockback pushed Bob away; close back in before swinging, and
+    // holster the physgun (it refuses to be a weapon).
+    await walkTo(b, (a.me as WirePlayerState).pos[0] + 1, (a.me as WirePlayerState).pos[2])
+    await settle(b)
+    if (!b.holstered) b.hotbar(b.activeSlot < 0 ? 0 : b.activeSlot)
+    await sleep(150)
+    b.results.length = 0
+    b.send({ t: 'attack', target: a.entityId })
+    // Player melee replies on the 'use' action channel (shared pipeline).
+    await b.waitFor((m) => m.t === 'result' && (m.action === 'use' || m.action === 'attack'))
+    assert(
+      b.results.at(-1)?.ok === true,
+      `bare-handed attack message accepted (${JSON.stringify(b.results.at(-1))})`,
+    )
+    await pollUntil(() => (a.stats?.hp ?? 100) < 100)
+    // Bandage: craft from rope, heal the scrap wound.
+    if (a.count('rope') < 1) await craftAndWait(a, 'craft_rope', 'rope')
+    await craftAndWait(a, 'craft_bandage', 'bandage')
+    const hpBefore = a.stats?.hp ?? 100
+    assert(hpBefore < 100, `took melee damage (${hpBefore})`)
+    a.results.length = 0
+    a.send({ t: 'consume', slot: a.slotOf('bandage') })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'consume')
+    assert(a.results.at(-1)?.ok === true, 'bandage consumed')
+    await pollUntil(() => (a.stats?.hp ?? 0) > hpBefore)
+    assert((a.stats?.hp ?? 0) > hpBefore, 'bandage healed')
+  }
 
   console.log('phase: players collide (blocking bodies)')
   await settle(a)

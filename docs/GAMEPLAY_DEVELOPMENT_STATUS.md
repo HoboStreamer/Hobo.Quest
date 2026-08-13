@@ -230,10 +230,25 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
 
 ### Combat
 
-- **Melee PvP only.** Any held item swings; weapon capability overrides
-  damage/range; stamina cost; knockback; zone PvP rules both-ends; swing
-  cooldown (6 ticks); hurt/death FX; fall damage. No damage types, no
-  damage to props/NPCs (no NPCs), no ranged, no armor, no medical items.
+- **Implemented (Stage 5 foundation).** Generic damage pipeline: typed
+  DamageEvents (blunt/cutting/projectile/explosive/environment/fall) flow
+  through one damagePlayer sink — armor mitigation with durability wear,
+  bleeding on big cutting/projectile wounds (status framework), death
+  handling, hit feedback. Melee (any held item; axes cut) and ranged fire
+  both converge there; props take typed damage via applyPropDamage.
+- Ranged: rangedWeapon capability (damage/range/cadence/spread/ammo/
+  magazine/reload); scrap_pistol + pistol_round content. Client sends pure
+  fire INTENT; the server shoots from the authoritative eye along the
+  authoritative view + server-rolled spread, validates magazine/cadence/
+  reload state (stack meta) and shooter zone; victims are zone-checked
+  too. Tracers broadcast for visuals; R reloads from inventory ammo.
+- Armor: one worn slot (padded_jacket), equip/unequip messages, durability
+  in stack meta, breaks at zero. Medical: bandage (heals + cures
+  bleeding) via the consume path. Both persisted (players.armor, v9).
+- Not yet: projectile ballistics (hitscan only), headshot zones, more
+  weapons, explosive damage sources. Slice covers denial paths + bandage;
+  live pistol fire is unit-tested (fire control) — a full e2e shot needs
+  a cheaper weapon source in the fixture (noted).
 
 ### Skills
 

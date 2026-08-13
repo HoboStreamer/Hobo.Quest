@@ -74,6 +74,7 @@ export class InteractionController {
   onPlacementRotate: ((delta: number) => void) | null = null
 
   private lastSwingMs = 0
+  private lastFireMs = 0
   private pendingRotate = { dyaw: 0, dpitch: 0 }
   private gridOn = false
 
@@ -154,9 +155,19 @@ export class InteractionController {
           this.riggingPick()
           break
         }
-        // Placement: LMB with a placeable equipped places at the ghost.
         const defId = this.state.activeItemDef()
         const itemDef = defId ? this.content.item(defId) : undefined
+        // Ranged weapon: fire intent (server validates ammo/cadence/zone).
+        if (itemDef?.rangedWeapon) {
+          const now = performance.now()
+          if (now - this.lastFireMs >= itemDef.rangedWeapon.fireIntervalMs * 0.9) {
+            this.lastFireMs = now
+            this.connection.send({ t: 'fire' })
+            this.onSwing?.()
+          }
+          break
+        }
+        // Placement: LMB with a placeable equipped places at the ghost.
         if (itemDef?.placeable && itemDef.world) {
           const pose = this.placementPose?.()
           if (pose) {
@@ -170,8 +181,8 @@ export class InteractionController {
           }
           break
         }
-        // Eating: primary fire with food equipped consumes it.
-        if (defId && this.content.item(defId)?.food) {
+        // Eating/medical: primary fire with a consumable equipped uses it.
+        if (defId && (this.content.item(defId)?.food || this.content.item(defId)?.medical)) {
           this.connection.send({ t: 'consume', slot: this.state.activeHotbar })
           this.onSwing?.()
           break
@@ -232,6 +243,13 @@ export class InteractionController {
       case 'use_up':
         this.rotating = false
         break
+      case 'reload': {
+        const held = this.state.activeItemDef()
+        if (held && this.content.item(held)?.rangedWeapon) {
+          this.connection.send({ t: 'reload' })
+        }
+        break
+      }
       case 'drop': {
         const slot = this.state.activeHotbar
         const stack = this.state.inventory?.slots.find((s) => s.i === slot)

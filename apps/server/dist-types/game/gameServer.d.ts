@@ -79,11 +79,27 @@ export declare class GameServer {
   /** Melee swing on another player: range + zone PvP rules + tool damage. */
   private handleMelee
   /**
+   * Ranged fire: the client sent pure intent — the shot leaves the
+   * player's AUTHORITATIVE eye along their AUTHORITATIVE view (from
+   * movement inputs) plus server-rolled spread. Magazine, cadence and
+   * reload state live in the weapon stack's meta and are validated here.
+   */
+  private handleFire
+  /**
+   * The one place player damage lands: armor mitigation (with durability
+   * wear), wound statuses, death handling, and hit feedback. Melee, bullets
+   * and future explosions all converge here.
+   */
+  private damagePlayer
+  /**
    * Melee swing on a damageable prop: range + zone build rules + the same
    * stamina/cooldown economics as PvP. Structures are only destructible
    * where building is legal (safe city props are untouchable).
    */
   private handlePropAttack
+  /** Damage application for props: resistance, destruction, feedback.
+   * Returns false when the prop has no health capability. */
+  private applyPropDamage
   /** Destruction: scatter salvage + stored contents as physical props. */
   private destroyProp
   /** Death/rescue respawn: back to the city with restored vitals. */

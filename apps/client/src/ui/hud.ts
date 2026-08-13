@@ -667,6 +667,47 @@ export class Hud {
     const def = defId ? this.content.item(defId) : undefined
     const module = weaponModuleFor(def?.tool?.kind ?? null)
     const wrap = document.createElement('div')
+
+    // ── Worn armor section ─────────────────────────────────────────────
+    {
+      const title = document.createElement('div')
+      title.className = 'weapon-title'
+      title.textContent = 'Protection'
+      wrap.appendChild(title)
+      const row = document.createElement('div')
+      row.className = 'hint-line'
+      const worn = this.state.armor
+      if (worn) {
+        const wornDef = this.content.item(worn.def)
+        const dur = Number(worn.meta?.dur ?? wornDef?.armor?.durability ?? 0)
+        row.textContent = `Wearing: ${wornDef?.name ?? worn.def} (${dur} durability) `
+        const off = document.createElement('button')
+        off.className = 'cust-btn'
+        off.textContent = 'Take off'
+        off.addEventListener('click', () => this.connection.send({ t: 'equip_armor' }))
+        row.appendChild(off)
+      } else {
+        row.textContent = 'Wearing: nothing. '
+      }
+      wrap.appendChild(row)
+      // Equipable pieces straight from the inventory.
+      for (const slot of this.state.inventory?.slots ?? []) {
+        const itemDef = this.content.item(slot.stack.def)
+        if (!itemDef?.armor) continue
+        const line = document.createElement('div')
+        line.className = 'hint-line'
+        line.textContent = `${itemDef.name} — blocks ${Math.round(itemDef.armor.reduction * 100)}% `
+        const wear = document.createElement('button')
+        wear.className = 'cust-btn'
+        wear.textContent = 'Wear'
+        wear.addEventListener('click', () =>
+          this.connection.send({ t: 'equip_armor', slot: slot.i }),
+        )
+        line.appendChild(wear)
+        wrap.appendChild(line)
+      }
+    }
+
     if (!module) {
       const empty = document.createElement('div')
       empty.className = 'hint-line'

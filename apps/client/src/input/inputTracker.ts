@@ -186,6 +186,7 @@ export type InputAction =
   | { kind: 'hotbar4' }
   | { kind: 'hotbar5' }
   | { kind: 'hotbar6' }
+  | { kind: 'reload' }
   | { kind: 'rotate_held'; dyaw: number; dpitch: number }
 
 const KEY_ACTIONS: Record<
@@ -193,6 +194,7 @@ const KEY_ACTIONS: Record<
   Exclude<InputAction, { kind: 'rotate_held' } | { kind: 'use_down' } | { kind: 'use_up' }>['kind']
 > = {
   KeyG: 'drop',
+  KeyR: 'reload',
   Tab: 'toggle_menu',
   Digit1: 'hotbar1',
   Digit2: 'hotbar2',
