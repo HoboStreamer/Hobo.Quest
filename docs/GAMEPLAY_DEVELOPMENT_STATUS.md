@@ -8,68 +8,44 @@ state across development sessions. Updated at every milestone.
 ## Session state (update at every milestone)
 
 ```
-Current HEAD:    (Stage 2 milestone — see git log on gameplay-next)
-Completed:       Stage 1 audit + baseline; Stage 2 sandbox depth:
-                 - physics constraint set (weld/rope/hinge+limits+friction+
-                   motor/slider+limits+motor/spring) in @hobo/physics with
-                   pose-preserving joint frames; setConstraintMotor retune
-                 - gameplay constraint domain: types, param validation
-                   (CONSTRAINT_LIMITS hostile caps), skill gates, material
-                   costs, ConstraintIslands union-find
-                 - GameWorld ConstraintRecord (generalizes welds), islands,
-                   restore/prune, dirty persistence; ConstraintDto.params;
-                   sqlite migration v8 (params column)
-                 - protocol v15: constraint/constraint_remove (world-space
-                   click points -> server-computed local anchors), attack,
-                   place; constraint_state broadcasts (+ on interest enter)
-                 - rigging_tool item + recipe; salvaged_motor item + recipe
-                   (workbench, construction 4); constraint costs (rope item,
-                   scrap for springs, motor item)
-                 - client: rigging weapon module (type/params panel),
-                   two-click tool with selection outline + prompts, rope/
-                   spring tube visuals with sag (constraintLines.ts)
-                 - prop health capability (max/resistance/repair/destroyLoot
-                   on 8 structures), attack pipeline (zone build-rule gated,
-                   stamina economics), E-repair with materials, damaged
-                   props refuse pickup, destruction scatters salvage +
-                   container contents
-                 - placement ghost preview (green/red zone validity, wheel
-                   rotate, Shift grid snap) + server-validated place message
-                   (spawns DYNAMIC, physics resolves overlap lies)
-                 - metrics: constraints + constraintIslands; constraint
-                   stress smoke (200 props/370 welds settle, sleeping steps
-                   ~1.6ms, impact wakes 15, re-settles)
-                 STAGE 3 (item/container/survival depth):
-                 - container domain module in @hobo/gameplay (add/take/
-                   move/split/sort/canFit/transfer on the shared slot-array
-                   shape) — gameServer refactored onto it; container_move
-                   gains count (split), new container_sort; client Sort
-                   button + right-click-half in the storage panel
-                 - server-authoritative environment (@hobo/gameplay
-                   environment): 20-min day clock + markov weather
-                   (clear/cloudy/rain/storm/fog) + ambient temperature
-                   curve; persisted in meta (env_time/env_weather);
-                   time message now carries weather; broadcast on change
-                 - survival v2: bodyTemp (drift bands from EFFECTIVE temp =
-                   ambient + campfire heat − wetness), timed status-effect
-                   framework (wet/cold/freezing/overheated/well_fed/
-                   bleeding) with structural consequences (stamina regen,
-                   thirst rate, hp drain, regen boost); eat() big meals
-                   apply well_fed; normalizeStats migrates old saves
-                 - stats message carries temp + statuses; HUD shows temp +
-                   status chips; weather renders as light dim + fog haze +
-                   cloud thickening (underwater fog still wins)
-                 - physics fix: rope/spring collision flag; a rigid joint
-                   on the same pair turns soft-joint collision off
-                   (mixed flags on overlapped bodies exploded on cut)
-Tests:           669 unit tests pass (+8 containers, +4 environment, +8
-                 survival); constraintSmoke OK; sliceTest extended:
-                 temp/status/weather replication, container sort + split,
-                 rigging explosion regression — all green; audit:editor OK
-Remaining:       Stages 4-13 (see ROADMAP.md)
-Next exact step: Stage 4 — data-driven crops (several, stages/water/
-                 regrow), farming props + logical water, machine
-                 production (inputs→time→outputs), power/fuel foundations
+Current HEAD:    gameplay-next (Stages 1-11 complete; see git log)
+Completed:       Stage 1  audit + truthful roadmap + baseline gates
+                 Stage 2  constraint toolset (weld/rope/hinge/axis/slider/
+                          spring/motor), prop health/repair/destruction,
+                          placement ghost, islands + stress smoke
+                 Stage 3  container domain, authoritative weather,
+                          body temperature + status effects
+                 Stage 4  data-driven crops (5), water/fertilizer/
+                          sprinklers/tanks, machines (sawmill/mill),
+                          generator power, fuel items
+                 Stage 5  typed damage pipeline, scrap pistol (hitscan,
+                          server-rolled), armor slot + durability, bandage
+                 Stage 6  shared SpatialHash + RegionTracker activation
+                 Stage 7  NPCs: 4 archetypes, perception/behavior domain,
+                          NavigationService seam, full/abstract LOD,
+                          persistence, loot, aggro
+                 Stage 8  reputation (v10), data-driven markets with
+                          restocking stock, tonic production chain
+                 Stage 9  world event engine, supply drops migrated,
+                          extraction + secured-vs-at-risk loot semantics
+                 Stage 10 blueprint discovery (v11), jobs/contracts
+                          (deliver + kill) at markets
+                 Stage 11 scrap cart vehicle: parts + rigged wheel
+                          assembly recognition, force-driven server
+                          control, trunk fuel/cargo, free persistence
+Tests:           707 unit tests across 55 files; physics smoke +
+                 constraintSmoke (incl. 200-prop stress) OK; sliceTest
+                 (17 phases incl. NPC fight, market, extraction,
+                 blueprint, contracts, vehicle drive, restart
+                 persistence) OK; audit:editor 20 OK
+Schema:          sqlite v11 (params v8, armor v9, reputation v10,
+                 unlocks+active_job v11); protocol v19
+Remaining:       Stage 12-13 items that need real-world profiling first:
+                 client world streaming, binary snapshot codec, 200-bot
+                 synthetic load harness, richer content web; plus the
+                 per-system "Not yet" notes below
+Next exact step: build the synthetic bot harness (protocol clients) and
+                 measure tick/bandwidth under load before any codec work
 ```
 
 ## Architecture facts (verified, load-bearing)

@@ -34,7 +34,7 @@ caps); supply-drop crates (hardcoded event v1); day/night clock; guest IP
 identity + hobo.tools SSO ranks; map editor as a mature authoring subsystem
 with live world reconciliation.
 
-## Phase 1 — Sandbox depth 🔨 next (Stage 2)
+## Phase 1 — Sandbox depth ✅ done (Stage 2)
 
 - Player-facing constraint toolset on a clean ConstraintDefinition/Record/
   Service architecture: weld, rope, hinge, slider, spring, axis, motor
@@ -47,7 +47,7 @@ with live world reconciliation.
   destruction; repair materials; destroy loot)
 - Hostile-input tests for every new message
 
-## Phase 2 — Item, container & survival depth (Stage 3)
+## Phase 2 — Item, container & survival depth ✅ done (Stage 3)
 
 - Container domain module shared by boxes/machines/vehicles/merchants;
   quick transfer, split, sort; container-to-container
@@ -59,7 +59,7 @@ with live world reconciliation.
   (clear/cloudy/rain/storm/fog), temperature — client renders, gameplay
   consumes
 
-## Phase 3 — Farming, utilities & production (Stage 4)
+## Phase 3 — Farming, utilities & production ✅ done (Stage 4)
 
 - Data-driven crop definitions (several materially different crops:
   stages, water/fertility needs, temperature ranges, regrow) — timestamp
@@ -70,7 +70,7 @@ with live world reconciliation.
 - Machine production chains: inputs → machine + time (+power/fuel/water/
   skill) → outputs; crop processing feeds the same crafting economy
 
-## Phase 4 — Combat foundation (Stage 5)
+## Phase 4 — Combat foundation ✅ done (Stage 5; hitscan pistol, armor, medical)
 
 - Generic damage pipeline (source/target/type/amount/position/impulse);
   blunt/cutting/projectile/explosive/environment/fall types; zone gating
@@ -78,14 +78,14 @@ with live world reconciliation.
   ammo/cadence/direction → server raycast); small test weapon set
 - Armor/clothing damage reduction; bandage/medical consumables
 
-## Phase 5 — Spatial world foundation (Stage 6)
+## Phase 5 — Spatial world foundation ✅ done (Stage 6)
 
 - Uniform spatial hash replacing the linear interest scan and prop
   proximity scans (workstations, shops); one index, many consumers
 - Region/cell activation concept (players, active NPCs, awake physics per
   region) — the seam for simulation LOD and later streaming
 
-## Phase 6 — NPCs (Stage 7)
+## Phase 6 — NPCs ✅ done (Stage 7; straight-line nav v1)
 
 - Server-authoritative NPC domain: composition capabilities (npc, health,
   inventory, faction, perception, combat, merchant, job) — no subclass
@@ -100,7 +100,7 @@ with live world reconciliation.
 - Simulation LOD tiers: full / simplified / abstract (no engine objects
   far from players); persistence of abstract state
 
-## Phase 7 — Factions, reputation, economy (Stage 8)
+## Phase 7 — Factions, reputation, economy ✅ done (Stage 8)
 
 - Data-driven factions + relations; persistent player reputation with
   thresholds (stock, prices, jobs, access)
@@ -110,7 +110,7 @@ with live world reconciliation.
   same machinery; player specialization emerges from skills/machines/
   geography — never class locks
 
-## Phase 8 — World events & extraction (Stage 9)
+## Phase 8 — World events & extraction ✅ done (Stage 9)
 
 - Generic server-owned event engine (scheduled/announced/active/
   completed/cleanup); supply drops migrated onto it as proof
@@ -119,7 +119,7 @@ with live world reconciliation.
 - High-risk regions via zone/event rules (better loot, hostile NPCs,
   hazards)
 
-## Phase 9 — Progression & jobs (Stage 10)
+## Phase 9 — Progression & jobs ✅ done (Stage 10)
 
 - Skills unlock capabilities (constraint tools, machines, crops,
   components), not just recipes
@@ -128,14 +128,14 @@ with live world reconciliation.
 - Job/contract foundation (deliver/gather/transport/kill/repair/escort)
   with data-driven objectives and rewards
 
-## Phase 10 — Vehicles (Stage 11)
+## Phase 10 — Vehicles ✅ done (Stage 11; scrap cart prototype)
 
 - Modular vehicle prototype from the SAME item + physics + constraint
   architecture: chassis/wheels/suspension/engine/seat/storage/lights
 - Assembly recognition + activation; server-authoritative driving; fuel;
   cargo containers; damage/repair; persistence + replication
 
-## Phase 11 — Scale (Stage 12)
+## Phase 11 — Scale 🔜 next (Stage 12)
 
 - Region persistence/streaming when the authored world justifies it
 - Network measurement first (bytes/client, snapshot sizes, entity counts);
