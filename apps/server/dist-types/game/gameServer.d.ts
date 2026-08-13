@@ -61,6 +61,13 @@ export declare class GameServer {
    */
   private tickSupplyDrops
   private timeWire
+  /**
+   * Utility + production sweep, once a second over prop entities. Plants
+   * stay timestamp-lazy (a slower cadence touches them); machines and
+   * generators are few, and their jobs are timestamp-based too — this
+   * sweep only notices completions/starts, it never simulates.
+   */
+  private tickProduction
   onDisconnect(conn: GameConnection): void
   private handleHello
   private handlePhysgun

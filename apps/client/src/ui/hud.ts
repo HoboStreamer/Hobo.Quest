@@ -589,6 +589,8 @@ export class Hud {
     const list = document.createElement('div')
     list.className = 'craft-list'
     for (const recipe of this.content.allRecipes()) {
+      // Machine recipes run inside their machine, not from this menu.
+      if (recipe.machine) continue
       const el = document.createElement('div')
       el.className = 'recipe'
       const iconWrap = document.createElement('div')

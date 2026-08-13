@@ -1,3 +1,4 @@
+import { CropDefSchema, type CropDef } from './schema/crop.js'
 import { ItemDefSchema, type ItemDef } from './schema/item.js'
 import { RecipeSchema, type Recipe } from './schema/recipe.js'
 import { ResourceNodeTypeSchema, type ResourceNodeType } from './schema/resourceNode.js'
@@ -9,6 +10,7 @@ export interface ContentDefs {
   recipes: Recipe[]
   skills: SkillDef[]
   nodeTypes: ResourceNodeType[]
+  crops: CropDef[]
   world: WorldDef
 }
 
@@ -23,6 +25,7 @@ export class ContentRegistry {
   private readonly recipes = new Map<string, Recipe>()
   private readonly skills = new Map<string, SkillDef>()
   private readonly nodeTypes = new Map<string, ResourceNodeType>()
+  private readonly crops = new Map<string, CropDef>()
   readonly world: WorldDef
 
   constructor(defs: ContentDefs) {
@@ -48,6 +51,30 @@ export class ContentRegistry {
         if (!this.items.has(loot.item)) {
           errors.push(`item '${item.id}' destroy loot references unknown item '${loot.item}'`)
         }
+      }
+    }
+
+    for (const raw of defs.crops) {
+      const parsed = CropDefSchema.safeParse(raw)
+      if (!parsed.success) {
+        errors.push(`crop '${raw.id}': ${parsed.error.message}`)
+        continue
+      }
+      const crop = parsed.data
+      if (this.crops.has(crop.id)) errors.push(`duplicate crop id '${crop.id}'`)
+      for (const y of crop.yield) {
+        if (!this.items.has(y.item)) {
+          errors.push(`crop '${crop.id}' yields unknown item '${y.item}'`)
+        }
+      }
+      this.crops.set(crop.id, crop)
+    }
+    // Seeds must reference known crops; machine recipes known machine kinds.
+    const machineKinds = new Set<string>()
+    for (const item of this.items.values()) {
+      if (item.machine) machineKinds.add(item.machine.kind)
+      if (item.seed && !this.crops.has(item.seed.crop)) {
+        errors.push(`item '${item.id}' seeds unknown crop '${item.seed.crop}'`)
       }
     }
 
@@ -95,6 +122,12 @@ export class ContentRegistry {
         errors.push(
           `recipe '${recipe.id}' references unknown skill '${recipe.requiredSkill.skill}'`,
         )
+      }
+      if (recipe.machine && !machineKinds.has(recipe.machine)) {
+        errors.push(`recipe '${recipe.id}' targets unknown machine kind '${recipe.machine}'`)
+      }
+      if (recipe.machine && recipe.workstation) {
+        errors.push(`recipe '${recipe.id}' cannot be both machine and hand recipe`)
       }
       this.recipes.set(recipe.id, recipe)
     }
@@ -164,6 +197,25 @@ export class ContentRegistry {
 
   allNodeTypes(): readonly ResourceNodeType[] {
     return [...this.nodeTypes.values()]
+  }
+
+  crop(id: string): CropDef | undefined {
+    return this.crops.get(id)
+  }
+
+  cropOrThrow(id: string): CropDef {
+    const def = this.crops.get(id)
+    if (!def) throw new Error(`unknown crop '${id}'`)
+    return def
+  }
+
+  allCrops(): readonly CropDef[] {
+    return [...this.crops.values()]
+  }
+
+  /** Machine recipes for one machine kind (unattended production). */
+  machineRecipes(kind: string): Recipe[] {
+    return [...this.recipes.values()].filter((r) => r.machine === kind)
   }
 
   /**

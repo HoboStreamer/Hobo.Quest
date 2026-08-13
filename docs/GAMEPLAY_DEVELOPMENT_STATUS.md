@@ -202,12 +202,31 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
 
 ### Farming
 
-- **Prototype.** `seed` + `planter` capabilities; plant via E, timestamp
-  growth (240 s berries), harvest yields, farming XP, persistence of
-  `plant` state, client growth visual scaling. ONE crop (berries).
-- Missing: crop definitions as first-class content (stages, water,
-  fertility, temperature, regrow), multiple crops, irrigation/water,
-  fertilizer, greenhouse, farming props beyond planter_box.
+- **Implemented (Stage 4).** Data-driven CropDefs (5 materially different
+  crops: regrowing berries, drought-proof mudroot, thirsty mill-bound
+  ration wheat, fiber wirevine for rope, warmth-hungry high-value ember
+  pepper) with growSeconds/stages/waterUse/temperature band/yield/regrow/
+  farming-level gates. PlantState is timestamp-lazy (progress/water/boost/
+  updatedAt advanced in closed form on touch + a 15 s sweep) — plants
+  never tick. Rain waters everything; watering cans (fluidContainer meta)
+  fill from world water or tanks; fertilizer boosts once per growth;
+  sprinklers water planters from nearby tanks; tanks catch rain.
+  Legacy {seedId, plantedAt} plants migrate on restore.
+- Wire: plant {crop, t, water}; client renders stage scale + crop color +
+  thirsty tint; prompts cover water/fertilize/harvest/thirsty.
+
+### Machines / utilities
+
+- **Implemented (Stage 4).** Machine item capability (kind, input/output
+  zones, needsPower) over the shared container; machine recipes
+  (recipe.machine) auto-process unattended with timestamp jobs (park when
+  output is full — never destroy). Sawmill (powered, logs→lumber) and
+  hand grain mill (wheat→flour→campfire flatbread). Power: scrap
+  generator burns fuel items (wood) from its hopper and powers a radius;
+  proximity IS the connection (explicit cables can come with vehicles).
+  Water: tanks + sprinklers as above. Machines/tanks with content refuse
+  pickup. All persisted (machine job, burnUntil, waterAmount).
+- Not yet: machine job progress UI; conveyors; power storage.
 
 ### Combat
 

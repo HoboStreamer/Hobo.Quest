@@ -7,7 +7,7 @@ import type {
   ClientUse,
   ServerActionResult,
 } from '@hobo/protocol'
-import { type GameEntity, type LevelUp } from '@hobo/gameplay'
+import { type GameEntity, type LevelUp, type PlantContext } from '@hobo/gameplay'
 import type { ItemDef } from '@hobo/content'
 import type { ConstraintRecord, GameWorld } from './gameWorld.js'
 import { type PlayerSession } from './playerSession.js'
@@ -37,6 +37,7 @@ export declare function handleUse(
   msg: ClientUse,
   nowMs: number,
   canManipulate: (entity: GameEntity) => boolean,
+  env?: PlantContext,
 ): GatherResult
 export declare function handleCraft(
   session: PlayerSession,

@@ -276,8 +276,8 @@ export class EntityView {
     const renderTime = localTime + this.clockOffset - INTERP_DELAY
 
     for (const v of this.visuals.values()) {
-      // Growing crops: a sprout scales up with timestamp progress (pure
-      // client-side derivation — no per-stage network traffic).
+      // Growing crops: a sprout scales with server-reported progress
+      // (refreshed by the plant sweep; between refreshes it holds still).
       if (v.entity.kind === 'prop' && v.mesh) {
         const plant = v.entity.plant
         let crop = v.mesh.getChildMeshes().find((m) => m.name.endsWith(':crop')) as Mesh | undefined
@@ -288,11 +288,15 @@ export class EntityView {
             crop.position.y = 0.3
             crop.material = materialFor(this.scene, '#3f7a34')
           }
-          const t = Math.min(1, (Date.now() - plant.plantedAt) / (plant.growSeconds * 1000))
+          const t = Math.min(1, plant.t)
           const h = 0.1 + t * 0.75
           crop.scaling.set(0.16 + t * 0.5, h, 0.16 + t * 0.5)
           crop.position.y = 0.15 + h / 2
-          crop.material = materialFor(this.scene, t >= 1 ? '#6a2a5a' : '#3f7a34')
+          const cropDef = this.content.crop(plant.crop)
+          // Mature = the crop's own color; growing = green, thirsty = dun.
+          const color =
+            t >= 1 ? (cropDef?.color ?? '#6a2a5a') : plant.water <= 0 ? '#8a7a4a' : '#3f7a34'
+          crop.material = materialFor(this.scene, color)
         } else if (crop) {
           crop.dispose()
         }

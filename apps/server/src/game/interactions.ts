@@ -11,10 +11,17 @@ import {
   CONSTRAINT_COST,
   CONSTRAINT_LIMITS,
   CONSTRAINT_SKILL,
+  createPlant,
+  fertilizePlant,
+  harvestPlant,
+  isMature,
+  updatePlant,
   validateConstraintParams,
+  waterPlant,
   type ConstraintParams,
   type GameEntity,
   type LevelUp,
+  type PlantContext,
 } from '@hobo/gameplay'
 import type { ItemDef } from '@hobo/content'
 import { CollisionLayer } from '@hobo/physics'
@@ -68,6 +75,7 @@ export function handleUse(
   msg: ClientUse,
   nowMs: number,
   canManipulate: (entity: GameEntity) => boolean,
+  env: PlantContext = { nowMs, raining: false, ambientC: 20 },
 ): GatherResult {
   const none = { changed: null, pickedUp: null, spawned: null, levelUps: [], xpChanged: false }
   const entity = world.entities.get(asEntityId(msg.target))
@@ -81,19 +89,90 @@ export function handleUse(
     if (!canManipulate(entity)) {
       return { outcome: result('use', false, 'not_owner'), ...none }
     }
-    // Planters: E plants equipped seeds / harvests a mature crop.
-    const planterDef = world.content.item(entity.prop.defId)
-    if (planterDef?.planter) {
+    const targetDef = world.content.item(entity.prop.defId)
+    const held = session.holstered ? null : session.inventory.get(session.activeHotbar)
+    const heldDef = held ? world.content.item(held.defId) : undefined
+
+    // Water tanks: a watering can pours in / fills up on E.
+    if (targetDef?.waterTank && heldDef?.fluidContainer && held) {
+      const tankCap = targetDef.waterTank.capacity
+      const canCap = heldDef.fluidContainer.capacity
+      const canFluid = Number(held.meta?.fluid ?? 0)
+      const tankFluid = entity.prop.waterAmount ?? 0
+      if (canFluid > 0 && tankFluid < tankCap) {
+        const move = Math.min(canFluid, tankCap - tankFluid)
+        entity.prop.waterAmount = tankFluid + move
+        held.meta = { ...held.meta, fluid: canFluid - move }
+        entity.dirty = true
+        session.dirty = true
+        return { outcome: result('use', true), ...none, changed: entity }
+      }
+      if (canFluid < canCap && tankFluid > 0) {
+        const move = Math.min(canCap - canFluid, tankFluid)
+        entity.prop.waterAmount = tankFluid - move
+        held.meta = { ...held.meta, fluid: canFluid + move }
+        entity.dirty = true
+        session.dirty = true
+        return { outcome: result('use', true), ...none, changed: entity }
+      }
+      return { outcome: result('use', false, 'nothing_to_transfer'), ...none }
+    }
+
+    // Planters: water / fertilize / harvest / plant, in that priority.
+    if (targetDef?.planter) {
       const plant = entity.prop.plant
       if (plant) {
-        const seedDef = world.content.item(plant.seedId)?.seed
-        const mature = seedDef && nowMs - plant.plantedAt >= seedDef.growSeconds * 1000
-        if (!mature) return { outcome: result('use', false, 'still_growing'), ...none }
-        const leftover = session.inventory.add(seedDef.yieldItem, seedDef.yieldCount)
-        if (leftover === seedDef.yieldCount) {
-          return { outcome: result('use', false, 'inventory_full'), ...none }
+        const crop = world.content.crop(plant.crop)
+        if (!crop) {
+          delete entity.prop.plant // content removed the crop: clear the bed
+          entity.dirty = true
+          return { outcome: result('use', true), ...none, changed: entity }
         }
-        delete entity.prop.plant
+        updatePlant(plant, crop, env)
+        // Watering can on a growing plant.
+        if (heldDef?.fluidContainer && held) {
+          const fluid = Number(held.meta?.fluid ?? 0)
+          if (fluid < 1) return { outcome: result('use', false, 'can_empty'), ...none }
+          if (!waterPlant(plant)) {
+            return { outcome: result('use', false, 'not_thirsty'), ...none }
+          }
+          held.meta = { ...held.meta, fluid: fluid - 1 }
+          entity.dirty = true
+          session.dirty = true
+          const levelUps = session.skills.addXp('farming', 1)
+          return {
+            outcome: result('use', true),
+            ...none,
+            changed: entity,
+            levelUps,
+            xpChanged: true,
+          }
+        }
+        // Fertilizer.
+        if (heldDef?.fertilizer && held) {
+          if (!fertilizePlant(plant, heldDef.fertilizer.boost)) {
+            return { outcome: result('use', false, 'already_fertilized'), ...none }
+          }
+          session.inventory.removeFromSlot(session.activeHotbar, 1)
+          entity.dirty = true
+          session.dirty = true
+          const levelUps = session.skills.addXp('farming', 2)
+          return {
+            outcome: result('use', true),
+            ...none,
+            changed: entity,
+            levelUps,
+            xpChanged: true,
+          }
+        }
+        if (!isMature(plant, crop)) {
+          return { outcome: result('use', false, 'still_growing'), ...none }
+        }
+        // Harvest: everything or nothing (no partial-yield dupes).
+        const fits = crop.yield.every((y) => session.inventory.canFit(y.item, y.count))
+        if (!fits) return { outcome: result('use', false, 'inventory_full'), ...none }
+        for (const y of crop.yield) session.inventory.add(y.item, y.count)
+        if (harvestPlant(plant, crop, nowMs) === 'cleared') delete entity.prop.plant
         entity.dirty = true
         session.dirty = true
         const levelUps = session.skills.addXp('farming', 8)
@@ -105,11 +184,15 @@ export function handleUse(
           xpChanged: true,
         }
       }
-      const stack = session.inventory.get(session.activeHotbar)
-      const seed = stack ? world.content.item(stack.defId)?.seed : undefined
-      if (stack && seed && !session.holstered) {
+      const seed = heldDef?.seed
+      if (held && seed) {
+        const crop = world.content.crop(seed.crop)
+        if (!crop) return { outcome: result('use', false, 'no_such_crop'), ...none }
+        if (session.skills.levelOf('farming') < crop.requiredLevel) {
+          return { outcome: result('use', false, 'missing_skill'), ...none }
+        }
         session.inventory.removeFromSlot(session.activeHotbar, 1)
-        entity.prop.plant = { seedId: stack.defId, plantedAt: nowMs }
+        entity.prop.plant = createPlant(crop.id, nowMs)
         entity.dirty = true
         session.dirty = true
         const levelUps = session.skills.addXp('farming', 3)
@@ -161,6 +244,13 @@ export function handleUse(
     // A stocked container refuses pickup — its contents would vanish.
     if (entity.prop.container?.some((slot) => slot !== null)) {
       return { outcome: result('use', false, 'not_empty'), ...none }
+    }
+    // Same for a tank holding water or a machine mid-job.
+    if (targetDef?.waterTank && (entity.prop.waterAmount ?? 0) >= 1) {
+      return { outcome: result('use', false, 'not_empty'), ...none }
+    }
+    if (entity.prop.machine?.job) {
+      return { outcome: result('use', false, 'machine_busy'), ...none }
     }
     // A damaged prop refuses pickup — repairing it first prevents the
     // "pocket the wreck, redeploy it pristine" laundering exploit.

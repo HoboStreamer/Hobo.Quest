@@ -1,4 +1,6 @@
 import type { EntityId, PlayerId, Quat, Vec3 } from '@hobo/shared'
+import type { PlantState } from '../farming/farming.js'
+import type { MachineState } from '../machines/machines.js'
 
 /**
  * Domain entity model: composition via optional component fields on a small
@@ -30,10 +32,16 @@ export interface PropComponent {
   container?: ({ defId: string; count: number } | null)[]
   /** Hinged door state (frozen doors toggle with E). */
   doorOpen?: boolean
-  /** Growing crop on planter props (timestamp-based; no per-tick sim). */
-  plant?: { seedId: string; plantedAt: number }
+  /** Growing crop on planter props (timestamp-lazy; no per-tick sim). */
+  plant?: PlantState
   /** Remaining health for damageable props (absent = undamaged/no capability). */
   health?: number
+  /** Unattended production state for machine props. */
+  machine?: MachineState
+  /** Generator: epoch ms until the current fuel charge burns out. */
+  burnUntil?: number
+  /** Water tank fill (units, vs the item def's capacity). */
+  waterAmount?: number
 }
 
 export interface ResourceComponent {

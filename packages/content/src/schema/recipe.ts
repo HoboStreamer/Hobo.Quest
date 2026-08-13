@@ -37,6 +37,12 @@ export const RecipeSchema = z.object({
   craftSeconds: z.number().nonnegative().default(0),
   /** Workstation kind required in range, if any. */
   workstation: z.string().optional(),
+  /**
+   * Machine kind that processes this recipe AUTOMATICALLY from its own
+   * container (unattended production). Mutually exclusive with hand
+   * crafting: machine recipes never appear in the player craft menu.
+   */
+  machine: z.string().optional(),
   /** Skill gates — enforced once the skill system lands; validated now. */
   requiredSkill: z.object({ skill: z.string(), level: z.number().int().min(1) }).optional(),
 })

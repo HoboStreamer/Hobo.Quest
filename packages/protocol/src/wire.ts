@@ -30,9 +30,12 @@ export const Buttons = {
 export type WireEntityKind = 'player' | 'prop' | 'resource'
 
 export interface WirePlant {
-  seed: string
-  plantedAt: number
-  growSeconds: number
+  /** Crop content id (client looks up stages/color from content). */
+  crop: string
+  /** Growth fraction 0..1 at send time (client may extrapolate gently). */
+  t: number
+  /** Plant water tank 0..1 (thirsty-plant feedback). */
+  water: number
 }
 
 export interface WireEntity {

@@ -16,6 +16,7 @@ import {
   ConstraintIslands,
   EntityStore,
   ZoneIndex,
+  migrateLegacyPlant,
   validateConstraintParams,
   type ConstraintParams,
   type ConstraintType,
@@ -811,10 +812,46 @@ export class GameWorld {
         entity.prop.health = row.state.health
       }
       if (entity.prop && row.state?.plant && typeof row.state.plant === 'object') {
-        const plant = row.state.plant as { seedId?: string; plantedAt?: number }
-        if (plant.seedId && typeof plant.plantedAt === 'number') {
-          entity.prop.plant = { seedId: plant.seedId, plantedAt: plant.plantedAt }
+        const raw = row.state.plant as Record<string, unknown>
+        if (typeof raw.crop === 'string' && typeof raw.progress === 'number') {
+          entity.prop.plant = {
+            crop: raw.crop,
+            progress: raw.progress,
+            water: typeof raw.water === 'number' ? raw.water : 1,
+            boost: typeof raw.boost === 'number' ? raw.boost : 1,
+            updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
+          }
+          if (!this.content.crop(entity.prop.plant.crop)) delete entity.prop.plant
+        } else {
+          // Pre-Stage-4 shape ({seedId, plantedAt}): migrate via the seed
+          // item's crop reference; unknown seeds clear the bed.
+          const migrated = migrateLegacyPlant(
+            raw as { seedId?: string; plantedAt?: number },
+            (seedId) => this.content.item(seedId)?.seed?.crop,
+            Date.now(),
+          )
+          if (migrated && this.content.crop(migrated.crop)) entity.prop.plant = migrated
         }
+      }
+      if (entity.prop && row.state?.machine && typeof row.state.machine === 'object') {
+        const rawMachine = row.state.machine as { job?: { recipe?: string; doneAt?: number } }
+        if (
+          rawMachine.job &&
+          typeof rawMachine.job.recipe === 'string' &&
+          typeof rawMachine.job.doneAt === 'number'
+        ) {
+          entity.prop.machine = {
+            job: { recipe: rawMachine.job.recipe, doneAt: rawMachine.job.doneAt },
+          }
+        } else {
+          entity.prop.machine = {}
+        }
+      }
+      if (entity.prop && typeof row.state?.burnUntil === 'number') {
+        entity.prop.burnUntil = row.state.burnUntil
+      }
+      if (entity.prop && typeof row.state?.waterAmount === 'number') {
+        entity.prop.waterAmount = row.state.waterAmount
       }
       if (entity.prop?.container && Array.isArray(row.state?.container)) {
         const stored = row.state.container as ({ defId: string; count: number } | null)[]
@@ -912,6 +949,11 @@ function entityToDto(entity: GameEntity, now: number): WorldEntityDto {
             ...(entity.prop.doorOpen !== undefined ? { doorOpen: entity.prop.doorOpen } : {}),
             ...(entity.prop.plant ? { plant: entity.prop.plant } : {}),
             ...(entity.prop.health !== undefined ? { health: entity.prop.health } : {}),
+            ...(entity.prop.machine ? { machine: entity.prop.machine } : {}),
+            ...(entity.prop.burnUntil !== undefined ? { burnUntil: entity.prop.burnUntil } : {}),
+            ...(entity.prop.waterAmount !== undefined
+              ? { waterAmount: entity.prop.waterAmount }
+              : {}),
           }
         : null,
     updatedAt: now,

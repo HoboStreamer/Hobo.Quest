@@ -56,6 +56,9 @@ function startServer(): Promise<void> {
     ],
     props: [
       { item: 'merchant_stall', pos: [12, 0.6, 12.8], yaw: 3.14 },
+      // Stage 4: an authored production yard outside the north gate.
+      { item: 'sawmill', pos: [8, 0.7, 31], yaw: 0 },
+      { item: 'scrap_generator', pos: [10, 0.7, 31], yaw: 0 },
       { item: 'wooden_crate', pos: [2, 1.0, 25], yaw: 0.3 },
       { item: 'wooden_crate', pos: [2.2, 1.8, 25.1], yaw: 0.9 },
       { item: 'wooden_crate', pos: [-2, 1.0, 27], yaw: 0.1 },
@@ -1093,6 +1096,85 @@ async function main(): Promise<void> {
   const salvagePickup = await a.use(salvage.id)
   assert(salvagePickup.ok, 'salvage recovered')
   assert(a.count('wood_plank') > planksBefore2 - 1, 'salvage planks in inventory')
+
+  console.log('phase: machines — generator power gates the sawmill; logs become lumber')
+  {
+    const sawmillEnt = [...a.entities.values()].find((e) => e.def === 'sawmill')
+    const generatorEnt = [...a.entities.values()].find((e) => e.def === 'scrap_generator')
+    assert(sawmillEnt && generatorEnt, 'authored production yard replicated')
+    assert(a.count('wood_log') >= 2, `has logs to process (${a.count('wood_log')})`)
+    await walkTo(a, sawmillEnt.pos[0] - 1.5, sawmillEnt.pos[2] - 1.5)
+    await settle(a)
+    // Load a log into the sawmill input.
+    a.send({ t: 'container_open', target: sawmillEnt.id })
+    await a.waitFor((m) => m.t === 'container' && m.id === sawmillEnt.id, 5000)
+    a.send({
+      t: 'container_move',
+      target: sawmillEnt.id,
+      dir: 'in',
+      slot: a.slotOf('wood_log'),
+      count: 1,
+    })
+    await a.waitFor(
+      (m) =>
+        m.t === 'container' &&
+        m.id === sawmillEnt.id &&
+        m.slots.some((sl) => sl.def === 'wood_log'),
+      5000,
+    )
+    // Unpowered: the log must still be sitting there after a few seconds.
+    await sleep(2500)
+    a.send({ t: 'container_open', target: sawmillEnt.id })
+    await a.waitFor((m) => m.t === 'container' && m.id === sawmillEnt.id, 5000)
+    assert(
+      a.lastContainer?.slots.some((sl) => sl.def === 'wood_log'),
+      'unpowered sawmill does not run',
+    )
+    // Fuel the generator: power comes online, the sawmill eats the log.
+    await walkTo(a, generatorEnt.pos[0] - 1.2, generatorEnt.pos[2] - 1.2)
+    await settle(a)
+    a.send({ t: 'container_open', target: generatorEnt.id })
+    await a.waitFor((m) => m.t === 'container' && m.id === generatorEnt.id, 5000)
+    a.send({
+      t: 'container_move',
+      target: generatorEnt.id,
+      dir: 'in',
+      slot: a.slotOf('wood_log'),
+      count: 1,
+    })
+    await a.waitFor(
+      (m) =>
+        m.t === 'container' &&
+        m.id === generatorEnt.id &&
+        m.slots.some((sl) => sl.def === 'wood_log'),
+      5000,
+    )
+    // Watch the sawmill: within ~15s the job completes into the output zone.
+    await walkTo(a, sawmillEnt.pos[0] - 1.5, sawmillEnt.pos[2] - 1.5)
+    await settle(a)
+    a.send({ t: 'container_open', target: sawmillEnt.id })
+    await a.waitFor((m) => m.t === 'container' && m.id === sawmillEnt.id, 5000)
+    {
+      const start = Date.now()
+      while (
+        !a.lastContainer?.slots.some((sl) => sl.def === 'wood_plank') &&
+        Date.now() - start < 25_000
+      ) {
+        await sleep(500)
+      }
+    }
+    assert(
+      a.lastContainer?.slots.some((sl) => sl.def === 'wood_plank'),
+      'powered sawmill produced lumber into its output slots',
+    )
+    const outSlot = a.lastContainer!.slots.find((sl) => sl.def === 'wood_plank')!
+    assert(outSlot.i >= 3, `lumber landed in the OUTPUT zone (slot ${outSlot.i})`)
+    // Recover the planks.
+    const planksBefore3 = a.count('wood_plank')
+    a.send({ t: 'container_move', target: sawmillEnt.id, dir: 'out', slot: outSlot.i })
+    await pollUntil(() => a.count('wood_plank') > planksBefore3)
+    assert(a.count('wood_plank') > planksBefore3, 'lumber recovered from the machine')
+  }
 
   console.log('phase: merchant trades + farming (plant in a planter)')
   // Into the city through the north gate, to the trading post.

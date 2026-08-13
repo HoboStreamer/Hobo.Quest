@@ -66,17 +66,58 @@ export const ItemDefSchema = z.object({
     })
     .optional(),
 
-  /** Present iff planting this item in a planter grows a crop. */
-  seed: z
-    .object({
-      growSeconds: z.number().positive(),
-      yieldItem: z.string(),
-      yieldCount: z.number().int().positive(),
-    })
-    .optional(),
+  /** Present iff planting this item in a planter grows the named crop. */
+  seed: z.object({ crop: z.string() }).optional(),
 
   /** Present iff the placed prop accepts seeds (E with seeds plants). */
   planter: z.object({}).optional(),
+
+  /** Present iff the item carries water (watering cans). Fill from world
+   * water or a tank; E on a planter waters the plant. Stack meta `fluid`
+   * tracks the current amount. */
+  fluidContainer: z.object({ capacity: z.number().int().positive() }).optional(),
+
+  /** Present iff E on a planter applies a one-time growth boost. */
+  fertilizer: z.object({ boost: z.number().positive().max(3) }).optional(),
+
+  /** Present iff the item burns as machine/generator fuel. */
+  fuel: z.object({ burnSeconds: z.number().positive() }).optional(),
+
+  /**
+   * Present iff the placed prop auto-processes machine recipes from its
+   * container: inputs in the first `inputSlots`, products land in the
+   * remaining `outputSlots`. Needs a nearby running generator if
+   * `needsPower`.
+   */
+  machine: z
+    .object({
+      kind: z.string().regex(/^[a-z0-9_]+$/),
+      inputSlots: z.number().int().positive(),
+      outputSlots: z.number().int().positive(),
+      needsPower: z.boolean().default(false),
+    })
+    .optional(),
+
+  /** Present iff the placed prop provides power in a radius while fueled
+   * (fuel items burn from its container). */
+  powerProducer: z
+    .object({
+      radius: z.number().positive(),
+    })
+    .optional(),
+
+  /** Present iff the placed prop stores water: fills in rain, fillable
+   * with a watering can, drained by sprinklers. */
+  waterTank: z.object({ capacity: z.number().positive() }).optional(),
+
+  /** Present iff the placed prop waters planters in a radius, drawing
+   * from the nearest tank within `tankRange`. */
+  sprinkler: z
+    .object({
+      radius: z.number().positive(),
+      tankRange: z.number().positive().default(6),
+    })
+    .optional(),
 
   /** Present iff the placed prop is an NPC trading post (E opens the shop). */
   shop: z.object({}).optional(),

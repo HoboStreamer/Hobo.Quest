@@ -6,15 +6,21 @@ import {
   activeStatuses,
   ambientTemperature,
   applyDamage,
+  completeJob,
   containerAdd,
   containerSort,
   createEnvironment,
-  stepEnvironment,
   eat,
   hullHeightFor,
+  plantProgress,
+  plantStage,
   precipitation,
+  stepEnvironment,
   stepMovement,
   tickSurvival,
+  tryStartJob,
+  updatePlant,
+  waterPlant,
   type CollisionQueries,
   type EnvironmentState,
   type GameEntity,
@@ -205,8 +211,17 @@ export class GameServer {
           this.handleMelee(session, targetSession)
           break
         }
-        const gather = handleUse(session, this.world, msg, Date.now(), (e) =>
-          this.canManipulate(session, e),
+        const gather = handleUse(
+          session,
+          this.world,
+          msg,
+          Date.now(),
+          (e) => this.canManipulate(session, e),
+          {
+            nowMs: Date.now(),
+            raining: precipitation(this.env) > 0,
+            ambientC: ambientTemperature(this.env),
+          },
         )
         this.send(session, gather.outcome)
         if (!gather.outcome.ok) break
@@ -231,13 +246,12 @@ export class GameServer {
             id: e.id,
             pos: [e.transform.pos.x, e.transform.pos.y, e.transform.pos.z],
             rot: [e.transform.rot.x, e.transform.rot.y, e.transform.rot.z, e.transform.rot.w],
-            plant: plant
-              ? {
-                  seed: plant.seedId,
-                  plantedAt: plant.plantedAt,
-                  growSeconds: this.world.content.item(plant.seedId)?.seed?.growSeconds ?? 240,
-                }
-              : null,
+            plant: (() => {
+              const crop = plant ? this.world.content.crop(plant.crop) : undefined
+              return plant && crop
+                ? { crop: plant.crop, t: plantProgress(plant, crop), water: plant.water }
+                : null
+            })(),
             ...(max !== undefined ? { health: Math.round(e.prop!.health ?? max) } : {}),
           })
         }
@@ -393,6 +407,16 @@ export class GameServer {
           break
         }
         session.lastUseTick = this.tick
+        // A held watering can fills instead of drinking.
+        const held = session.holstered ? null : session.inventory.get(session.activeHotbar)
+        const fluidCap = held ? this.world.content.item(held.defId)?.fluidContainer : undefined
+        if (held && fluidCap) {
+          held.meta = { ...held.meta, fluid: fluidCap.capacity }
+          session.dirty = true
+          this.send(session, { t: 'result', action: 'consume', ok: true })
+          this.sendInventory(session)
+          break
+        }
         session.stats.thirst = Math.min(100, session.stats.thirst + 30)
         session.statsDirty = true
         session.dirty = true
@@ -635,6 +659,162 @@ export class GameServer {
 
   private timeWire(): ServerMessage {
     return { t: 'time', frac: this.env.timeOfDay, weather: this.env.weather }
+  }
+
+  /**
+   * Utility + production sweep, once a second over prop entities. Plants
+   * stay timestamp-lazy (a slower cadence touches them); machines and
+   * generators are few, and their jobs are timestamp-based too — this
+   * sweep only notices completions/starts, it never simulates.
+   */
+  private tickProduction(nowMs: number, raining: boolean, ambientC: number): void {
+    const content = this.world.content
+    const maxStackOf = (defId: string) => content.item(defId)?.maxStack ?? 1
+    // Pass 1: generators burn fuel; remember active ones for power checks.
+    const activePower: { x: number; z: number; radius: number }[] = []
+    for (const entity of this.world.entities.ofKind('prop')) {
+      if (!entity.prop) continue
+      const def = content.item(entity.prop.defId)
+      if (!def?.powerProducer) continue
+      if ((entity.prop.burnUntil ?? 0) <= nowMs && entity.prop.container) {
+        // Reload: burn the first fuel item in the hopper.
+        for (let i = 0; i < entity.prop.container.length; i++) {
+          const slot = entity.prop.container[i]
+          const fuel = slot ? content.item(slot.defId)?.fuel : undefined
+          if (!slot || !fuel) continue
+          slot.count -= 1
+          if (slot.count <= 0) entity.prop.container[i] = null
+          entity.prop.burnUntil =
+            Math.max(nowMs, entity.prop.burnUntil ?? 0) + fuel.burnSeconds * 1000
+          entity.dirty = true
+          for (const other of this.sessions.values()) {
+            if (other.openContainer === entity.id) this.sendContainer(other, entity)
+          }
+          break
+        }
+      }
+      if ((entity.prop.burnUntil ?? 0) > nowMs) {
+        activePower.push({
+          x: entity.transform.pos.x,
+          z: entity.transform.pos.z,
+          radius: def.powerProducer.radius,
+        })
+      }
+    }
+    const powered = (x: number, z: number): boolean =>
+      activePower.some((p) => Math.hypot(p.x - x, p.z - z) <= p.radius)
+
+    // Pass 2: machines complete/start jobs (timestamp-based).
+    for (const entity of this.world.entities.ofKind('prop')) {
+      if (!entity.prop?.container) continue
+      const def = content.item(entity.prop.defId)
+      const machine = def?.machine
+      if (!machine) continue
+      entity.prop.machine ??= {}
+      const shape = { inputSlots: machine.inputSlots, outputSlots: machine.outputSlots }
+      let changed = false
+      if (
+        completeJob(
+          entity.prop.machine,
+          entity.prop.container,
+          shape,
+          (id) => content.recipe(id),
+          maxStackOf,
+          nowMs,
+        )
+      ) {
+        changed = true
+      }
+      const hasPower =
+        !machine.needsPower || powered(entity.transform.pos.x, entity.transform.pos.z)
+      if (
+        hasPower &&
+        tryStartJob(
+          entity.prop.machine,
+          entity.prop.container,
+          shape,
+          content.machineRecipes(machine.kind),
+          nowMs,
+        )
+      ) {
+        changed = true
+      }
+      if (changed) {
+        entity.dirty = true
+        for (const other of this.sessions.values()) {
+          if (other.openContainer === entity.id) this.sendContainer(other, entity)
+        }
+      }
+    }
+
+    // Pass 3 (every 5s): tanks catch rain; sprinklers water nearby planters.
+    if (this.tick % (this.config.tickRate * 5) === 0) {
+      const tanks: { entity: GameEntity; capacity: number }[] = []
+      for (const entity of this.world.entities.ofKind('prop')) {
+        const cap = entity.prop ? content.item(entity.prop.defId)?.waterTank : undefined
+        if (!entity.prop || !cap) continue
+        if (raining && (entity.prop.waterAmount ?? 0) < cap.capacity) {
+          entity.prop.waterAmount = Math.min(cap.capacity, (entity.prop.waterAmount ?? 0) + 2.5)
+          entity.dirty = true
+        }
+        tanks.push({ entity, capacity: cap.capacity })
+      }
+      for (const entity of this.world.entities.ofKind('prop')) {
+        const spr = entity.prop ? content.item(entity.prop.defId)?.sprinkler : undefined
+        if (!entity.prop || !spr) continue
+        const tank = tanks.find(
+          (t) =>
+            (t.entity.prop!.waterAmount ?? 0) >= 0.5 &&
+            Math.hypot(
+              t.entity.transform.pos.x - entity.transform.pos.x,
+              t.entity.transform.pos.z - entity.transform.pos.z,
+            ) <= spr.tankRange,
+        )
+        if (!tank) continue
+        for (const planter of this.world.entities.ofKind('prop')) {
+          const plant = planter.prop?.plant
+          if (!plant) continue
+          if (
+            Math.hypot(
+              planter.transform.pos.x - entity.transform.pos.x,
+              planter.transform.pos.z - entity.transform.pos.z,
+            ) > spr.radius
+          ) {
+            continue
+          }
+          const crop = content.crop(plant.crop)
+          if (!crop) continue
+          updatePlant(plant, crop, { nowMs, raining, ambientC })
+          if ((tank.entity.prop!.waterAmount ?? 0) >= 0.5 && waterPlant(plant)) {
+            tank.entity.prop!.waterAmount = (tank.entity.prop!.waterAmount ?? 0) - 0.5
+            tank.entity.dirty = true
+            planter.dirty = true
+          }
+        }
+      }
+    }
+
+    // Pass 4 (every 15s): lazy plant advance + growth-stage broadcasts.
+    if (this.tick % (this.config.tickRate * 15) !== 0) return
+    for (const entity of this.world.entities.ofKind('prop')) {
+      const plant = entity.prop?.plant
+      if (!plant) continue
+      const crop = content.crop(plant.crop)
+      if (!crop) continue
+      const beforeStage = plantStage(plant, crop)
+      const beforeWater = plant.water
+      updatePlant(plant, crop, { nowMs, raining, ambientC })
+      entity.dirty = true
+      const stageChanged = plantStage(plant, crop) !== beforeStage
+      const driedOut = beforeWater > 0 && plant.water <= 0
+      if (stageChanged || driedOut) {
+        this.broadcastToKnowing(entity.id, {
+          t: 'entity',
+          id: entity.id,
+          plant: { crop: plant.crop, t: plantProgress(plant, crop), water: plant.water },
+        })
+      }
+    }
   }
 
   onDisconnect(conn: GameConnection): void {
@@ -1265,6 +1445,7 @@ export class GameServer {
         this.broadcastAll(this.timeWire())
       }
       this.tickSupplyDrops()
+      this.tickProduction(nowMs, raining, ambientC)
     }
 
     // 7. Resource respawn sweep (once a second).

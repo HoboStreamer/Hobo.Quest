@@ -495,7 +495,11 @@ function promptFor(
     return 'LMB — place · wheel — rotate · Shift — snap · G — toss'
   }
   if (!target) {
-    if (interact.standingInWater()) return 'E — drink'
+    if (interact.standingInWater()) {
+      const held = state.activeItemDef()
+      if (held && content.item(held)?.fluidContainer) return 'E — fill the can'
+      return 'E — drink'
+    }
     return null
   }
   if (target.kind === 'resource') {
@@ -529,12 +533,19 @@ function promptFor(
     }
     if (target.def && content.item(target.def)?.planter) {
       const entity = state.entities.get(target.entityId)
-      if (entity?.plant) {
-        const done = Date.now() - entity.plant.plantedAt >= entity.plant.growSeconds * 1000
-        return done ? 'E — harvest' : '🌱 growing…'
-      }
       const held = state.activeItemDef()
-      if (held && content.item(held)?.seed) return 'E — plant seeds'
+      const heldItem = held ? content.item(held) : undefined
+      if (entity?.plant) {
+        if (heldItem?.fluidContainer) return 'E — water the plant'
+        if (heldItem?.fertilizer) return 'E — fertilize'
+        if (entity.plant.t >= 1) return 'E — harvest'
+        return entity.plant.water <= 0 ? '🥀 thirsty — needs water' : '🌱 growing…'
+      }
+      if (heldItem?.seed) return 'E — plant seeds'
+    }
+    if (target.def && content.item(target.def)?.waterTank) {
+      const held = state.activeItemDef()
+      if (held && content.item(held)?.fluidContainer) return 'E — fill / pour water'
     }
     if (interact.physgunActive)
       return 'RMB — freeze · E — rotate · Shift — grid · wheel — push/pull'

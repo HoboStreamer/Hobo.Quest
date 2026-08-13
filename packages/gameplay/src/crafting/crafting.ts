@@ -25,6 +25,8 @@ export function validateCraft(
 ): Result<Recipe, CraftError> {
   const recipe = content.recipe(recipeId)
   if (!recipe) return err('unknown_recipe')
+  // Machine recipes only run inside their machine, never by hand.
+  if (recipe.machine) return err('unknown_recipe')
   if (recipe.workstation && !ctx.nearbyWorkstations.has(recipe.workstation)) {
     return err('missing_workstation')
   }

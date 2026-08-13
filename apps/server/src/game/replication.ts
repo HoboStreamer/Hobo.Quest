@@ -1,5 +1,11 @@
 import { stanceProgress, type GameEntity } from '@hobo/gameplay'
-import type { ServerSnapshot, WireBodyState, WireEntity, WirePlayerState } from '@hobo/protocol'
+import type {
+  ServerSnapshot,
+  WireBodyState,
+  WireEntity,
+  WirePlant,
+  WirePlayerState,
+} from '@hobo/protocol'
 import { v3distSq, type EntityId } from '@hobo/shared'
 import type { GameWorld } from './gameWorld.js'
 import type { PlayerSession } from './playerSession.js'
@@ -29,15 +35,7 @@ export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity 
       motion: entity.prop.motion,
       ...(entity.owner !== undefined ? { owner: entity.owner as string } : {}),
       ...(entity.prop.health !== undefined ? { health: Math.round(entity.prop.health) } : {}),
-      ...(entity.prop.plant
-        ? {
-            plant: {
-              seed: entity.prop.plant.seedId,
-              plantedAt: entity.prop.plant.plantedAt,
-              growSeconds: world.content.item(entity.prop.plant.seedId)?.seed?.growSeconds ?? 240,
-            },
-          }
-        : {}),
+      ...(plantWire(world, entity) ?? {}),
     }
   }
   if (entity.resource) {
@@ -49,6 +47,20 @@ export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity 
     }
   }
   return { ...base, kind: 'player' }
+}
+
+function plantWire(world: GameWorld, entity: GameEntity): { plant: WirePlant } | null {
+  const plant = entity.prop?.plant
+  if (!plant) return null
+  const crop = world.content.crop(plant.crop)
+  if (!crop) return null
+  return {
+    plant: {
+      crop: plant.crop,
+      t: Math.min(1, plant.progress / crop.growSeconds),
+      water: plant.water,
+    },
+  }
 }
 
 export function wirePlayerFor(session: PlayerSession): WirePlayerState {

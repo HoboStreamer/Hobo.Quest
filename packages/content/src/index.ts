@@ -1,3 +1,4 @@
+export * from './schema/crop.js'
 export * from './schema/item.js'
 export * from './schema/recipe.js'
 export * from './schema/skill.js'
@@ -7,6 +8,7 @@ export * from './surface.js'
 export * from './mapFileV2.js'
 export * from './mapDiff.js'
 export * from './registry.js'
+export * from './defs/crops.js'
 export * from './defs/items.js'
 export * from './defs/recipes.js'
 export * from './defs/skills.js'
@@ -15,6 +17,7 @@ export * from './defs/hoboville.js'
 
 import { ContentRegistry } from './registry.js'
 import { HOBOVILLE } from './defs/hoboville.js'
+import { CROPS } from './defs/crops.js'
 import { ITEMS } from './defs/items.js'
 import { RECIPES } from './defs/recipes.js'
 import { RESOURCE_NODES } from './defs/resources.js'
@@ -27,6 +30,7 @@ export function createContent(): ContentRegistry {
     recipes: RECIPES,
     skills: SKILLS,
     nodeTypes: RESOURCE_NODES,
+    crops: CROPS,
     world: HOBOVILLE,
   })
 }
