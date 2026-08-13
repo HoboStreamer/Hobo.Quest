@@ -15,6 +15,7 @@ import type {
 import {
   ConstraintIslands,
   EntityStore,
+  SpatialHash,
   ZoneIndex,
   migrateLegacyPlant,
   validateConstraintParams,
@@ -84,6 +85,13 @@ export class GameWorld {
   private readonly constraintsDeleted = new Set<string>()
   /** Connected-constraint structure tracking (metrics, group semantics). */
   readonly islands = new ConstraintIslands<EntityId>()
+  /**
+   * THE spatial index: every entity (props, resources, players) by ground
+   * position. Interest queries, workstation/shop lookups, sprinkler and
+   * power coupling, and NPC perception all consume this one structure.
+   * GameWorld maintains props/resources; the server maintains players.
+   */
+  readonly spatial = new SpatialHash<EntityId>(16)
 
   constructor(
     readonly content: ContentRegistry,
@@ -252,6 +260,7 @@ export class GameWorld {
       dirty: true,
     }
     this.entities.add(entity)
+    this.spatial.insert(entity.id, opts.pos.x, opts.pos.z)
     const bodyId = this.physics.addBody({
       shape: toShapeDesc(rep.shape),
       motion: opts.motion === 'dynamic' ? 'dynamic' : 'static',
@@ -294,6 +303,7 @@ export class GameWorld {
       dirty: true,
     }
     this.entities.add(entity)
+    this.spatial.insert(entity.id, opts.pos.x, opts.pos.z)
     const bodyId = this.physics.addBody({
       shape: toShapeDesc(nodeType.bodyShape),
       motion: 'static',
@@ -309,6 +319,7 @@ export class GameWorld {
   despawn(id: EntityId): void {
     const entity = this.entities.remove(id)
     if (!entity) return
+    this.spatial.remove(id)
     this.removeConstraintsFor(id)
     const bodyId = this.bodyByEntity.get(id)
     if (bodyId !== undefined) {
@@ -360,6 +371,7 @@ export class GameWorld {
     if (bodyId === undefined) return
     entity.prop.motion = motion
     entity.dirty = true
+    this.spatial.move(entity.id, entity.transform.pos.x, entity.transform.pos.z)
     this.physics.setMotionType(bodyId, motion === 'dynamic' ? 'dynamic' : 'static')
     if (motion === 'dynamic') this.settled.delete(entity.id)
   }
@@ -530,6 +542,7 @@ export class GameWorld {
       if (!nowSettled) {
         awake++
         this.physics.getTransform(bodyId, entity.transform.pos, entity.transform.rot)
+        this.spatial.move(entity.id, entity.transform.pos.x, entity.transform.pos.z)
         entity.dirty = true
         if (wasSettled) {
           this.settled.delete(entity.id)
@@ -691,6 +704,7 @@ export class GameWorld {
   private placeAt(entity: GameEntity, pos: readonly [number, number, number]): void {
     const y = pos[1] + terrainHeight(this.content.world, pos[0], pos[2])
     entity.transform.pos = vec3(pos[0], y, pos[2])
+    this.spatial.move(entity.id, entity.transform.pos.x, entity.transform.pos.z)
     entity.dirty = true
     const body = this.bodyOf(entity.id)
     if (body !== undefined) this.physics.setTransform(body, entity.transform.pos)

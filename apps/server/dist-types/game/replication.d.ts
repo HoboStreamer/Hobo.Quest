@@ -6,11 +6,9 @@ import type { PlayerSession } from './playerSession.js'
 /**
  * Interest management + snapshot building.
  *
- * Relevance is currently a radius test over the entity store (fine at slice
- * scale). The contract to preserve as the world grows: replication cost per
- * client is proportional to *relevant* entities, never total entities — the
- * radius query will move to the spatial region index without changing
- * callers.
+ * Relevance is a radius test over the shared spatial hash: replication
+ * cost per client is proportional to NEARBY entities, never total
+ * entities. NPC perception and event relevance reuse the same index.
  */
 export declare function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity
 export declare function wirePlayerFor(session: PlayerSession): WirePlayerState

@@ -2,6 +2,7 @@ import type { ContentRegistry, WorldShape } from '@hobo/content'
 import {
   ConstraintIslands,
   EntityStore,
+  SpatialHash,
   ZoneIndex,
   type ConstraintParams,
   type ConstraintType,
@@ -35,6 +36,13 @@ export declare class GameWorld {
   private readonly constraintsDeleted
   /** Connected-constraint structure tracking (metrics, group semantics). */
   readonly islands: ConstraintIslands<EntityId>
+  /**
+   * THE spatial index: every entity (props, resources, players) by ground
+   * position. Interest queries, workstation/shop lookups, sprinkler and
+   * power coupling, and NPC perception all consume this one structure.
+   * GameWorld maintains props/resources; the server maintains players.
+   */
+  readonly spatial: SpatialHash<EntityId>
   constructor(content: ContentRegistry, physics: PhysicsWorld, log: Logger)
   /** Static level geometry — mirrored by the client from the same world def. */
   private buildStaticWorld

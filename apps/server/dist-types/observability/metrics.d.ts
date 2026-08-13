@@ -19,6 +19,9 @@ export declare class ServerMetrics {
   /** Live constraints and the multi-prop structures they form. */
   constraints: number
   constraintIslands: number
+  /** Coarse world regions: active = player ±1 ring; occupied = has players. */
+  activeRegions: number
+  occupiedRegions: number
   /**
    * Live map layers, by stable id. These make "Save is live" checkable from
    * outside the process: a static added in the editor must show up here on

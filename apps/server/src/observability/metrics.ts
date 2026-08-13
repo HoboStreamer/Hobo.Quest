@@ -20,6 +20,9 @@ export class ServerMetrics {
   /** Live constraints and the multi-prop structures they form. */
   constraints = 0
   constraintIslands = 0
+  /** Coarse world regions: active = player ±1 ring; occupied = has players. */
+  activeRegions = 0
+  occupiedRegions = 0
   /**
    * Live map layers, by stable id. These make "Save is live" checkable from
    * outside the process: a static added in the editor must show up here on
@@ -53,6 +56,8 @@ export class ServerMetrics {
       dbDirtyQueue: this.dbDirtyQueue,
       constraints: this.constraints,
       constraintIslands: this.constraintIslands,
+      activeRegions: this.activeRegions,
+      occupiedRegions: this.occupiedRegions,
       mapStatics: this.mapStatics,
       mapTerrains: this.mapTerrains,
       mapZones: this.mapZones,

@@ -13,11 +13,9 @@ import type { PlayerSession } from './playerSession.js'
 /**
  * Interest management + snapshot building.
  *
- * Relevance is currently a radius test over the entity store (fine at slice
- * scale). The contract to preserve as the world grows: replication cost per
- * client is proportional to *relevant* entities, never total entities — the
- * radius query will move to the spatial region index without changing
- * callers.
+ * Relevance is a radius test over the shared spatial hash: replication
+ * cost per client is proportional to NEARBY entities, never total
+ * entities. NPC perception and event relevance reuse the same index.
  */
 
 export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity {
@@ -93,12 +91,15 @@ export function updateInterest(
   const radiusSq = radius * radius
   const entered: GameEntity[] = []
   const current = new Set<EntityId>()
-  for (const entity of world.entities.all()) {
-    if (entity.id === session.entityId) continue
-    if (v3distSq(entity.transform.pos, session.move.pos) > radiusSq) continue
+  // Spatial hash prunes candidates; the exact 3D distance test decides.
+  world.spatial.forEachInRadius(session.move.pos.x, session.move.pos.z, radius, (id) => {
+    if (id === session.entityId) return
+    const entity = world.entities.get(id)
+    if (!entity) return
+    if (v3distSq(entity.transform.pos, session.move.pos) > radiusSq) return
     current.add(entity.id)
     if (!session.known.has(entity.id)) entered.push(entity)
-  }
+  })
   const left: EntityId[] = []
   for (const id of session.known) {
     if (!current.has(id)) left.push(id)

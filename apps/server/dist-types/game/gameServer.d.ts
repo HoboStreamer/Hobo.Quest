@@ -1,3 +1,4 @@
+import { RegionTracker } from '@hobo/gameplay'
 import type { PersistenceStore } from '@hobo/persistence'
 import { type ClientMessage } from '@hobo/protocol'
 import { type Logger } from '@hobo/shared'
@@ -32,6 +33,8 @@ export declare class GameServer {
   private lastFlushTick
   /** Authoritative world environment: clock, weather, temperature. */
   private readonly env
+  /** Coarse activation regions (NPC LOD and event relevance hang off this). */
+  readonly regions: RegionTracker
   constructor(
     config: ServerConfig,
     world: GameWorld,

@@ -93,8 +93,8 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
   4 KB/message, 120 msgs/s per connection.
 - Entities: `GameEntity` records with optional components (prop, resource,
   owner, mapSourceId); kinds player/prop/resource in `EntityStore` with
-  kind indexes. No spatial index — interest = O(entities) radius scan per
-  session (replication.ts:82).
+  kind indexes, plus ONE shared SpatialHash (16 m) for all proximity
+  queries and a RegionTracker (32 m) for activation.
 - Interest management: per-session known-sets, spawn/despawn diffs,
   snapshots carry only awake relevant bodies. Sleep networking works.
 - Client: prediction + reconciliation for movement; entity interpolation
@@ -285,9 +285,14 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
 
 ### World regions / simulation LOD
 
-- **Missing.** Single active world; interest radius per session is the
-  only spatial concept. Zones are AABB rule volumes (pvp/build/physgun),
-  linear scan.
+- **Foundation implemented (Stage 6).** One shared `SpatialHash` (16 m
+  cells) over every entity, maintained by GameWorld (props/resources) and
+  the server (players): replication interest, workstation/shop lookups
+  and sprinkler coupling all query it — no consumer walks all entities by
+  distance anymore. `RegionTracker` (32 m regions) recomputes activation
+  (player ±1 ring) at 1 Hz with metrics (activeRegions/occupiedRegions);
+  `regions.isActive(x, z)` is the seam NPC LOD and event relevance hang
+  off in Stage 7/9. Deactivation unloads nothing (persistence-safe).
 
 ### Networking scale
 

@@ -362,19 +362,27 @@ export function handleCraft(
   return result('craft', true)
 }
 
+const MAX_WORKSTATION_RANGE = 8
+
 export function nearbyWorkstationKinds(
   session: PlayerSession,
   world: GameWorld,
 ): ReadonlySet<string> {
   const kinds = new Set<string>()
-  for (const entity of world.entities.ofKind('prop')) {
-    if (!entity.prop) continue
-    const def = world.content.item(entity.prop.defId)
-    if (!def?.workstation) continue
-    if (v3dist(entity.transform.pos, session.move.pos) <= def.workstation.range) {
-      kinds.add(def.workstation.kind)
-    }
-  }
+  world.spatial.forEachInRadius(
+    session.move.pos.x,
+    session.move.pos.z,
+    MAX_WORKSTATION_RANGE,
+    (id) => {
+      const entity = world.entities.get(id)
+      if (!entity?.prop) return
+      const def = world.content.item(entity.prop.defId)
+      if (!def?.workstation) return
+      if (v3dist(entity.transform.pos, session.move.pos) <= def.workstation.range) {
+        kinds.add(def.workstation.kind)
+      }
+    },
+  )
   return kinds
 }
 

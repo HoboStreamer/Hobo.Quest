@@ -22,6 +22,7 @@ import {
   plantStage,
   precipitation,
   recordShot,
+  RegionTracker,
   startReload,
   stepEnvironment,
   stepMovement,
@@ -123,6 +124,8 @@ export class GameServer {
   private lastFlushTick = 0
   /** Authoritative world environment: clock, weather, temperature. */
   private readonly env: EnvironmentState
+  /** Coarse activation regions (NPC LOD and event relevance hang off this). */
+  readonly regions = new RegionTracker(32)
 
   constructor(
     private readonly config: ServerConfig,
@@ -532,19 +535,18 @@ export class GameServer {
           this.send(session, { t: 'result', action: 'trade', ok: false, error: 'no_such_trade' })
           break
         }
-        // Must be standing at a trading post.
+        // Must be standing at a trading post (spatial-hash pruned).
         let nearShop = false
-        for (const e of this.world.entities.ofKind('prop')) {
-          if (!e.prop || !this.world.content.item(e.prop.defId)?.shop) continue
+        this.world.spatial.forEachInRadius(session.move.pos.x, session.move.pos.z, 5, (id) => {
+          if (nearShop) return
+          const e = this.world.entities.get(id)
+          if (!e?.prop || !this.world.content.item(e.prop.defId)?.shop) return
           const d = Math.hypot(
             e.transform.pos.x - session.move.pos.x,
             e.transform.pos.z - session.move.pos.z,
           )
-          if (d < 5) {
-            nearShop = true
-            break
-          }
-        }
+          if (d < 5) nearShop = true
+        })
         if (!nearShop) {
           this.send(session, { t: 'result', action: 'trade', ok: false, error: 'no_merchant' })
           break
@@ -857,26 +859,33 @@ export class GameServer {
             ) <= spr.tankRange,
         )
         if (!tank) continue
-        for (const planter of this.world.entities.ofKind('prop')) {
-          const plant = planter.prop?.plant
-          if (!plant) continue
-          if (
-            Math.hypot(
-              planter.transform.pos.x - entity.transform.pos.x,
-              planter.transform.pos.z - entity.transform.pos.z,
-            ) > spr.radius
-          ) {
-            continue
-          }
-          const crop = content.crop(plant.crop)
-          if (!crop) continue
-          updatePlant(plant, crop, { nowMs, raining, ambientC })
-          if ((tank.entity.prop!.waterAmount ?? 0) >= 0.5 && waterPlant(plant)) {
-            tank.entity.prop!.waterAmount = (tank.entity.prop!.waterAmount ?? 0) - 0.5
-            tank.entity.dirty = true
-            planter.dirty = true
-          }
-        }
+        // Planters via the spatial hash (no all-props walk per sprinkler).
+        this.world.spatial.forEachInRadius(
+          entity.transform.pos.x,
+          entity.transform.pos.z,
+          spr.radius,
+          (id) => {
+            const planter = this.world.entities.get(id)
+            const plant = planter?.prop?.plant
+            if (!planter || !plant) return
+            if (
+              Math.hypot(
+                planter.transform.pos.x - entity.transform.pos.x,
+                planter.transform.pos.z - entity.transform.pos.z,
+              ) > spr.radius
+            ) {
+              return
+            }
+            const crop = content.crop(plant.crop)
+            if (!crop) return
+            updatePlant(plant, crop, { nowMs, raining, ambientC })
+            if ((tank.entity.prop!.waterAmount ?? 0) >= 0.5 && waterPlant(plant)) {
+              tank.entity.prop!.waterAmount = (tank.entity.prop!.waterAmount ?? 0) - 0.5
+              tank.entity.dirty = true
+              planter.dirty = true
+            }
+          },
+        )
       }
     }
 
@@ -924,6 +933,7 @@ export class GameServer {
       this.playerBodies.delete(session.playerId)
     }
     this.world.entities.remove(session.entityId)
+    this.world.spatial.remove(session.entityId)
     this.savePlayer(session)
     this.broadcastDespawn(session.entityId)
     this.metrics.sessions = this.sessions.size
@@ -1040,6 +1050,7 @@ export class GameServer {
       dirty: false,
     }
     this.world.entities.add(entity)
+    this.world.spatial.insert(entity.id, session.move.pos.x, session.move.pos.z)
 
     // Kinematic capsule so props collide with players. Shorter than the
     // movement hull and lifted off the feet: standing ON a prop must not
@@ -1622,6 +1633,10 @@ export class GameServer {
       const ambientC = ambientTemperature(this.env)
       const raining = precipitation(this.env) > 0
       const nowMs = Date.now()
+      // Region activation follows players (coarse, 1 Hz).
+      this.regions.update(
+        [...this.sessions.values()].map((s) => ({ x: s.move.pos.x, z: s.move.pos.z })),
+      )
       for (const session of this.sessions.values()) {
         const sprinting =
           (session.buttons & Buttons.Sprint) !== 0 &&
@@ -1701,6 +1716,8 @@ export class GameServer {
     this.metrics.entities = this.world.entities.size
     this.metrics.constraints = this.world.constraintCount
     this.metrics.constraintIslands = this.world.islands.islandCount()
+    this.metrics.activeRegions = this.regions.activeRegionCount
+    this.metrics.occupiedRegions = this.regions.occupiedRegionCount
     this.metrics.mapStatics = this.world.mapStaticCount()
     this.metrics.mapTerrains = this.world.mapTerrainCount()
     this.metrics.mapZones = this.world.mapZoneCount()
@@ -1780,6 +1797,7 @@ export class GameServer {
     }
     const entity = this.world.entities.get(session.entityId)
     if (entity) qfromYaw(entity.transform.rot, session.yaw)
+    this.world.spatial.move(session.entityId, session.move.pos.x, session.move.pos.z)
   }
 
   private replicate(): void {
