@@ -48,6 +48,8 @@ describe('sqlite store', () => {
       yaw: 1.5,
       armor: { defId: 'padded_jacket', count: 1, meta: { dur: 12 } },
       reputation: { hoboville: 12, rustjaw: -30 },
+      unlocks: ['craft_still'],
+      activeJob: { job: 'lumber_run', progress: 3 },
       inventory: {
         size: 24,
         hotbar: 6,
@@ -151,7 +153,7 @@ describe('sqlite store', () => {
     const loaded = store.constraints.loadAll()
     expect(loaded).toHaveLength(2)
     expect(loaded.find((c) => c.id === 'c2')?.params).toEqual({ length: 2 })
-    expect(store.meta.get('schema_version')).toBe('10')
+    expect(store.meta.get('schema_version')).toBe('11')
     // v9 armor column round-trips.
     store.players.upsert({
       ...store.players.findByToken('tok_11111111')!,

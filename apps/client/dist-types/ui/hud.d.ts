@@ -43,6 +43,8 @@ export declare class Hud {
   private shopTargetId
   /** Latest market data from the server. */
   private marketData
+  /** Contracts at the open trading post. */
+  private jobsData
   openShop(targetId: string): void
   setMarket(data: NonNullable<typeof this.marketData>): void
   closeShop(): void

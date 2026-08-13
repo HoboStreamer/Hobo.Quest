@@ -136,6 +136,11 @@ class TestClient {
   /** Faction standings (reputation message). */
   reputation: { id: string; name: string; value: number; stance: string }[] = []
   announces: { text: string; at: number }[] = []
+  lastJobs: {
+    market: string
+    available: { id: string; name: string }[]
+    active: { job: string; progress: number; goal: number; ready: boolean } | null
+  } | null = null
   /** Latest market view (market message). */
   lastMarket: {
     id: string
@@ -255,6 +260,9 @@ class TestClient {
         break
       case 'market':
         this.lastMarket = { id: msg.id, sells: msg.sells, buys: msg.buys }
+        break
+      case 'jobs':
+        this.lastJobs = { market: msg.market, available: msg.available, active: msg.active }
         break
       case 'announce':
         this.announces.push({ text: msg.text, at: Date.now() })
@@ -1248,6 +1256,34 @@ async function main(): Promise<void> {
   await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
   assert(a.results.at(-1)?.error === 'no_such_trade', 'unknown market item rejected')
 
+  console.log('phase: progression — blueprint gates, contracts')
+  // Blueprint-locked recipe refuses to craft before learning it.
+  a.results.length = 0
+  a.send({ t: 'craft', recipe: 'craft_scrap_pistol' })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'craft')
+  assert(a.results.at(-1)?.error === 'not_unlocked', 'blueprint recipe locked before learning')
+  // Contracts listed at the post; accept one; turn-in refused unfinished.
+  await pollUntil(() => (a.lastJobs?.available.length ?? 0) > 0)
+  assert(
+    a.lastJobs?.available.some((j) => j.id === 'lumber_run'),
+    'contracts offered at the trading post',
+  )
+  a.results.length = 0
+  a.send({ t: 'job_accept', target: stall.id, job: 'lumber_run' })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
+  assert(a.results.at(-1)?.ok === true, 'contract accepted')
+  await pollUntil(() => a.lastJobs?.active?.job === 'lumber_run')
+  assert(a.lastJobs?.active?.goal === 24, 'active contract tracked with its goal')
+  a.results.length = 0
+  a.send({ t: 'job_turnin', target: stall.id })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
+  assert(a.results.at(-1)?.error === 'missing_items', 'unfinished contract refused')
+  // Hostile: accepting a second contract while one is active.
+  a.results.length = 0
+  a.send({ t: 'job_accept', target: stall.id, job: 'bread_line' })
+  await a.waitFor((m) => m.t === 'result' && m.action === 'trade')
+  assert(a.results.at(-1)?.error === 'job_in_progress', 'second contract refused while active')
+
   await craftAndWait(a, 'craft_planks', 'wood_plank')
   await craftAndWait(a, 'craft_planter_box', 'planter_box')
   a.send({ t: 'drop', slot: a.slotOf('planter_box'), count: 1 })
@@ -1544,6 +1580,23 @@ async function main(): Promise<void> {
     a.send({ t: 'container_move', target: crate.id, dir: 'out', slot: coreSlot.i })
     await pollUntil(() => a.count('salvage_core') > 0)
     assert(a.count('salvage_core') > 0, 'salvage core looted')
+    // Blueprint discovery: crates carry plans; using one unlocks the recipe.
+    a.send({ t: 'container_open', target: crate.id })
+    await a.waitFor((m) => m.t === 'container' && m.id === crate.id, 5000)
+    const bpSlot = a.lastContainer?.slots.find((sl) => sl.def === 'blueprint_scrap_pistol')
+    assert(bpSlot, 'crate carries a blueprint')
+    a.send({ t: 'container_move', target: crate.id, dir: 'out', slot: bpSlot.i })
+    await pollUntil(() => a.count('blueprint_scrap_pistol') > 0)
+    a.results.length = 0
+    a.send({ t: 'consume', slot: a.slotOf('blueprint_scrap_pistol') })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'consume')
+    assert(a.results.at(-1)?.ok === true, 'blueprint consumed (learned)')
+    // The recipe is now unlocked: crafting fails on materials, not locks.
+    a.results.length = 0
+    a.send({ t: 'craft', recipe: 'craft_scrap_pistol' })
+    await a.waitFor((m) => m.t === 'result' && m.action === 'craft')
+    const craftErr = a.results.at(-1)?.error
+    assert(craftErr !== 'not_unlocked', `learned recipe no longer locked (got ${craftErr ?? 'ok'})`)
 
     // Extraction: catch a FRESH announce (the window is 120s from its
     // announce), hold the circle, come home secured.

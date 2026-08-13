@@ -43,6 +43,9 @@ export const RecipeSchema = z.object({
    * crafting: machine recipes never appear in the player craft menu.
    */
   machine: z.string().optional(),
+  /** Blueprint recipes are NOT known by default: a blueprint item, job or
+   * reward must unlock them per player. */
+  blueprint: z.boolean().optional(),
   /** Skill gates — enforced once the skill system lands; validated now. */
   requiredSkill: z.object({ skill: z.string(), level: z.number().int().min(1) }).optional(),
 })

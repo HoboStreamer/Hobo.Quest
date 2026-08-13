@@ -6,6 +6,7 @@ import {
   type NpcArchetype,
 } from './schema/npc.js'
 import { ItemDefSchema, type ItemDef } from './schema/item.js'
+import { JobSchema, type JobDef } from './schema/job.js'
 import { MarketSchema, type MarketDef } from './schema/market.js'
 import { RecipeSchema, type Recipe } from './schema/recipe.js'
 import { ResourceNodeTypeSchema, type ResourceNodeType } from './schema/resourceNode.js'
@@ -21,6 +22,7 @@ export interface ContentDefs {
   npcs: NpcArchetype[]
   factions: FactionDef[]
   markets: MarketDef[]
+  jobs: JobDef[]
   world: WorldDef
 }
 
@@ -39,6 +41,7 @@ export class ContentRegistry {
   private readonly npcs = new Map<string, NpcArchetype>()
   private readonly factions = new Map<string, FactionDef>()
   private readonly markets = new Map<string, MarketDef>()
+  private readonly jobs = new Map<string, JobDef>()
   readonly world: WorldDef
 
   constructor(defs: ContentDefs) {
@@ -137,6 +140,32 @@ export class ContentRegistry {
       }
       this.markets.set(market.id, market)
     }
+    for (const raw of defs.jobs) {
+      const parsed = JobSchema.safeParse(raw)
+      if (!parsed.success) {
+        errors.push(`job '${raw.id}': ${parsed.error.message}`)
+        continue
+      }
+      const job = parsed.data
+      if (this.jobs.has(job.id)) errors.push(`duplicate job '${job.id}'`)
+      if (!this.markets.has(job.market)) {
+        errors.push(`job '${job.id}' references unknown market '${job.market}'`)
+      }
+      if (job.objective.kind === 'deliver' && !this.items.has(job.objective.item)) {
+        errors.push(`job '${job.id}' delivers unknown item '${job.objective.item}'`)
+      }
+      if (job.objective.kind === 'kill' && !this.npcs.has(job.objective.archetype)) {
+        errors.push(`job '${job.id}' targets unknown archetype '${job.objective.archetype}'`)
+      }
+      for (const it of job.reward.items) {
+        if (!this.items.has(it.item)) {
+          errors.push(`job '${job.id}' rewards unknown item '${it.item}'`)
+        }
+      }
+      this.jobs.set(job.id, job)
+    }
+    // Blueprint items must unlock known blueprint recipes (checked later,
+    // after recipes parse) — collected here.
     // Shop props must reference known markets.
     for (const item of this.items.values()) {
       if (item.shop && !this.markets.has(item.shop.market)) {
@@ -196,6 +225,17 @@ export class ContentRegistry {
         errors.push(`recipe '${recipe.id}' cannot be both machine and hand recipe`)
       }
       this.recipes.set(recipe.id, recipe)
+    }
+
+    // Blueprint cross-checks (items ↔ recipes are both registered now).
+    for (const item of this.items.values()) {
+      if (!item.blueprint) continue
+      const recipe = this.recipes.get(item.blueprint.recipe)
+      if (!recipe) {
+        errors.push(`item '${item.id}' unlocks unknown recipe '${item.blueprint.recipe}'`)
+      } else if (!recipe.blueprint) {
+        errors.push(`item '${item.id}' unlocks non-blueprint recipe '${recipe.id}'`)
+      }
     }
 
     const parsedWorld = WorldDefSchema.safeParse(defs.world)
@@ -297,6 +337,14 @@ export class ContentRegistry {
 
   market(id: string): MarketDef | undefined {
     return this.markets.get(id)
+  }
+
+  job(id: string): JobDef | undefined {
+    return this.jobs.get(id)
+  }
+
+  jobsForMarket(marketId: string): JobDef[] {
+    return [...this.jobs.values()].filter((j) => j.market === marketId)
   }
 
   /** Machine recipes for one machine kind (unattended production). */

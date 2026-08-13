@@ -47,6 +47,10 @@ export interface PlayerDto {
   armor: ItemStack | null
   /** Faction reputation scores (absent factions = 0). */
   reputation: ReputationDto
+  /** Unlocked blueprint recipe ids. */
+  unlocks: string[]
+  /** Active job/contract state; null when none. */
+  activeJob: { job: string; progress: number } | null
   /** Survival vitals; null/partial rows predate newer fields — the loader
    * normalizes (see @hobo/gameplay normalizeStats). */
   stats: Partial<SurvivalStats> | null

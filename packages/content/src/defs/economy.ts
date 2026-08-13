@@ -15,6 +15,7 @@ export const DROP_SITES: [number, number, number][] = [
 /** Loot rolled into each supply crate (item, min, max). */
 export const DROP_LOOT: [string, number, number][] = [
   ['salvage_core', 1, 2],
+  ['blueprint_scrap_pistol', 1, 1],
   ['coin', 4, 9],
   ['scrap_metal', 3, 8],
   ['trail_stew', 1, 2],

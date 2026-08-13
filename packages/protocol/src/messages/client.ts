@@ -235,6 +235,19 @@ export const ClientMarketSellSchema = z.object({
   item: z.string().max(64),
 })
 
+/** Accept a contract offered by this trading post. */
+export const ClientJobAcceptSchema = z.object({
+  t: z.literal('job_accept'),
+  target: z.string().max(32),
+  job: z.string().max(64),
+})
+
+/** Turn in the active contract at this trading post. */
+export const ClientJobTurnInSchema = z.object({
+  t: z.literal('job_turnin'),
+  target: z.string().max(32),
+})
+
 /** Open a container prop (server replies with its contents). */
 export const ClientContainerOpenSchema = z.object({
   t: z.literal('container_open'),
@@ -281,6 +294,8 @@ export const ClientMessageSchema = z.union([
   ClientMarketOpenSchema,
   ClientMarketBuySchema,
   ClientMarketSellSchema,
+  ClientJobAcceptSchema,
+  ClientJobTurnInSchema,
   ClientContainerOpenSchema,
   ClientContainerMoveSchema,
   ClientContainerSortSchema,
@@ -307,6 +322,8 @@ export type ClientDrink = z.infer<typeof ClientDrinkSchema>
 export type ClientMarketOpen = z.infer<typeof ClientMarketOpenSchema>
 export type ClientMarketBuy = z.infer<typeof ClientMarketBuySchema>
 export type ClientMarketSell = z.infer<typeof ClientMarketSellSchema>
+export type ClientJobAccept = z.infer<typeof ClientJobAcceptSchema>
+export type ClientJobTurnIn = z.infer<typeof ClientJobTurnInSchema>
 export type ClientContainerOpen = z.infer<typeof ClientContainerOpenSchema>
 export type ClientContainerMove = z.infer<typeof ClientContainerMoveSchema>
 export type ClientContainerSort = z.infer<typeof ClientContainerSortSchema>

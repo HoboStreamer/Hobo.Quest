@@ -259,6 +259,25 @@ export const ITEMS: ItemDef[] = [
     },
   },
 
+  {
+    id: 'blueprint_scrap_pistol',
+    name: 'Blueprint: Scrap Pistol',
+    description: 'Greasy hand-drawn plans. Use (LMB) to learn the recipe for good.',
+    category: 'misc',
+    maxStack: 1,
+    valuable: {},
+    blueprint: { recipe: 'craft_scrap_pistol' },
+  },
+  {
+    id: 'blueprint_still',
+    name: 'Blueprint: Backwoods Still',
+    description: "Somebody's prized still schematics. Use (LMB) to learn the recipe.",
+    category: 'misc',
+    maxStack: 1,
+    valuable: {},
+    blueprint: { recipe: 'craft_still' },
+  },
+
   // ── Building pieces (crafted physical objects, physgun-placed) ─────
   {
     id: 'wooden_wall',

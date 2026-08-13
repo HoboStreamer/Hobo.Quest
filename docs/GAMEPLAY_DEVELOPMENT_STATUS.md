@@ -250,11 +250,20 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
   live pistol fire is unit-tested (fire control) — a full e2e shot needs
   a cheaper weapon source in the fixture (noted).
 
-### Skills
+### Skills / Progression
 
-- **Implemented.** 6 skills, XP-total persistence with derived levels,
-  recipe level gates, level-up toasts, skills UI. No capability unlocks
-  beyond recipes, no blueprint/discovery system.
+- **Implemented (through Stage 10).** 6 skills with XP/levels/recipe
+  gates; constraint types gated by construction level; crops by farming
+  level. Blueprint discovery: recipes flagged blueprint are unknown until
+  a blueprint ITEM is used (persistent players.unlocks, migration v11) —
+  sources today: supply-drop crates (pistol plans) and the market (still
+  schematics, 40 caps). Locked recipes are hidden from the craft menu and
+  rejected server-side (not_unlocked).
+- Jobs/contracts: data-driven JobDefs at markets — deliver (consumes on
+  turn-in) and kill (counts archetype kills) objectives; rewards pay
+  coins, faction reputation, items and skill XP. One active contract,
+  persisted with progress (players.active_job). Offered/accepted/turned
+  in through the trading-post panel.
 
 ### Economy
 

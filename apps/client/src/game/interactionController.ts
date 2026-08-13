@@ -177,8 +177,13 @@ export class InteractionController {
           }
           break
         }
-        // Eating/medical: primary fire with a consumable equipped uses it.
-        if (defId && (this.content.item(defId)?.food || this.content.item(defId)?.medical)) {
+        // Eating/medical/blueprints: primary fire consumes/uses it.
+        if (
+          defId &&
+          (this.content.item(defId)?.food ||
+            this.content.item(defId)?.medical ||
+            this.content.item(defId)?.blueprint)
+        ) {
           this.connection.send({ t: 'consume', slot: this.state.activeHotbar })
           this.onSwing?.()
           break

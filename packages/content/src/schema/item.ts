@@ -167,6 +167,9 @@ export const ItemDefSchema = z.object({
    */
   valuable: z.object({}).optional(),
 
+  /** Present iff consuming this item permanently unlocks a recipe. */
+  blueprint: z.object({ recipe: z.string() }).optional(),
+
   /** Present iff the item is wearable protection (one armor slot). Stack
    * meta `dur` tracks remaining durability; the piece breaks at 0. */
   armor: z

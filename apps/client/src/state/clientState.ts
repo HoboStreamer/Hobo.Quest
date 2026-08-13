@@ -47,6 +47,7 @@ export interface ClientStateEvents {
   container: { id: string; size: number; slots: { i: number; def: string; count: number }[] }
   announce: string
   market: unknown
+  jobs: unknown
   reputation: { id: string; name: string; value: number; stance: string }[]
   fx: { kind: 'hurt' | 'death'; id: string }
   disconnected: undefined
@@ -74,6 +75,8 @@ export class ClientState {
   holstered = false
   craftJobs: { recipe: string; readyTick: number }[] = []
   skills: WireSkill[] = []
+  /** Unlocked blueprint recipe ids. */
+  unlocks = new Set<string>()
   /** entityId -> holder player entityId, for beam/highlight rendering. */
   readonly heldBy = new Map<string, string>()
   /** Live constraints touching entities this client knows (for visuals). */
@@ -165,6 +168,7 @@ export class ClientState {
         break
       case 'skills':
         this.skills = msg.skills
+        if (msg.unlocks) this.unlocks = new Set(msg.unlocks)
         this.events.emit('skills', msg.skills)
         break
       case 'levelup':
@@ -211,6 +215,9 @@ export class ClientState {
         break
       case 'market':
         this.events.emit('market', msg)
+        break
+      case 'jobs':
+        this.events.emit('jobs', msg)
         break
       case 'reputation':
         this.reputation = msg.factions

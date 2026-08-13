@@ -75,6 +75,7 @@ export interface ClientStateEvents {
   }
   announce: string
   market: unknown
+  jobs: unknown
   reputation: {
     id: string
     name: string
@@ -119,6 +120,8 @@ export declare class ClientState {
     readyTick: number
   }[]
   skills: WireSkill[]
+  /** Unlocked blueprint recipe ids. */
+  unlocks: Set<string>
   /** entityId -> holder player entityId, for beam/highlight rendering. */
   readonly heldBy: Map<string, string>
   /** Live constraints touching entities this client knows (for visuals). */

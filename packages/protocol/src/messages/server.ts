@@ -122,6 +122,8 @@ export interface WireSkill {
 export interface ServerSkills {
   t: 'skills'
   skills: WireSkill[]
+  /** Unlocked blueprint recipe ids (client greys out the rest). */
+  unlocks?: string[]
 }
 
 export interface ServerLevelUp {
@@ -231,6 +233,14 @@ export interface ServerReputation {
   }[]
 }
 
+/** Contracts at a trading post + the player's active one (with progress). */
+export interface ServerJobs {
+  t: 'jobs'
+  market: string
+  available: { id: string; name: string; description: string; done: boolean }[]
+  active: { job: string; name: string; progress: number; goal: number; ready: boolean } | null
+}
+
 /** Contents of an opened container (and pushed while it stays open). */
 export interface ServerContainer {
   t: 'container'
@@ -259,6 +269,7 @@ export type ServerMessage =
   | ServerContainer
   | ServerMarket
   | ServerReputation
+  | ServerJobs
   | ServerAnnounce
   | ServerTracer
   | ServerFx

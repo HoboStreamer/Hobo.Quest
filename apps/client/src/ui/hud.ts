@@ -84,6 +84,10 @@ export class Hud {
     })
     state.events.on('announce', (text) => this.showAnnounce(text))
     state.events.on('market', (m) => this.setMarket(m as NonNullable<typeof this.marketData>))
+    state.events.on('jobs', (j) => {
+      this.jobsData = j as typeof this.jobsData
+      if (this.shopOpen) this.renderShop()
+    })
     state.events.on('reputation', () => {
       if (this.activeTab === 'standing') this.renderMenu()
     })
@@ -223,6 +227,13 @@ export class Hud {
     buys: { item: string; count: number; price: number }[]
   } | null = null
 
+  /** Contracts at the open trading post. */
+  private jobsData: {
+    market: string
+    available: { id: string; name: string; description: string }[]
+    active: { job: string; name: string; progress: number; goal: number; ready: boolean } | null
+  } | null = null
+
   openShop(targetId: string): void {
     this.shopOpen = true
     this.shopTargetId = targetId
@@ -278,6 +289,33 @@ export class Hud {
         this.connection.send({ t: 'market_buy', target, item: entry.item }),
       )
       list.appendChild(row)
+    }
+    // Contracts.
+    if (this.jobsData) {
+      const jobsTitle = document.createElement('div')
+      jobsTitle.className = 'hint-line'
+      jobsTitle.textContent = '— Contracts —'
+      list.appendChild(jobsTitle)
+      const active = this.jobsData.active
+      if (active) {
+        const row = document.createElement('button')
+        row.className = 'shop-row'
+        row.disabled = !active.ready
+        row.innerHTML = `<span class="shop-get">📋 ${active.name} — ${active.progress}/${active.goal}</span><span class="shop-cost">${active.ready ? 'Turn in' : 'in progress'}</span>`
+        row.addEventListener('click', () => this.connection.send({ t: 'job_turnin', target }))
+        list.appendChild(row)
+      } else {
+        for (const job of this.jobsData.available) {
+          const row = document.createElement('button')
+          row.className = 'shop-row'
+          row.innerHTML = `<span class="shop-get">📋 ${job.name}</span><span class="shop-cost">Accept</span>`
+          row.title = job.description
+          row.addEventListener('click', () =>
+            this.connection.send({ t: 'job_accept', target, job: job.id }),
+          )
+          list.appendChild(row)
+        }
+      }
     }
     for (const entry of market.buys) {
       const name = this.content.item(entry.item)?.name ?? entry.item
@@ -670,6 +708,8 @@ export class Hud {
     for (const recipe of this.content.allRecipes()) {
       // Machine recipes run inside their machine, not from this menu.
       if (recipe.machine) continue
+      // Blueprint recipes stay hidden until learned (discovery!).
+      if (recipe.blueprint && !this.state.unlocks.has(recipe.id)) continue
       const el = document.createElement('div')
       el.className = 'recipe'
       const iconWrap = document.createElement('div')

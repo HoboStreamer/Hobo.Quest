@@ -42,13 +42,7 @@ import {
   type GameEntity,
   type WeatherKind,
 } from '@hobo/gameplay'
-import {
-  STARTER_ITEMS,
-  WATER_LEVEL,
-  recipeSkill,
-  recipeXp,
-  terrainHeight,
-} from '@hobo/content'
+import { STARTER_ITEMS, WATER_LEVEL, recipeSkill, recipeXp, terrainHeight } from '@hobo/content'
 import type { PersistenceStore, PlayerDto } from '@hobo/persistence'
 import { CollisionLayer, type BodyId } from '@hobo/physics'
 import {
@@ -588,6 +582,27 @@ export class GameServer {
       case 'consume': {
         const stack = session.inventory.get(msg.slot)
         const def = stack ? this.world.content.item(stack.defId) : undefined
+        // Blueprints: using one permanently unlocks its recipe.
+        if (stack && def?.blueprint) {
+          if (session.unlocks.has(def.blueprint.recipe)) {
+            this.send(session, {
+              t: 'result',
+              action: 'consume',
+              ok: false,
+              error: 'already_known',
+            })
+            break
+          }
+          session.inventory.removeFromSlot(msg.slot, 1)
+          session.unlocks.add(def.blueprint.recipe)
+          session.dirty = true
+          const recipeName = this.world.content.recipe(def.blueprint.recipe)?.name ?? 'recipe'
+          this.send(session, { t: 'result', action: 'consume', ok: true })
+          this.send(session, { t: 'announce', text: `📜 Blueprint learned: ${recipeName}!` })
+          this.sendInventory(session)
+          this.sendSkills(session)
+          break
+        }
         if (!stack || (!def?.food && !def?.medical)) {
           this.send(session, { t: 'result', action: 'consume', ok: false, error: 'not_food' })
           break
@@ -610,6 +625,11 @@ export class GameServer {
       case 'market_buy':
       case 'market_sell': {
         this.handleMarket(session, msg)
+        break
+      }
+      case 'job_accept':
+      case 'job_turnin': {
+        this.handleJob(session, msg)
         break
       }
       case 'container_open': {
@@ -804,7 +824,8 @@ export class GameServer {
       this.sendInventory(session)
       this.sendReputation(session)
     }
-    // Every path (including plain open) refreshes the market view.
+    // Every path (including plain open) refreshes the market + contracts.
+    this.sendJobs(session, market.id)
     this.send(session, {
       t: 'market',
       id: market.id,
@@ -817,6 +838,102 @@ export class GameServer {
         stock: this.stockOf(market.id, s, nowMs).stock,
       })),
       buys: market.buys.map((b) => ({ item: b.item, count: b.count, price: b.price })),
+    })
+  }
+
+  /** Contract accept/turn-in at a trading post. */
+  private handleJob(
+    session: PlayerSession,
+    msg: { t: string; target: string; job?: string },
+  ): void {
+    const deny = (error: string) =>
+      this.send(session, { t: 'result', action: 'trade', ok: false, error })
+    const entity = this.world.entities.get(msg.target as EntityId)
+    const marketId = entity?.prop
+      ? this.world.content.item(entity.prop.defId)?.shop?.market
+      : undefined
+    if (!entity || !marketId) return deny('no_merchant')
+    const d = Math.hypot(
+      entity.transform.pos.x - session.move.pos.x,
+      entity.transform.pos.z - session.move.pos.z,
+    )
+    if (d > 5) return deny('out_of_range')
+
+    if (msg.t === 'job_accept' && msg.job) {
+      const job = this.world.content.job(msg.job)
+      if (!job || job.market !== marketId) return deny('no_such_job')
+      if (session.activeJob) return deny('job_in_progress')
+      session.activeJob = { job: job.id, progress: 0 }
+      session.dirty = true
+      this.send(session, { t: 'result', action: 'trade', ok: true })
+      this.send(session, { t: 'announce', text: `📋 Contract accepted: ${job.name}` })
+    } else if (msg.t === 'job_turnin') {
+      const job = session.activeJob ? this.world.content.job(session.activeJob.job) : undefined
+      if (!session.activeJob || !job) return deny('no_active_job')
+      if (job.market !== marketId) return deny('wrong_merchant')
+      if (job.objective.kind === 'deliver') {
+        const need = { item: job.objective.item, count: job.objective.count }
+        if (session.inventory.countOf(need.item) < need.count) return deny('missing_items')
+        const taken = session.inventory.consume([need])
+        if (!taken.ok) return deny('missing_items')
+      } else if (session.activeJob.progress < job.objective.count) {
+        return deny('not_finished')
+      }
+      // Rewards: coins, reputation, items, XP — all atomic-enough (coins
+      // and items overflow to the floor is prevented by canFit pre-check).
+      if (job.reward.coins > 0 && !session.inventory.canFit('coin', job.reward.coins)) {
+        return deny('inventory_full')
+      }
+      if (job.reward.coins > 0) session.inventory.add('coin', job.reward.coins)
+      for (const it of job.reward.items) session.inventory.add(it.item, it.count)
+      const market = this.world.content.market(marketId)
+      if (job.reward.reputation !== 0 && market) {
+        addReputation(session.reputation, market.faction, job.reward.reputation)
+        this.sendReputation(session)
+      }
+      if (job.reward.xp) {
+        const ups = session.skills.addXp(job.reward.xp.skill, job.reward.xp.amount)
+        for (const up of ups) this.send(session, { t: 'levelup', skill: up.skill, level: up.level })
+        this.sendSkills(session)
+      }
+      session.activeJob = null
+      session.dirty = true
+      this.send(session, { t: 'result', action: 'trade', ok: true })
+      this.send(session, { t: 'announce', text: `✅ Contract complete: ${job.name}` })
+      this.sendInventory(session)
+    }
+    this.sendJobs(session, marketId)
+  }
+
+  private sendJobs(session: PlayerSession, marketId: string): void {
+    const active = session.activeJob
+      ? (() => {
+          const job = this.world.content.job(session.activeJob!.job)
+          if (!job) return null
+          const goal = job.objective.count
+          const progress =
+            job.objective.kind === 'deliver'
+              ? Math.min(goal, session.inventory.countOf(job.objective.item))
+              : session.activeJob!.progress
+          return {
+            job: job.id,
+            name: job.name,
+            progress,
+            goal,
+            ready: progress >= goal,
+          }
+        })()
+      : null
+    this.send(session, {
+      t: 'jobs',
+      market: marketId,
+      available: this.world.content.jobsForMarket(marketId).map((j) => ({
+        id: j.id,
+        name: j.name,
+        description: j.description,
+        done: false,
+      })),
+      active,
     })
   }
 
@@ -1146,6 +1263,8 @@ export class GameServer {
       stats: existing?.stats ?? undefined,
       armor: existing?.armor ?? null,
       reputation: existing?.reputation ?? {},
+      unlocks: existing?.unlocks ?? [],
+      activeJob: existing?.activeJob ?? null,
       content: this.world.content,
       send: (text) => conn.send(text),
       closeConnection: (code, reason) => conn.close(code, reason),
@@ -1663,6 +1782,21 @@ export class GameServer {
     }
     if (attacker && arch) {
       addReputation(attacker.reputation, arch.faction, REP_DELTAS.killMember)
+      // Kill contracts count matching archetypes.
+      const job = attacker.activeJob ? this.world.content.job(attacker.activeJob.job) : undefined
+      if (
+        attacker.activeJob &&
+        job?.objective.kind === 'kill' &&
+        job.objective.archetype === arch.id &&
+        attacker.activeJob.progress < job.objective.count
+      ) {
+        attacker.activeJob.progress++
+        this.send(attacker, {
+          t: 'announce',
+          text: `📋 ${job.name}: ${attacker.activeJob.progress}/${job.objective.count}`,
+        })
+        this.sendJobs(attacker, job.market)
+      }
       attacker.dirty = true
       this.sendReputation(attacker)
     }
@@ -2144,6 +2278,8 @@ export class GameServer {
       stats: session.stats,
       armor: session.armor,
       reputation: session.reputation,
+      unlocks: [...session.unlocks],
+      activeJob: session.activeJob,
       updatedAt: Date.now(),
     }
   }
@@ -2188,7 +2324,11 @@ export class GameServer {
   }
 
   private sendSkills(session: PlayerSession): void {
-    this.send(session, { t: 'skills', skills: session.skills.all() })
+    this.send(session, {
+      t: 'skills',
+      skills: session.skills.all(),
+      unlocks: [...session.unlocks],
+    })
   }
 
   private sendCraftState(session: PlayerSession): void {

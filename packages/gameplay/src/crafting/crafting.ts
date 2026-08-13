@@ -10,12 +10,19 @@ import type { Inventory } from '../inventory/inventory.js'
 export interface CraftContext {
   /** Workstation kinds within interaction range of the player. */
   nearbyWorkstations: ReadonlySet<string>
+  /** Blueprint unlock check (absent = nothing unlocked). */
+  unlocked?: (recipeId: string) => boolean
   /** Player skill levels for recipe gates; absent = no gating (tests/tools). */
   skillLevel?: (skillId: string) => number
 }
 
 export type CraftError =
-  'unknown_recipe' | 'missing_items' | 'missing_workstation' | 'missing_skill' | 'no_output_space'
+  | 'unknown_recipe'
+  | 'not_unlocked'
+  | 'missing_items'
+  | 'missing_workstation'
+  | 'missing_skill'
+  | 'no_output_space'
 
 export function validateCraft(
   content: ContentRegistry,
@@ -27,6 +34,8 @@ export function validateCraft(
   if (!recipe) return err('unknown_recipe')
   // Machine recipes only run inside their machine, never by hand.
   if (recipe.machine) return err('unknown_recipe')
+  // Blueprint recipes need a per-player unlock.
+  if (recipe.blueprint && !(ctx.unlocked?.(recipe.id) ?? false)) return err('not_unlocked')
   if (recipe.workstation && !ctx.nearbyWorkstations.has(recipe.workstation)) {
     return err('missing_workstation')
   }

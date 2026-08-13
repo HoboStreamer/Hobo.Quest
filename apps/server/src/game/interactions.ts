@@ -348,6 +348,7 @@ export function handleCraft(
   const ctx = {
     nearbyWorkstations: nearbyWorkstationKinds(session, world),
     skillLevel: (id: string) => session.skills.levelOf(id),
+    unlocked: (recipeId: string) => session.unlocks.has(recipeId),
   }
   const started = session.craftQueue.start(
     world.content,

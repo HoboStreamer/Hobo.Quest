@@ -21,6 +21,7 @@ export const MARKETS: MarketDef[] = [
       { item: 'stone_axe', count: 1, price: 8, stock: 4, restockSeconds: 600 },
       { item: 'trail_stew', count: 1, price: 5, stock: 10, restockSeconds: 300 },
       { item: 'bandage', count: 2, price: 3, stock: 12, restockSeconds: 300 },
+      { item: 'blueprint_still', count: 1, price: 40, stock: 1, restockSeconds: 1800 },
     ],
     buys: [
       { item: 'stone', count: 3, price: 2 },

@@ -284,6 +284,7 @@ export const RECIPES: Recipe[] = [
     craftSeconds: 8,
     workstation: 'workbench',
     requiredSkill: { skill: 'crafting', level: 3 },
+    blueprint: true,
   },
   {
     id: 'craft_pistol_rounds',
@@ -327,6 +328,7 @@ export const RECIPES: Recipe[] = [
     craftSeconds: 10,
     workstation: 'workbench',
     requiredSkill: { skill: 'farming', level: 3 },
+    blueprint: true,
   },
   {
     id: 'distill_tonic',

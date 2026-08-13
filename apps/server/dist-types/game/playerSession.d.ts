@@ -62,6 +62,13 @@ export interface PlayerSession {
   armor: ItemStack | null
   /** Faction reputation scores (persistent). */
   reputation: ReputationDto
+  /** Unlocked blueprint recipe ids (persistent). */
+  unlocks: Set<string>
+  /** Active contract + progress (persistent). */
+  activeJob: {
+    job: string
+    progress: number
+  } | null
   /** Survival vitals (server-authoritative; replicated only to the owner). */
   stats: SurvivalStats
   /** Vitals changed since last stats message. */
@@ -105,6 +112,11 @@ export interface SessionInit {
   stats?: Partial<SurvivalStats> | undefined
   armor?: ItemStack | null
   reputation?: ReputationDto
+  unlocks?: string[]
+  activeJob?: {
+    job: string
+    progress: number
+  } | null
   content: ContentRegistry
   send(text: string): void
   closeConnection(code: number, reason: string): void

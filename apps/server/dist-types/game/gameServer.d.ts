@@ -71,6 +71,9 @@ export declare class GameServer {
    * live stock, coins and space all validated here.
    */
   private handleMarket
+  /** Contract accept/turn-in at a trading post. */
+  private handleJob
+  private sendJobs
   private sendReputation
   /** Range + prop-protection gate shared by all container operations. */
   private containerAccessDenied
