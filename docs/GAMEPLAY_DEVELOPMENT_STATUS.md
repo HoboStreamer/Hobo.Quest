@@ -265,8 +265,28 @@ Next exact step: Stage 4 — data-driven crops (several, stages/water/
 
 ### NPCs / Factions / Reputation
 
-- **Missing entirely.** No NPC entity kind, no AI, no navigation, no
-  factions, no reputation. The "merchant" is a static shop prop.
+- **NPCs implemented (Stage 7).** Data-driven archetypes (rustjaw_thug,
+  city_warden, townsfolk, dust_hare) composed from profile fields —
+  faction, vitals, perception (view/FOV/hearing), behavior (aggression/
+  flees/wanders/leash/attack), loot, respawn. Pure gameplay domain:
+  perceive() (distance+FOV+injected LOS+hearing) and stepBehavior()
+  (idle/wander/chase/attack/flee/return, deterministic, unit-tested).
+- Server NpcManager with explicit LOD: FULL (active region — perception at
+  5 Hz staggered, terrain-following kinematic movement every tick, physics
+  capsule, normal replication) vs ABSTRACT (a record: pos/health/respawn;
+  zero per-tick cost). Materialization follows RegionTracker activation;
+  the abstract record IS the persisted state (world_entities kind 'npc').
+- NavigationService boundary (StraightLineNavigation v1; invalidation
+  seam documented for player construction).
+- Combat integration: NPC melee flows through damagePlayer; player melee/
+  bullets damage NPCs; deaths scatter loot-table rolls as physical props;
+  gunshots are heard (sound events). Aggro: damaging any NPC marks the
+  player hostile to DEFENSIVE archetypes (wardens) for 45 s. Factions are
+  content (playerStance) — bandit hostility is data, not code.
+- Client: placeholder tinted body+head visuals, aim/attack targeting,
+  prompts with faction warning, snapshot-interpolated movement.
+- Missing: faction↔faction relations + reputation shifting stances
+  (Stage 8), merchant/job NPCs (Stage 8/10), real navmesh.
 
 ### Events / Extraction
 

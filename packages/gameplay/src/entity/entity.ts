@@ -1,6 +1,7 @@
 import type { EntityId, PlayerId, Quat, Vec3 } from '@hobo/shared'
 import type { PlantState } from '../farming/farming.js'
 import type { MachineState } from '../machines/machines.js'
+import type { NpcState } from '../npc/npc.js'
 
 /**
  * Domain entity model: composition via optional component fields on a small
@@ -21,7 +22,7 @@ export interface Transform {
 
 export type MotionState = 'dynamic' | 'frozen' | 'static'
 
-export type EntityKind = 'player' | 'prop' | 'resource'
+export type EntityKind = 'player' | 'prop' | 'resource' | 'npc'
 
 export interface PropComponent {
   defId: string
@@ -58,6 +59,8 @@ export interface GameEntity {
   transform: Transform
   prop?: PropComponent
   resource?: ResourceComponent
+  /** Living NPC state (behavior, vitals, home) when kind === 'npc'. */
+  npc?: NpcState
   /** Owning player (spawner) — placement/physgun permission checks use this. */
   owner?: PlayerId
   /**

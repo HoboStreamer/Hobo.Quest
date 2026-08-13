@@ -42,7 +42,7 @@ const _to = vec3()
 
 export interface AimTarget {
   entityId: string
-  kind: 'prop' | 'resource' | 'player'
+  kind: 'prop' | 'resource' | 'player' | 'npc'
   def: string | undefined
   frozen: boolean
   point: { x: number; y: number; z: number }
@@ -109,11 +109,7 @@ export class InteractionController {
     const entityId = this.view.entityIdForBody(hit.bodyId)
     if (!entityId) return null
     const entity = this.state.entities.get(entityId)
-    if (
-      !entity ||
-      (entity.kind !== 'prop' && entity.kind !== 'resource' && entity.kind !== 'player')
-    )
-      return null
+    if (!entity) return null
     return {
       entityId,
       kind: entity.kind,
@@ -400,8 +396,8 @@ export class InteractionController {
       this.connection.send({ t: 'use', target: target.entityId })
       return
     }
-    if (target.kind === 'player') {
-      this.lastTargetWasPlayer = true
+    if (target.kind === 'player' || target.kind === 'npc') {
+      this.lastTargetWasPlayer = target.kind === 'player'
       this.connection.send({ t: 'attack', target: target.entityId })
       return
     }

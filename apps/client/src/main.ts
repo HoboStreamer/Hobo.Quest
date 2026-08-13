@@ -545,6 +545,11 @@ function promptFor(
     const entity = state.entities.get(target.entityId)
     return `${entity?.name ?? 'drifter'}${tool && tool !== 'physgun' ? ' — LMB attack' : ''}`
   }
+  if (target.kind === 'npc') {
+    const arch = content.npc(target.def ?? '')
+    const stance = arch ? content.faction(arch.faction)?.playerStance : undefined
+    return `${arch?.name ?? 'stranger'}${stance === 'hostile' ? ' ⚠' : ''} — LMB attack`
+  }
   if (target.kind === 'prop') {
     if (tool === 'rigging') {
       return interact.riggingFirst

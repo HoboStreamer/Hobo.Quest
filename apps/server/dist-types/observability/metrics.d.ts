@@ -22,6 +22,9 @@ export declare class ServerMetrics {
   /** Coarse world regions: active = player ±1 ring; occupied = has players. */
   activeRegions: number
   occupiedRegions: number
+  /** NPC simulation LOD population. */
+  npcsFull: number
+  npcsAbstract: number
   /**
    * Live map layers, by stable id. These make "Save is live" checkable from
    * outside the process: a static added in the editor must show up here on

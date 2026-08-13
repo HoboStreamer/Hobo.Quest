@@ -8,7 +8,7 @@ import type { LocalPlayer } from './localPlayer.js'
 import type { WeaponSettings } from '../weapons/registry.js'
 export interface AimTarget {
   entityId: string
-  kind: 'prop' | 'resource' | 'player'
+  kind: 'prop' | 'resource' | 'player' | 'npc'
   def: string | undefined
   frozen: boolean
   point: {

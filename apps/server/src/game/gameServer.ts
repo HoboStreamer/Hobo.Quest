@@ -97,6 +97,7 @@ import {
   type PlayerSession,
 } from './playerSession.js'
 import { buildSnapshot, updateInterest, wireEntityFor } from './replication.js'
+import { NpcManager } from './npcManager.js'
 
 /** A network connection as the game sees it — transport-agnostic. */
 export interface GameConnection {
@@ -126,6 +127,12 @@ export class GameServer {
   private readonly env: EnvironmentState
   /** Coarse activation regions (NPC LOD and event relevance hang off this). */
   readonly regions = new RegionTracker(32)
+  /** Server-authoritative NPC simulation (LOD-aware). */
+  readonly npcs: NpcManager
+  /** Players who recently attacked someone (defensive NPCs respond). */
+  private readonly aggro = new Map<string, number>()
+  /** Sound events (gunshots, fights) accumulated for NPC hearing. */
+  private sounds: { x: number; z: number }[] = []
 
   constructor(
     private readonly config: ServerConfig,
@@ -148,6 +155,44 @@ export class GameServer {
     ) {
       this.env.weather = savedWeather as WeatherKind
     }
+    this.npcs = new NpcManager(
+      world,
+      this.regions,
+      {
+        onAttackPlayer: (npcId, playerEntityId, damage) => {
+          const victim = this.sessionsByEntity.get(playerEntityId as EntityId)
+          const npcEntity = this.world.entities.get(npcId)
+          if (!victim || !npcEntity) return
+          // NPC melee has reach limits too (no cross-map slaps).
+          const d = v3dist(npcEntity.transform.pos, victim.move.pos)
+          if (d > 3) return
+          this.damagePlayer(null, victim, { type: 'blunt', amount: damage, sourceId: npcId })
+        },
+        soundsThisTick: () => this.sounds,
+        hostilesNear: (x, z, radius, faction) => {
+          const stance = this.world.content.faction(faction)?.playerStance ?? 'neutral'
+          const nowMs = Date.now()
+          const out: { id: string; x: number; z: number; hostile: boolean }[] = []
+          for (const other of this.sessions.values()) {
+            const dx = other.move.pos.x - x
+            const dz = other.move.pos.z - z
+            if (dx * dx + dz * dz > radius * radius) continue
+            const aggro = (this.aggro.get(other.entityId as string) ?? 0) > nowMs
+            const hostile = stance === 'hostile' || aggro
+            out.push({
+              id: other.entityId as string,
+              x: other.move.pos.x,
+              z: other.move.pos.z,
+              hostile,
+            })
+          }
+          return out
+        },
+      },
+      log.child({ system: 'npc' }),
+    )
+    this.npcs.seedOrRestore(store)
+
     // Players block players: sweeps include the Player layer, minus the
     // mover's own kinematic body.
     this.moveQueries = {
@@ -213,6 +258,10 @@ export class GameServer {
         const propTarget = this.world.entities.get(msg.target as EntityId)
         if (propTarget?.prop) {
           this.handlePropAttack(session, propTarget)
+          break
+        }
+        if (propTarget?.kind === 'npc') {
+          this.handleNpcAttack(session, propTarget)
           break
         }
         this.send(session, { t: 'result', action: 'attack', ok: false, error: 'no_target' })
@@ -1370,11 +1419,14 @@ export class GameServer {
         }
       } else if (!victim) {
         const entity = this.world.entityOfBody(hit.bodyId)
-        if (entity?.prop && this.world.content.item(entity.prop.defId)?.health) {
+        if (entity?.kind === 'npc') {
+          landed = this.applyNpcDamage(session, entity, spec.damage)
+        } else if (entity?.prop && this.world.content.item(entity.prop.defId)?.health) {
           landed = this.applyPropDamage(entity, spec.damage, 'projectile')
         }
       }
     }
+    this.sounds.push({ x: session.move.pos.x, z: session.move.pos.z })
     this.send(session, { t: 'result', action: 'attack', ok: true })
     const tracer: ServerMessage = {
       t: 'tracer',
@@ -1474,6 +1526,80 @@ export class GameServer {
     const base = weapon?.damage ?? (tool ? 6 + tool.power * 4 : heldDef ? 5 : 6)
     this.send(attacker, { t: 'result', action: 'attack', ok: true })
     this.applyPropDamage(entity, base * (exhausted ? 0.5 : 1), 'blunt')
+  }
+
+  /** Melee swing on an NPC: reach + the shared stamina economics. */
+  private handleNpcAttack(attacker: PlayerSession, entity: GameEntity): void {
+    const tool = equippedTool(attacker)
+    if (tool?.kind === 'physgun') {
+      this.send(attacker, { t: 'result', action: 'attack', ok: false, error: 'not_a_weapon' })
+      return
+    }
+    const heldDef = attacker.holstered
+      ? undefined
+      : this.world.content.item(attacker.inventory.get(attacker.activeHotbar)?.defId ?? '')
+    const weapon = heldDef?.weapon
+    const range = weapon?.range ?? (tool ? Math.min(tool.range, 3.5) : 2.4)
+    eyePosition(attacker, _eyeScratch)
+    if (v3dist(_eyeScratch, entity.transform.pos) > range + 1) {
+      this.send(attacker, { t: 'result', action: 'attack', ok: false, error: 'out_of_range' })
+      return
+    }
+    attacker.lastUseTick = this.tick
+    const exhausted = attacker.stats.stamina < 10
+    attacker.stats.stamina = Math.max(0, attacker.stats.stamina - 12)
+    attacker.statsDirty = true
+    const base = weapon?.damage ?? (tool ? 6 + tool.power * 4 : heldDef ? 5 : 6)
+    this.send(attacker, { t: 'result', action: 'attack', ok: true })
+    this.applyNpcDamage(attacker, entity, base * (exhausted ? 0.5 : 1))
+  }
+
+  /** NPC damage sink: aggro marking, death, loot scatter, feedback. */
+  private applyNpcDamage(
+    attacker: PlayerSession | null,
+    entity: GameEntity,
+    amount: number,
+  ): boolean {
+    const nowMs = Date.now()
+    const result = this.npcs.damage(entity.id, amount, nowMs)
+    if (result === null) return false
+    // Defensive NPCs (wardens) now treat this player as hostile for a while.
+    if (attacker) this.aggro.set(attacker.entityId as string, nowMs + 45_000)
+    if (result === 'hurt') {
+      this.broadcastToKnowing(entity.id, { t: 'fx', kind: 'hurt', id: entity.id as string })
+      return true
+    }
+    // Death: scatter loot rolls as physical props. The entity was already
+    // dematerialized; interest diffs despawn it on the next snapshot.
+    const arch = this.npcs.npcStateOf(entity.id)
+      ? this.world.content.npc(this.npcs.npcStateOf(entity.id)!.archetype)
+      : undefined
+    const around = entity.transform.pos
+    this.broadcastToKnowing(entity.id, { t: 'fx', kind: 'death', id: entity.id as string })
+    let slot = 0
+    for (const loot of arch?.loot ?? []) {
+      if (Math.random() > loot.chance) continue
+      const angle = slot * 1.6
+      slot++
+      const spawned = this.world.spawnProp({
+        defId: loot.item,
+        pos: vec3(
+          around.x + Math.cos(angle) * 0.4,
+          around.y + 0.3,
+          around.z + Math.sin(angle) * 0.4,
+        ),
+        rot: qfromYaw(quat(), angle),
+        motion: 'dynamic',
+        lootCount: loot.count,
+        velocity: vec3(Math.cos(angle) * 1.2, 1.5, Math.sin(angle) * 1.2),
+      })
+      this.broadcastSpawn(spawned)
+    }
+    this.log.info('npc killed', {
+      archetype: arch?.id ?? 'unknown',
+      by: attacker?.playerId ?? 'world',
+    })
+    return true
   }
 
   /** Damage application for props: resistance, destruction, feedback.
@@ -1605,6 +1731,10 @@ export class GameServer {
     this.metrics.awakeBodies = awake
     this.metrics.settledBodies = settledCount
 
+    // 4b. NPC simulation (LOD-aware; abstract NPCs cost nothing here).
+    this.npcs.step(Date.now(), this.tick, this.config.tickRate)
+    if (this.tick % this.config.tickRate === 0) this.sounds = []
+
     // 5. Crafting queues (completions grant crafting/construction XP).
     for (const session of this.sessions.values()) {
       const completed = session.craftQueue.update(this.tick, this.world.content, session.inventory)
@@ -1718,6 +1848,9 @@ export class GameServer {
     this.metrics.constraintIslands = this.world.islands.islandCount()
     this.metrics.activeRegions = this.regions.activeRegionCount
     this.metrics.occupiedRegions = this.regions.occupiedRegionCount
+    const [npcFull, npcAbstract] = this.npcs.counts()
+    this.metrics.npcsFull = npcFull
+    this.metrics.npcsAbstract = npcAbstract
     this.metrics.mapStatics = this.world.mapStaticCount()
     this.metrics.mapTerrains = this.world.mapTerrainCount()
     this.metrics.mapZones = this.world.mapZoneCount()
@@ -1845,6 +1978,7 @@ export class GameServer {
     // World clock + weather ride along with every flush (tiny meta writes).
     this.store.meta.set('env_time', String(this.env.timeOfDay))
     this.store.meta.set('env_weather', this.env.weather)
+    this.npcs.flush(this.store, Date.now())
     const wrote = this.world.flushDirty(this.store)
     const dirtyPlayers: PlayerDto[] = []
     for (const session of this.sessions.values()) {

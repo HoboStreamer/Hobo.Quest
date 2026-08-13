@@ -27,7 +27,7 @@ export const Buttons = {
 } as const
 
 /** How a wire entity should be represented client-side. */
-export type WireEntityKind = 'player' | 'prop' | 'resource'
+export type WireEntityKind = 'player' | 'prop' | 'resource' | 'npc'
 
 export interface WirePlant {
   /** Crop content id (client looks up stages/color from content). */

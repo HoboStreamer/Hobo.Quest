@@ -1394,6 +1394,75 @@ async function main(): Promise<void> {
   a.send({ t: 'trust', player: bobEntry.player as string, trusted: true })
   await a.waitFor((m) => m.t === 'result' && m.action === 'trust')
 
+  console.log('phase: NPCs — perception, chase, attack, death, loot (Rustjaw thug)')
+  {
+    // The thug's home is the deep forest (content NPC_SPAWNS). Walking into
+    // its region materializes it; being seen makes it hostile.
+    await walkPath(a, [
+      [24, 26],
+      [36, 40],
+    ])
+    await settle(a)
+    let thug: WireEntity | undefined
+    {
+      const start = Date.now()
+      while (!thug && Date.now() - start < 15_000) {
+        thug = [...a.entities.values()].find((e) => e.kind === 'npc' && e.def === 'rustjaw_thug')
+        await sleep(200)
+      }
+    }
+    assert(thug, 'thug materialized and replicated when its region activated')
+    // Perception + chase + attack: keep re-approaching the (moving) thug
+    // until it notices — its FOV may be facing away at first.
+    const hpBefore = a.stats?.hp ?? 100
+    {
+      const start = Date.now()
+      while ((a.stats?.hp ?? 100) >= hpBefore && Date.now() - start < 45_000) {
+        const live = a.entities.get(thug.id)
+        if (live) await walkTo(a, live.pos[0] - 1.5, live.pos[2] - 1.5, 8000)
+        await sleep(800)
+      }
+    }
+    assert((a.stats?.hp ?? 100) < hpBefore, 'thug saw, chased and hit the player')
+    // Fight back: axe swings until it drops (60 hp / 14 per hit ≈ 5 swings).
+    await a.equip('stone_axe')
+    const scrapBefore = a.count('scrap_metal')
+    {
+      const start = Date.now()
+      while (a.entities.has(thug.id) && Date.now() - start < 30_000) {
+        a.send({ t: 'attack', target: thug.id })
+        await sleep(400)
+      }
+    }
+    assert(!a.entities.has(thug.id), 'thug died and despawned')
+    // Loot scattered as physical props (scrap always drops).
+    let lootProp: WireEntity | undefined
+    {
+      const start = Date.now()
+      while (!lootProp && Date.now() - start < 5000) {
+        lootProp = [...a.entities.values()].find(
+          (e) =>
+            e.kind === 'prop' &&
+            e.def === 'scrap_metal' &&
+            Math.hypot(e.pos[0] - thug.pos[0], e.pos[2] - thug.pos[2]) < 6,
+        )
+        await sleep(150)
+      }
+    }
+    assert(lootProp, 'thug death scattered loot')
+    await sleep(700)
+    const grab = await a.use(lootProp.id)
+    assert(grab.ok, 'loot recovered')
+    await pollUntil(() => a.count('scrap_metal') > scrapBefore)
+    assert(a.count('scrap_metal') > scrapBefore, 'loot in inventory')
+    // Walk back toward the north gate for the remaining phases.
+    await walkPath(a, [
+      [24, 26],
+      [8, 26],
+    ])
+    await settle(a)
+  }
+
   console.log('phase: persistence across restart (props, frozen state, skills, friends, depletion)')
   const preRestartBranches = a.entities.get(branches.id)?.remaining
   const wcBefore = a.skill('woodcutting')

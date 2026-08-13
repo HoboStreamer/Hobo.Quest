@@ -10,7 +10,7 @@ import type { Appearance } from '@hobo/protocol'
 
 export interface WorldEntityDto {
   id: string
-  kind: 'prop' | 'resource'
+  kind: 'prop' | 'resource' | 'npc'
   defId: string
   ownerId: string | null
   pos: [number, number, number]

@@ -44,6 +44,9 @@ export function wireEntityFor(world: GameWorld, entity: GameEntity): WireEntity 
       remaining: entity.resource.remaining,
     }
   }
+  if (entity.kind === 'npc' && entity.npc) {
+    return { ...base, kind: 'npc', def: entity.npc.archetype }
+  }
   return { ...base, kind: 'player' }
 }
 
@@ -130,7 +133,18 @@ export function buildSnapshot(
   const bodies: WireBodyState[] = []
   for (const id of session.known) {
     const entity = world.entities.get(id)
-    if (!entity?.prop || entity.prop.motion !== 'dynamic') continue
+    if (!entity) continue
+    // Living NPCs stream their pose like awake bodies (they walk around).
+    if (entity.kind === 'npc') {
+      const { pos, rot } = entity.transform
+      bodies.push({
+        id: id as string,
+        pos: [pos.x, pos.y, pos.z],
+        rot: [rot.x, rot.y, rot.z, rot.w],
+      })
+      continue
+    }
+    if (!entity.prop || entity.prop.motion !== 'dynamic') continue
     if (world.isSettledEntity(id)) continue
     const { pos, rot } = entity.transform
     bodies.push({

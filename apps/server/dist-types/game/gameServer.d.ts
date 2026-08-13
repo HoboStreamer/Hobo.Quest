@@ -6,6 +6,7 @@ import type { ServerConfig } from '../config.js'
 import type { ServerMetrics } from '../observability/metrics.js'
 import type { GameWorld } from './gameWorld.js'
 import { type PlayerSession } from './playerSession.js'
+import { NpcManager } from './npcManager.js'
 /** A network connection as the game sees it — transport-agnostic. */
 export interface GameConnection {
   /** Real client IP (Cloudflare-aware) — guest identity hangs off this. */
@@ -35,6 +36,12 @@ export declare class GameServer {
   private readonly env
   /** Coarse activation regions (NPC LOD and event relevance hang off this). */
   readonly regions: RegionTracker
+  /** Server-authoritative NPC simulation (LOD-aware). */
+  readonly npcs: NpcManager
+  /** Players who recently attacked someone (defensive NPCs respond). */
+  private readonly aggro
+  /** Sound events (gunshots, fights) accumulated for NPC hearing. */
+  private sounds
   constructor(
     config: ServerConfig,
     world: GameWorld,
@@ -100,6 +107,10 @@ export declare class GameServer {
    * where building is legal (safe city props are untouchable).
    */
   private handlePropAttack
+  /** Melee swing on an NPC: reach + the shared stamina economics. */
+  private handleNpcAttack
+  /** NPC damage sink: aggro marking, death, loot scatter, feedback. */
+  private applyNpcDamage
   /** Damage application for props: resistance, destruction, feedback.
    * Returns false when the prop has no health capability. */
   private applyPropDamage

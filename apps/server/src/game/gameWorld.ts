@@ -224,6 +224,18 @@ export class GameWorld {
     return id ? this.entities.get(id) : undefined
   }
 
+  /** NPC bodies register here so rays/attacks resolve to their entity. */
+  registerNpcBody(body: BodyId, entityId: EntityId): void {
+    this.entityByBody.set(body, entityId)
+    this.bodyByEntity.set(entityId, body)
+  }
+
+  unregisterNpcBody(body: BodyId): void {
+    const id = this.entityByBody.get(body)
+    this.entityByBody.delete(body)
+    if (id !== undefined) this.bodyByEntity.delete(id)
+  }
+
   spawnProp(opts: {
     defId: string
     pos: Vec3
@@ -902,7 +914,10 @@ export class GameWorld {
     const dirty: WorldEntityDto[] = []
     const now = Date.now()
     for (const entity of this.entities.all()) {
-      if (!entity.dirty || !entity.persistent || entity.kind === 'player') continue
+      // Players persist via their repository; NPCs via the NpcManager
+      // (their abstract state, never the materialized entity).
+      if (!entity.dirty || !entity.persistent) continue
+      if (entity.kind === 'player' || entity.kind === 'npc') continue
       dirty.push(entityToDto(entity, now))
       entity.dirty = false
     }

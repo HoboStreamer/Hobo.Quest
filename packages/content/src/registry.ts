@@ -1,4 +1,10 @@
 import { CropDefSchema, type CropDef } from './schema/crop.js'
+import {
+  FactionSchema,
+  NpcArchetypeSchema,
+  type FactionDef,
+  type NpcArchetype,
+} from './schema/npc.js'
 import { ItemDefSchema, type ItemDef } from './schema/item.js'
 import { RecipeSchema, type Recipe } from './schema/recipe.js'
 import { ResourceNodeTypeSchema, type ResourceNodeType } from './schema/resourceNode.js'
@@ -11,6 +17,8 @@ export interface ContentDefs {
   skills: SkillDef[]
   nodeTypes: ResourceNodeType[]
   crops: CropDef[]
+  npcs: NpcArchetype[]
+  factions: FactionDef[]
   world: WorldDef
 }
 
@@ -26,6 +34,8 @@ export class ContentRegistry {
   private readonly skills = new Map<string, SkillDef>()
   private readonly nodeTypes = new Map<string, ResourceNodeType>()
   private readonly crops = new Map<string, CropDef>()
+  private readonly npcs = new Map<string, NpcArchetype>()
+  private readonly factions = new Map<string, FactionDef>()
   readonly world: WorldDef
 
   constructor(defs: ContentDefs) {
@@ -76,6 +86,34 @@ export class ContentRegistry {
       if (item.seed && !this.crops.has(item.seed.crop)) {
         errors.push(`item '${item.id}' seeds unknown crop '${item.seed.crop}'`)
       }
+    }
+
+    for (const raw of defs.factions) {
+      const parsed = FactionSchema.safeParse(raw)
+      if (!parsed.success) {
+        errors.push(`faction '${raw.id}': ${parsed.error.message}`)
+        continue
+      }
+      if (this.factions.has(parsed.data.id)) errors.push(`duplicate faction '${parsed.data.id}'`)
+      this.factions.set(parsed.data.id, parsed.data)
+    }
+    for (const raw of defs.npcs) {
+      const parsed = NpcArchetypeSchema.safeParse(raw)
+      if (!parsed.success) {
+        errors.push(`npc '${raw.id}': ${parsed.error.message}`)
+        continue
+      }
+      const npc = parsed.data
+      if (this.npcs.has(npc.id)) errors.push(`duplicate npc archetype '${npc.id}'`)
+      if (!this.factions.has(npc.faction)) {
+        errors.push(`npc '${npc.id}' references unknown faction '${npc.faction}'`)
+      }
+      for (const loot of npc.loot) {
+        if (!this.items.has(loot.item)) {
+          errors.push(`npc '${npc.id}' loot references unknown item '${loot.item}'`)
+        }
+      }
+      this.npcs.set(npc.id, npc)
     }
 
     for (const raw of defs.skills) {
@@ -211,6 +249,18 @@ export class ContentRegistry {
 
   allCrops(): readonly CropDef[] {
     return [...this.crops.values()]
+  }
+
+  npc(id: string): NpcArchetype | undefined {
+    return this.npcs.get(id)
+  }
+
+  allNpcs(): readonly NpcArchetype[] {
+    return [...this.npcs.values()]
+  }
+
+  faction(id: string): FactionDef | undefined {
+    return this.factions.get(id)
   }
 
   /** Machine recipes for one machine kind (unattended production). */

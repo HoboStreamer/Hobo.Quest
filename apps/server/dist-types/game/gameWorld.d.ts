@@ -72,6 +72,9 @@ export declare class GameWorld {
   mapZoneCount(): number
   bodyOf(id: EntityId): BodyId | undefined
   entityOfBody(body: BodyId): GameEntity | undefined
+  /** NPC bodies register here so rays/attacks resolve to their entity. */
+  registerNpcBody(body: BodyId, entityId: EntityId): void
+  unregisterNpcBody(body: BodyId): void
   spawnProp(opts: {
     defId: string
     pos: Vec3

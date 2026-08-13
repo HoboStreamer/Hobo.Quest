@@ -123,6 +123,30 @@ export class EntityView {
       })
     } else if (e.kind === 'prop') {
       mesh = CreateBox(`prop:${e.id}`, { size: 0.5 }, this.scene)
+    } else if (e.kind === 'npc') {
+      // Placeholder NPC visual: tinted capsule-ish body + head knob until
+      // real models exist. A collision mirror makes it aim-able.
+      const arch = this.content.npc(e.def ?? '')
+      const height = arch?.heightM ?? 1.7
+      const radius = arch?.radius ?? 0.35
+      mesh = CreateBox(
+        `npc:${e.id}`,
+        { width: radius * 2, height: height * 0.72, depth: radius * 1.4 },
+        this.scene,
+      )
+      mesh.material = materialFor(this.scene, arch?.color ?? '#888888')
+      const head = CreateBox(`npc:${e.id}:head`, { size: radius * 1.1 }, this.scene)
+      head.parent = mesh
+      head.position.y = height * 0.72 * 0.5 + radius * 0.6
+      head.material = mesh.material
+      mesh.rotationQuaternion = new Quaternion(e.rot[0], e.rot[1], e.rot[2], e.rot[3])
+      bodyId = this.physics.addBody({
+        shape: { type: 'capsule', radius, height },
+        motion: 'static',
+        pos: vec3(e.pos[0], e.pos[1], e.pos[2]),
+        layer: CollisionLayer.Player,
+        collidesWith: CollisionLayer.Player,
+      })
     } else {
       // Resource node: visual archetype + collision body from the node type.
       const nodeType = this.content.nodeType(e.def ?? '')
