@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
     "start": "tsx src/main.ts",
     "build": "tsc --build",
     "bundle": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --external:better-sqlite3 --external:@babylonjs/havok --outfile=dist/server.mjs --banner:js=\"import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\""

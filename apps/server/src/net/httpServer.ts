@@ -301,9 +301,11 @@ export function createHttpServer(
             return
           }
           const tok = JSON.stringify(data.access_token)
+          // Secure cookies are dropped over plain http (local dev).
+          const secure = oauth.selfUrl.startsWith('https') ? '; Secure' : ''
           res.writeHead(200, {
             'content-type': 'text/html; charset=utf-8',
-            'set-cookie': `hq_sso=${encodeURIComponent(data.access_token)}; Path=/; Max-Age=${7 * 86400}; SameSite=Lax; Secure`,
+            'set-cookie': `hq_sso=${encodeURIComponent(data.access_token)}; Path=/; Max-Age=${7 * 86400}; SameSite=Lax${secure}`,
           })
           res.end(`<!doctype html><title>Signing in…</title><script>
 localStorage.setItem('hq_sso', ${tok});

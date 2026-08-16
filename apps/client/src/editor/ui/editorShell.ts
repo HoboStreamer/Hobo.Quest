@@ -135,6 +135,9 @@ export function buildShell(mount: HTMLElement, canvas: HTMLCanvasElement): Shell
   const key = el('input', undefined, 'key')
   key.type = 'password'
   key.placeholder = 'admin token'
+  key.title =
+    'Optional override. Signed in with hobo.tools on /play as admin/owner? ' +
+    'The editor uses that session automatically.'
   key.size = 14
   const save = el('button', 'primary', 'save')
   save.type = 'button'

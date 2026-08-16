@@ -20,6 +20,7 @@ import type { CommandHistory } from '../history/commandHistory.js'
 import type { PaintSurfaceRegistry } from '../materials/paintSurfaceRegistry.js'
 import { surfaceDataFor, writeSurfaceData } from '../materials/paintController.js'
 import { DraftStore, indexedDbDraftStorage } from '../recovery/draftStore.js'
+import { editorToken } from './editorToken.js'
 
 export interface SaveControllerOptions {
   doc: EditorDocument
@@ -70,8 +71,7 @@ export function createSaveController(opts: SaveControllerOptions): SaveControlle
   // the last place two authorities described the same map.
   const serialize = (): MapFileV2 => doc.serialize()
 
-  const editorKey = (): string =>
-    (document.getElementById('key') as HTMLInputElement | null)?.value.trim() ?? ''
+  const editorKey = editorToken
 
   /**
    * Masks stay canvases while editing and become content-addressed assets on
@@ -111,7 +111,11 @@ export function createSaveController(opts: SaveControllerOptions): SaveControlle
 
   const save = async (): Promise<void> => {
     const key = editorKey()
-    localStorage.setItem('hobo.editorkey', key)
+    // Persist only a hand-typed override token — never the SSO session,
+    // which lives in hq_sso and is resolved fresh on every request.
+    const manual =
+      (document.getElementById('key') as HTMLInputElement | null)?.value.trim() ?? ''
+    localStorage.setItem('hobo.editorkey', manual)
     setMessage('saving…')
     await uploadDirtyMasks()
     const file = serialize()

@@ -72,6 +72,7 @@ import { PaintSurfaceRegistry } from './materials/paintSurfaceRegistry.js'
 import { buildShell } from './ui/editorShell.js'
 import { createEditorUi } from './ui/editorUi.js'
 import { createSaveController } from './net/saveController.js'
+import { editorToken, ssoToken } from './net/editorToken.js'
 import { ActionRouter } from './input/actionRouter.js'
 import { ACTIONS, loadBindings, type Binding } from './bindings.js'
 import { editorPerf } from './perf/editorProfiler.js'
@@ -736,7 +737,7 @@ export async function bootEditor(): Promise<void> {
     scene,
     peersEl: document.getElementById('peers') as HTMLElement,
     camera,
-    keyOf: () => (document.getElementById('key') as HTMLInputElement).value.trim(),
+    keyOf: editorToken,
     nameOf: defaultEditorName,
     onRemoteSaved: () => void saveController.pollRemote(),
     onLockDenied: (owner) => ui.setMessage(`🔒 held by ${owner} — you have read-only access`),
@@ -763,7 +764,7 @@ export async function bootEditor(): Promise<void> {
     doc,
     history,
     modelCache,
-    editorKey: () => (document.getElementById('key') as HTMLInputElement).value.trim(),
+    editorKey: editorToken,
     onAssetsChanged: () => {
       registerCustomTextures(doc.textures() as MapTextureEntry[])
       ui.refreshAll()
@@ -992,9 +993,11 @@ export async function bootEditor(): Promise<void> {
   // Seed the credential from the last session so collaboration connects on
   // boot rather than only after someone retypes the token. Changing it
   // reconnects deliberately — the socket must not stay authenticated as
-  // whoever was there before.
+  // whoever was there before. With a hobo.tools SSO session present the
+  // token box is only an override, and says so.
   const keyInput = document.getElementById('key') as HTMLInputElement
   keyInput.value = localStorage.getItem('hobo.editorkey') ?? ''
+  if (ssoToken()) keyInput.placeholder = 'hobo.tools SSO ✓'
   keyInput.addEventListener('change', () => {
     localStorage.setItem('hobo.editorkey', keyInput.value.trim())
     connection.connect()
